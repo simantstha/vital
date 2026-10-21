@@ -1635,4 +1635,263 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(plain(wrapped), note)
         assertNoBreakableUnitSpace(wrapped)
     }
+
+    // MARK: - Wave 22w: the flat fortnight, the pace range, a stale week
+
+    /// `GoalProgressDTO.WeightRead.Plan.Pace`, the way the tests below spell it.
+    private func pace(_ kgPerWeek: Double) -> GoalProgressDTO.WeightRead.Plan.Pace {
+        GoalProgressDTO.WeightRead.Plan.Pace(kgPerWeek: kgPerWeek)
+    }
+
+    /// An on-pace weight-loss payload: the plan's pace now (-0.59) and, when `earlier` is given, the pace a week
+    /// earlier (what the server sends when the two land either side of the target date). `ratePerWeek.kg` is the
+    /// plan's pace, as `lib/goalProgress.ts` sends it.
+    private func onPace(
+        earlier: Double? = -0.37, now: Double? = -0.59, rateKg: Double? = -0.59,
+        state: GoalProgressDTO.WeightRead.State? = .pace, verdict: GoalVerdict = .onTrack,
+        goal: String = "weight_loss", lastWeighInDaysAgo: Int? = 0, staleSince: String? = nil
+    ) -> GoalProgressDTO {
+        let plan = GoalProgressDTO.WeightRead.Plan(
+            weekStart: "2026-10-19", state: .pace,
+            action: .init(kind: "keep_going", text: "Keep your routine — it is working"),
+            pace: now.map(pace), earlierPace: earlier.map(pace), staleSince: staleSince
+        )
+        return GoalProgressDTO(
+            goal: goal, target: .init(weightKg: 76, date: "2027-01-15"),
+            current: .init(weightKg: 82.3, startWeightKg: 83.7, changeKg: -1.4, progressPct: 18, trendKg: 82),
+            ratePerWeek: .init(kg: rateKg), verdict: verdict,
+            headline: "On track for Jan 15 — about 6.3 kg to go", lastWeighInDaysAgo: lastWeighInDaysAgo,
+            weightRead: state.map { GoalProgressDTO.WeightRead(state: $0, weekMeanKg: 82.3, plan: plan) }
+        )
+    }
+
+    private let rangeDash = "\u{2060}\u{2013}\u{2060}"
+
+    /// The server's own payloads (`JSON.stringify` of `WeightWeekPlan`): a flat fortnight, a plateau, an on-pace
+    /// week with two paces and a stale week. Each new field decodes to what the server sent.
+    func testWeekPlanWave22FieldsDecodeFromTheServersPayloads() throws {
+        let fortnight = try decodeWeightLoss("""
+        ,"weightRead":{"state":"plateau","scaleKg":89.4,"scaleDay":"2026-10-18","weekMeanKg":89.4,"weeksVsTarget":null,
+         "returned":null,"reachedDaysAgo":null,
+         "plan":{"weekStart":"2026-10-19","asOf":"2026-10-18","state":"plateau","call":"none","verdict":"holding","etaDate":null,
+                 "weeksVsTarget":null,"action":{"kind":"plateau_water","text":"Keep 1,900 kcal; we'll look again next Monday","kcalTarget":1900},
+                 "plateauCause":{"kind":"water","namedAt":"2026-10-18","loggedDays":0,"spanDays":14,"avgKcal":null,"targetKcal":1900},
+                 "pace":null,"earlierPace":null,"confirmed":false,"young":false,"onPace":null,"tooFast":false,"nearlyThere":false,
+                 "slow":false,"away":false,"farBehind":false,"projectedEta":null,"plateauMeanKg":89.4,"flatWeeks":2,"heldKg":null,
+                 "firstPaceWeek":false,"updated":null,"staleSince":null}}
+        ,"ratePerWeek":{"kg":null,"pctBodyweight":null},"eta":null
+        """, headline: "Two flat weeks — common; your plan holds")
+        XCTAssertEqual(fortnight.weightRead?.state, .plateau)
+        XCTAssertEqual(fortnight.weightRead?.plan?.flatWeeks, 2)
+        XCTAssertEqual(fortnight.weightRead?.plan?.action?.text, "Keep 1,900 kcal; we'll look again next Monday")
+        XCTAssertNil(fortnight.weightRead?.plan?.pace)
+        XCTAssertNil(fortnight.weightRead?.plan?.earlierPace)
+        XCTAssertNil(fortnight.weightRead?.plan?.staleSince)
+        XCTAssertTrue(GoalProgressLogic.usesServerWeightRead(fortnight))
+        XCTAssertEqual(GoalProgressLogic.primaryLine(fortnight, system: .metric), "Two flat weeks — common; your plan holds")
+        XCTAssertNil(GoalProgressLogic.paceRange(fortnight))
+
+        let plateau = try decodeWeightLoss("""
+        ,"weightRead":{"state":"plateau","plan":{"weekStart":"2026-10-19","state":"plateau","action":{"kind":"plateau_water","text":"Hold"},
+         "pace":{"kgPerWeek":-0.04,"pctPerWeek":-0.05,"windowDays":21},"earlierPace":null,"flatWeeks":3,"staleSince":null}}
+        """, headline: "Plateau — weekly average ~89.4 kg for 3 weeks")
+        XCTAssertEqual(plateau.weightRead?.plan?.flatWeeks, 3)
+        XCTAssertEqual(plateau.weightRead?.plan?.pace, pace(-0.04))
+
+        let onPaceRange = try decodeWeightLoss("""
+        ,"weightRead":{"state":"pace","weekMeanKg":88.3,"plan":{"weekStart":"2026-10-19","state":"pace","call":"on_pace",
+         "action":{"kind":"keep_going","text":"Keep your routine — it is working"},
+         "pace":{"kgPerWeek":-0.59,"pctPerWeek":-0.65,"windowDays":21},
+         "earlierPace":{"kgPerWeek":-0.37,"pctPerWeek":-0.41,"windowDays":21},
+         "confirmed":true,"flatWeeks":null,"staleSince":null}}
+        ,"ratePerWeek":{"kg":-0.59,"pctBodyweight":-0.65}
+        """)
+        XCTAssertNil(onPaceRange.weightRead?.plan?.flatWeeks)
+        XCTAssertEqual(onPaceRange.weightRead?.plan?.pace, pace(-0.59))
+        XCTAssertEqual(onPaceRange.weightRead?.plan?.earlierPace, pace(-0.37))
+        XCTAssertEqual(
+            GoalProgressLogic.paceRange(onPaceRange),
+            GoalProgressLogic.PaceRange(slowKgPerWeek: 0.37, fastKgPerWeek: 0.59)
+        )
+
+        let stale = try decodeWeightLoss("""
+        ,"weightRead":{"state":"pace","plan":{"weekStart":"2026-10-19","state":"pace","call":"on_pace",
+         "action":{"kind":"keep_weighing","text":"No weigh-in since Oct 11 — step on the scale when you can; your plan picks up from there"},
+         "pace":{"kgPerWeek":-0.5,"pctPerWeek":-0.6,"windowDays":21},"earlierPace":null,"staleSince":"2026-10-11"}}
+        ,"lastWeighInDaysAgo":8
+        """)
+        XCTAssertEqual(stale.weightRead?.plan?.staleSince, "2026-10-11")
+        XCTAssertEqual(stale.lastWeighInDaysAgo, 8)
+        XCTAssertTrue(stale.weightRead?.plan?.action?.text.hasPrefix("No weigh-in since Oct 11") ?? false)
+    }
+
+    /// An older server sends none of the four: they read as nil and the plan decodes as it did.
+    func testWeekPlanWave22FieldsAreNilFromAnOlderServer() throws {
+        let older = try decodeWeightLoss("""
+        ,"weightRead":{"state":"pace","plan":{"weekStart":"2026-10-12","state":"pace","action":{"kind":"keep_going","text":"Keep your routine"}}}
+        """)
+        let plan = try XCTUnwrap(older.weightRead?.plan)
+        XCTAssertEqual(plan.weekStart, "2026-10-12")
+        XCTAssertEqual(plan.state, .pace)
+        XCTAssertEqual(plan.action?.text, "Keep your routine")
+        XCTAssertNil(plan.flatWeeks)
+        XCTAssertNil(plan.pace)
+        XCTAssertNil(plan.earlierPace)
+        XCTAssertNil(plan.staleSince)
+        // The memberwise initialiser defaults them too, so every older call site is untouched.
+        let bare = GoalProgressDTO.WeightRead.Plan(weekStart: "2026-10-12", state: .pace)
+        XCTAssertNil(bare.flatWeeks)
+        XCTAssertNil(bare.pace)
+        XCTAssertNil(bare.earlierPace)
+        XCTAssertNil(bare.staleSince)
+        XCTAssertNil(GoalProgressLogic.paceRange(older))
+    }
+
+    /// Malformed values drop only themselves: never a throw, never the rest of the plan or the read.
+    func testWeekPlanWave22FieldsDecodeTolerantly() throws {
+        func plan(_ fields: String) throws -> GoalProgressDTO.WeightRead.Plan? {
+            try decodeWeightLoss(",\"weightRead\":{\"state\":\"pace\",\"plan\":{\"weekStart\":\"2026-10-19\",\(fields)}}").weightRead?.plan
+        }
+        // flatWeeks: a whole number, sent as 2 or 2.0; anything else is nil.
+        XCTAssertEqual(try plan("\"flatWeeks\":2")?.flatWeeks, 2)
+        XCTAssertEqual(try plan("\"flatWeeks\":3")?.flatWeeks, 3)
+        XCTAssertEqual(try plan("\"flatWeeks\":2.0")?.flatWeeks, 2)
+        XCTAssertNil(try plan("\"flatWeeks\":null")?.flatWeeks)
+        XCTAssertNil(try plan("\"flatWeeks\":\"two\"")?.flatWeeks)
+        XCTAssertNil(try plan("\"flatWeeks\":true")?.flatWeeks)
+        XCTAssertNil(try plan("\"flatWeeks\":[2]")?.flatWeeks)
+        // pace / earlierPace: an object with a numeric rate; anything else is nil (a range is never half-built).
+        XCTAssertEqual(try plan("\"earlierPace\":{\"kgPerWeek\":-0.37}")?.earlierPace, pace(-0.37))
+        XCTAssertEqual(try plan("\"earlierPace\":{\"kgPerWeek\":-0.37,\"pctPerWeek\":\"x\",\"windowDays\":null}")?.earlierPace, pace(-0.37))
+        XCTAssertNil(try plan("\"earlierPace\":null")?.earlierPace)
+        XCTAssertNil(try plan("\"earlierPace\":\"fast\"")?.earlierPace)
+        XCTAssertNil(try plan("\"earlierPace\":-0.37")?.earlierPace)
+        XCTAssertNil(try plan("\"earlierPace\":{}")?.earlierPace)
+        XCTAssertNil(try plan("\"earlierPace\":{\"kgPerWeek\":\"-0.37\"}")?.earlierPace)
+        XCTAssertNil(try plan("\"earlierPace\":{\"kgPerWeek\":null}")?.earlierPace)
+        XCTAssertNil(try plan("\"pace\":{\"kgPerWeek\":[]}")?.pace)
+        XCTAssertEqual(try plan("\"pace\":{\"kgPerWeek\":-0.59}")?.pace, pace(-0.59))
+        // staleSince: a day string; a blank, null or wrong-typed one is nil.
+        XCTAssertEqual(try plan("\"staleSince\":\"2026-10-11\"")?.staleSince, "2026-10-11")
+        XCTAssertNil(try plan("\"staleSince\":\"\"")?.staleSince)
+        XCTAssertNil(try plan("\"staleSince\":null")?.staleSince)
+        XCTAssertNil(try plan("\"staleSince\":20261011")?.staleSince)
+        XCTAssertNil(try plan("\"staleSince\":{}")?.staleSince)
+        // All four malformed at once: the plan, its state and its week survive, and so does the read.
+        let broken = try decodeWeightLoss("""
+        ,"weightRead":{"state":"plateau","scaleKg":89.4,"plan":{"weekStart":"2026-10-19","state":"plateau",
+         "action":{"kind":"plateau_water","text":"Hold"},"flatWeeks":"two","pace":"fast","earlierPace":[1],"staleSince":7}}
+        """)
+        XCTAssertEqual(broken.weightRead?.state, .plateau)
+        XCTAssertEqual(broken.weightRead?.scaleKg, 89.4)
+        XCTAssertEqual(broken.weightRead?.plan?.weekStart, "2026-10-19")
+        XCTAssertEqual(broken.weightRead?.plan?.state, .plateau)
+        XCTAssertEqual(broken.weightRead?.plan?.action?.text, "Hold")
+        XCTAssertNil(broken.weightRead?.plan?.flatWeeks)
+        XCTAssertNil(broken.weightRead?.plan?.pace)
+        XCTAssertNil(broken.weightRead?.plan?.earlierPace)
+        XCTAssertNil(broken.weightRead?.plan?.staleSince)
+        // A plateau without flatWeeks is the plateau it always was.
+        XCTAssertTrue(GoalProgressLogic.usesServerWeightRead(broken))
+    }
+
+    // MARK: Pace range
+
+    func testPaceRangeIsThePaceNowAndThePaceAWeekEarlierSlowerFirst() {
+        let range = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.37, fastKgPerWeek: 0.59)
+        XCTAssertEqual(GoalProgressLogic.paceRange(onPace()), range)
+        // Whichever of the two is the faster one.
+        XCTAssertEqual(GoalProgressLogic.paceRange(onPace(earlier: -0.59, now: -0.37, rateKg: -0.37)), range)
+        // Without the plan's own pace the payload's rate is the pace now (it is the same number, rounded).
+        XCTAssertEqual(GoalProgressLogic.paceRange(onPace(now: nil)), range)
+    }
+
+    /// An older server has no `earlierPace`, so nothing changes; neither does anything that is not a loss on pace.
+    func testPaceRangeIsNilUnlessBothPacesAreALossOnAnOnPaceWeightLossWeek() {
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(earlier: nil)), "older server")
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(earlier: 0.1)), "the earlier pace is a gain")
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(earlier: 0)), "the earlier pace is flat")
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(now: 0.2, rateKg: 0.2)), "the pace now is a gain")
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(now: nil, rateKg: nil)), "no pace now at all")
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(earlier: Double.nan)))
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(earlier: Double.infinity)))
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(state: nil)), "a read with no state (a stale week past 14 days)")
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(state: .plateau)))
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(state: .movingAgain)))
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(state: .reached)))
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(verdict: .reached)))
+        XCTAssertNil(GoalProgressLogic.paceRange(onPace(goal: "muscle")))
+        XCTAssertNil(GoalProgressLogic.paceRange(GoalProgressDTO(goal: "weight_loss", verdict: .onTrack)), "no weightRead at all")
+    }
+
+    /// The same figures and format as the server's card ("Down 0.37–0.58 kg/wk": two decimals, trailing zeros dropped).
+    func testPaceRangeTextIsTheServersFormatInTheUsersUnit() {
+        let range = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.37, fastKgPerWeek: 0.59)
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(range, system: .metric), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
+        XCTAssertEqual(GoalProgressLogic.paceRangeValueText(range, system: .metric), "0.37\(rangeDash)0.59\u{00A0}kg/wk")
+        // 0.37 kg = 0.82 lb, 0.59 kg = 1.30 lb -> "1.3".
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(range, system: .imperial), "Down 0.82\(rangeDash)1.3\u{00A0}lb/wk")
+        let round = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.5, fastKgPerWeek: 0.6)
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(round, system: .metric), "Down 0.5\(rangeDash)0.6\u{00A0}kg/wk")
+        let whole = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.75, fastKgPerWeek: 1)
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(whole, system: .metric), "Down 0.75\(rangeDash)1\u{00A0}kg/wk")
+        // The unit stays glued to its number and the dash to its numbers.
+        for system in [UnitSystem.metric, .imperial] {
+            let text = GoalProgressLogic.paceRangeText(range, system: system)
+            assertNoBreakableUnitSpace(text)
+        }
+    }
+
+    /// The goal sheet's "Trend" row says the range the card says; without it, the single rate exactly as before.
+    func testTheTrendRowIsTheRangeWhenTheServerSendsTwoPaces() {
+        func trendRow(_ progress: GoalProgressDTO, _ system: UnitSystem = .metric) -> String? {
+            GoalProgressLogic.statRows(progress, system: system).first { $0.label == "Trend" }?.value
+        }
+        XCTAssertEqual(trendRow(onPace()), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
+        XCTAssertEqual(GoalProgressLogic.rateText(onPace(), system: .metric), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
+        XCTAssertEqual(trendRow(onPace(), .imperial), "Down 0.82\(rangeDash)1.3\u{00A0}lb/wk")
+        // An older server (no earlierPace): the single rate, exactly as before.
+        XCTAssertEqual(trendRow(onPace(earlier: nil)), "\u{2212}0.6\u{00A0}kg/wk")
+        XCTAssertEqual(trendRow(onPace(earlier: nil), .imperial), "\u{2212}1.3\u{00A0}lb/wk")
+        // So is a payload with no weightRead at all.
+        XCTAssertEqual(trendRow(onPace(state: nil)), "\u{2212}0.6\u{00A0}kg/wk")
+        // A muscle goal never reads a range.
+        XCTAssertEqual(trendRow(onPace(goal: "muscle")), "\u{2212}0.6\u{00A0}kg/wk")
+    }
+
+    // MARK: An aging weigh-in
+
+    /// The server calls a weigh-in aging from 7 days (`WEIGH_IN_AGING_DAYS`), and a week that began that old keeps
+    /// the previous plan with `staleSince` set — either one means a rate is not this week's.
+    func testAnAgingWeighInIsSevenDaysOrMoreOrAPlanThatSaysSo() {
+        XCTAssertFalse(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: 0)))
+        XCTAssertFalse(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: 6)))
+        XCTAssertTrue(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: 7)))
+        XCTAssertTrue(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: 14)))
+        XCTAssertTrue(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: 40)))
+        XCTAssertEqual(GoalProgressLogic.agingWeighInDays, 7)
+        // The days are unknown (an older server omits them): only the plan can say so.
+        XCTAssertFalse(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: nil)))
+        XCTAssertTrue(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: nil, staleSince: "2026-10-11")))
+        XCTAssertTrue(GoalProgressLogic.hasAgingWeighIn(onPace(lastWeighInDaysAgo: 8, staleSince: "2026-10-11")))
+        // An older server's payload has no plan, only the days.
+        XCTAssertTrue(GoalProgressLogic.hasAgingWeighIn(onPace(state: nil, lastWeighInDaysAgo: 9)))
+        XCTAssertFalse(GoalProgressLogic.hasAgingWeighIn(onPace(state: nil, lastWeighInDaysAgo: 2)))
+        // A reached goal and every other goal are not held to it.
+        XCTAssertFalse(GoalProgressLogic.hasAgingWeighIn(onPace(verdict: .reached, lastWeighInDaysAgo: 20)))
+        XCTAssertFalse(GoalProgressLogic.hasAgingWeighIn(onPace(goal: "muscle", lastWeighInDaysAgo: 20)))
+    }
+
+    /// The hero withholds a rate for a server read (as before) and for an aging weigh-in; a pace on a recent one is shown.
+    func testTheWeeklyRateIsWithheldForAServerReadOrAnAgingWeighIn() {
+        XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(onPace(lastWeighInDaysAgo: 3)))
+        XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(onPace(lastWeighInDaysAgo: 6)))
+        XCTAssertTrue(GoalProgressLogic.withholdsWeeklyRate(onPace(lastWeighInDaysAgo: 7)))
+        XCTAssertTrue(GoalProgressLogic.withholdsWeeklyRate(onPace(lastWeighInDaysAgo: 2, staleSince: "2026-10-11")))
+        for state in [GoalProgressDTO.WeightRead.State.early, .returning, .plateau, .movingAgain] {
+            XCTAssertTrue(GoalProgressLogic.withholdsWeeklyRate(onPace(state: state, lastWeighInDaysAgo: 0)), "\(state)")
+        }
+        XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(onPace(state: .reached, verdict: .reached, lastWeighInDaysAgo: 30)))
+        XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(onPace(state: nil, lastWeighInDaysAgo: 1)), "older server, recent weigh-in")
+    }
 }

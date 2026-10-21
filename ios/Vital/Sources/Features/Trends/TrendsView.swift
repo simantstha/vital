@@ -477,6 +477,9 @@ private extension TrendsView {
             // While the server is reading the scale (early read / welcome back /
             // plateau) it withholds a pace; the pill must not quote its own.
             withholdsLocalRate: vm.goalProgress.map(GoalProgressLogic.usesServerWeightRead) ?? false,
+            // An on-pace week the goal card words as a range ("Down 0.37–0.59 kg/wk"): the pill
+            // says the same range, never a single rate beside it.
+            paceRange: vm.goalProgress.flatMap(GoalProgressLogic.paceRange),
             // A wave 21 weight-loss server: the big number is the goal's progress weight, labelled
             // ("This week 82.3 kg"), the number the goal card says; the chart stays the trend.
             progressWeight: GoalProgressLogic.progressWeight(vm.goalProgress)

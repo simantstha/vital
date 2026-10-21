@@ -778,4 +778,241 @@ final class WeightHeroLogicTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Wave 22w: the flat fortnight, the server's pace range, a stale week
+
+    private let fortnightHeadline = "Two flat weeks — common; your plan holds"
+    private let onPaceHeadline = "On track for Jan 15 — about 6.3 kg to go"
+    /// The plan's one action in a stale week (`lib/weightWeekPlan.ts`): the server's own words, shown on the Trends card.
+    private let staleAction = "No weigh-in since May 10 — step on the scale when you can; your plan picks up from there"
+    private let rangeDash = "\u{2060}\u{2013}\u{2060}"
+
+    /// A weight-loss payload for a given read; a nil `state` is an older server (no `weightRead` at all).
+    private func wave22(
+        _ state: GoalProgressDTO.WeightRead.State?, headline: String, rateKg: Double? = nil,
+        lastWeighInDaysAgo: Int? = nil, verdict: GoalVerdict = .onTrack, plan: GoalProgressDTO.WeightRead.Plan? = nil
+    ) -> GoalProgressDTO {
+        GoalProgressDTO(
+            goal: "weight_loss",
+            target: .init(weightKg: 76, date: "2027-01-15"),
+            current: .init(weightKg: 82.3, startWeightKg: 83.7, changeKg: -1.4, progressPct: 18, trendKg: 82),
+            ratePerWeek: .init(kg: rateKg),
+            verdict: verdict,
+            headline: headline,
+            lastWeighInDaysAgo: lastWeighInDaysAgo,
+            weightRead: state.map { GoalProgressDTO.WeightRead(state: $0, weekMeanKg: 82.3, plan: plan) }
+        )
+    }
+
+    private func fortnightPlan(flatWeeks: Int?) -> GoalProgressDTO.WeightRead.Plan {
+        GoalProgressDTO.WeightRead.Plan(weekStart: "2026-10-19", state: .plateau, flatWeeks: flatWeeks)
+    }
+
+    /// An on-pace week's plan: the pace now and, when given, the pace a week earlier.
+    private func paceWeek(
+        now: Double? = -0.59, earlier: Double? = -0.37, staleSince: String? = nil,
+        actionText: String = "Keep your routine — it is working"
+    ) -> GoalProgressDTO.WeightRead.Plan {
+        GoalProgressDTO.WeightRead.Plan(
+            weekStart: "2026-10-19", state: .pace,
+            action: .init(kind: "keep_going", text: actionText),
+            pace: now.map { GoalProgressDTO.WeightRead.Plan.Pace(kgPerWeek: $0) },
+            earlierPace: earlier.map { GoalProgressDTO.WeightRead.Plan.Pace(kgPerWeek: $0) },
+            staleSince: staleSince
+        )
+    }
+
+    /// What `TodayView` feeds the hero for this payload (`TodayViewModel.heroGoalRateKgPerWeek` /
+    /// `heroGoalRateRange` / `heroWithholdsRate` / `heroServerWeightRead`).
+    private func wiredHeroText(_ goal: GoalProgressDTO, system: UnitSystem = .metric) -> String? {
+        let (trend, entries) = hero()
+        return WeightHeroLogic.weeklyChangeText(
+            trend: trend, entries: entries, system: system,
+            goalRateKgPerWeek: goal.ratePerWeek.kg, goalRateRange: GoalProgressLogic.paceRange(goal),
+            withholdsLocalRate: GoalProgressLogic.withholdsWeeklyRate(goal),
+            serverRead: WeightHeroLogic.serverReadSlotText(goal)
+        )
+    }
+
+    // MARK: Flat fortnight
+
+    /// Two flat weeks after a confirmed loss pace arrive as a plateau of `flatWeeks` 2: the goal line says "Two flat
+    /// weeks — common; your plan holds", and the hero's slot must not say three.
+    func testFlatFortnightHeroSaysTwoWeeksNotThree() {
+        let fortnight = wave22(.plateau, headline: fortnightHeadline, plan: fortnightPlan(flatWeeks: 2))
+        XCTAssertTrue(GoalProgressLogic.usesServerWeightRead(fortnight))
+        XCTAssertTrue(GoalProgressLogic.goalLineShowsServerRead(fortnight))
+        XCTAssertEqual(GoalProgressLogic.compactText(fortnight, system: .metric), fortnightHeadline)
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(fortnight), "Flat for 2 weeks — common")
+        XCTAssertEqual(WeightHeroLogic.flatFortnightReadHeroText, "Flat for 2 weeks — common")
+        XCTAssertEqual(WeightHeroLogic.plateauSlotText(flatWeeks: 2), WeightHeroLogic.flatFortnightReadHeroText)
+        // Units stay glued to their numbers; still no weekly rate of its own, whatever rate the payload carries.
+        XCTAssertEqual(wiredHeroText(fortnight), "Flat for 2\u{00A0}weeks — common")
+        let withRate = wave22(.plateau, headline: fortnightHeadline, rateKg: -0.4, plan: fortnightPlan(flatWeeks: 2))
+        XCTAssertEqual(wiredHeroText(withRate), wiredHeroText(fortnight))
+        XCTAssertFalse(wiredHeroText(withRate)?.contains("/wk") ?? true)
+    }
+
+    /// A plateau of three flat weeks, a plan with no `flatWeeks` and an older server (no plan at all) keep the text they had.
+    func testPlateauHeroKeepsThreeWeeksForThreeNilAndAnOlderServer() {
+        for flatWeeks in [3, nil, 0, 1, 4] as [Int?] {
+            let plateau = wave22(.plateau, headline: plateauHeadline, plan: fortnightPlan(flatWeeks: flatWeeks))
+            XCTAssertEqual(
+                WeightHeroLogic.serverReadSlotText(plateau), "Flat for 3 weeks", "flatWeeks \(String(describing: flatWeeks))"
+            )
+        }
+        let older = wave22(.plateau, headline: plateauHeadline)
+        XCTAssertNil(older.weightRead?.plan)
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(older), "Flat for 3 weeks")
+        XCTAssertEqual(wiredHeroText(older), "Flat for 3\u{00A0}weeks")
+        XCTAssertEqual(WeightHeroLogic.plateauSlotText(flatWeeks: 3), WeightHeroLogic.plateauReadHeroText)
+        XCTAssertEqual(WeightHeroLogic.plateauSlotText(flatWeeks: nil), WeightHeroLogic.plateauReadHeroText)
+        XCTAssertEqual(WeightHeroLogic.plateauReadHeroText, "Flat for 3 weeks")
+    }
+
+    /// `flatWeeks` only speaks for a plateau: another state's slot is untouched by it.
+    func testFlatWeeksOnlyChangesAPlateausSlot() {
+        let early = wave22(.early, headline: earlyHeadline, plan: fortnightPlan(flatWeeks: 2))
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(early), "Pace settles after 3 weeks")
+        let moving = wave22(.movingAgain, headline: movingAgainHeadline, plan: fortnightPlan(flatWeeks: 2))
+        XCTAssertEqual(WeightHeroLogic.serverReadSlotText(moving), "Moving again after a plateau")
+    }
+
+    /// While the goal line shows the stale-weigh-in nudge instead, the hero carries the full read — the fortnight's
+    /// headline, not a plateau's — and the read is still said in exactly one place.
+    func testFlatFortnightReadIsSaidInExactlyOnePlace() {
+        for age in [nil, 0, 3, 4, 6, 7, 9, 14] as [Int?] {
+            let goal = wave22(.plateau, headline: fortnightHeadline, lastWeighInDaysAgo: age, plan: fortnightPlan(flatWeeks: 2))
+            let goalLine = GoalProgressLogic.compactText(goal, system: .metric)
+            let hero = wiredHeroText(goal)
+            let sayings = [goalLine == fortnightHeadline, hero == GoalProgressLogic.nonBreaking(fortnightHeadline)]
+            XCTAssertEqual(sayings.filter { $0 }.count, 1, "age \(String(describing: age)): goal line \(goalLine) / hero \(String(describing: hero))")
+            XCTAssertNotNil(hero, "age \(String(describing: age)): the hero still has a line")
+        }
+    }
+
+    // MARK: Pace range
+
+    /// "On pace" rests on two paces either side of the target date: the card says "Down 0.37–0.59 kg/wk", so the hero says
+    /// that, never "−0.6 kg/wk over 4 weeks" beside it.
+    func testHeroSaysTheServersRangeNotASingleRateOnAnOnPaceWeek() {
+        let ranged = wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, lastWeighInDaysAgo: 0, plan: paceWeek())
+        XCTAssertEqual(wiredHeroText(ranged), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
+        XCTAssertEqual(wiredHeroText(ranged, system: .imperial), "Down 0.82\(rangeDash)1.3\u{00A0}lb/wk")
+        let text = wiredHeroText(ranged) ?? ""
+        XCTAssertFalse(text.contains("over 4 weeks"))
+        XCTAssertFalse(text.contains("\u{2212}"), "a range is not a signed single rate")
+        // Whichever order the two paces come in.
+        let swapped = wave22(.pace, headline: onPaceHeadline, rateKg: -0.37, lastWeighInDaysAgo: 0, plan: paceWeek(now: -0.37, earlier: -0.59))
+        XCTAssertEqual(wiredHeroText(swapped), wiredHeroText(ranged))
+    }
+
+    /// An older server sends no `earlierPace` (or no plan, or no weightRead): the hero is exactly as it was.
+    func testHeroKeepsTheSingleRateWithoutAnEarlierPace() {
+        let single = "\u{2212}0.6\u{00A0}kg/wk over 4 weeks"
+        XCTAssertEqual(wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(earlier: nil))), single)
+        XCTAssertEqual(wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59)), single, "wave 21: a pace read with no plan")
+        XCTAssertEqual(wiredHeroText(wave22(nil, headline: onPaceHeadline, rateKg: -0.59)), single, "older: no weightRead")
+        // Neither pace a loss: the server prints no range either.
+        XCTAssertEqual(
+            wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(earlier: 0.05))), single
+        )
+        // No goal progress at all: the hero's own 7-day rate.
+        XCTAssertEqual(heroText(nil), "\u{2212}0.8\u{00A0}kg/wk this week")
+    }
+
+    func testWeeklyChangeTextRangeBeatsTheSingleRateAndYieldsToAServerRead() {
+        let (trend, entries) = hero()
+        let range = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.37, fastKgPerWeek: 0.59)
+        let expected = "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk"
+        XCTAssertEqual(WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateRange: range), expected)
+        XCTAssertEqual(
+            WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.59, goalRateRange: range),
+            expected
+        )
+        // A nil range is the old behaviour, the parameter defaulted.
+        XCTAssertEqual(
+            WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.59, goalRateRange: nil),
+            "\u{2212}0.6\u{00A0}kg/wk over 4 weeks"
+        )
+        // The server's own read, and the honesty gate on the trend, both still come first.
+        XCTAssertNil(WeightHeroLogic.weeklyChangeText(
+            trend: trend, entries: entries, system: .metric, goalRateRange: range, withholdsLocalRate: true
+        ))
+        XCTAssertEqual(
+            WeightHeroLogic.weeklyChangeText(
+                trend: trend, entries: entries, system: .metric, goalRateRange: range,
+                withholdsLocalRate: true, serverRead: "Flat for 2 weeks — common"
+            ),
+            "Flat for 2\u{00A0}weeks — common"
+        )
+        let young = WeightTrendDTO(days: [], delta7dKgPerWeek: nil, delta30dKgPerWeek: nil, established: false)
+        XCTAssertNil(WeightHeroLogic.weeklyChangeText(
+            trend: young, entries: [entry(daysAgo: 10), entry(daysAgo: 0)], system: .metric, goalRateRange: range
+        ))
+    }
+
+    // MARK: Stale week
+
+    /// The server keeps the previous plan through a stale week (the newest weigh-in 7+ days old), so its pace is still on the
+    /// payload. Today's hero must not print it as this week's: it prints no rate (the goal line under it carries the
+    /// "Last weigh-in N days ago" nudge, and the plan's own "No weigh-in since…" action is on the Trends card's reasons).
+    func testHeroPrintsNoRateInAStaleWeek() {
+        for age in [7, 8, 10, 14, 30] {
+            let single = wave22(.pace, headline: onPaceHeadline, rateKg: -0.4, lastWeighInDaysAgo: age, plan: paceWeek(now: -0.4, earlier: nil))
+            let ranged = wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, lastWeighInDaysAgo: age, plan: paceWeek())
+            let older = wave22(nil, headline: onPaceHeadline, rateKg: -0.4, lastWeighInDaysAgo: age)
+            for goal in [single, ranged, older] {
+                XCTAssertTrue(GoalProgressLogic.withholdsWeeklyRate(goal), "age \(age)")
+                XCTAssertNil(wiredHeroText(goal), "age \(age): no fresh-looking rate")
+                XCTAssertEqual(
+                    GoalProgressLogic.compactText(goal, system: .metric),
+                    "Last weigh-in \(age) days ago — step on the scale to update", "age \(age)"
+                )
+            }
+        }
+    }
+
+    /// Under a week old it is still this week's rate — the single rate or the range, as before.
+    func testHeroKeepsItsRateWhileTheWeighInIsUnderAWeekOld() {
+        for age in [nil, 0, 3, 6] as [Int?] {
+            let single = wave22(.pace, headline: onPaceHeadline, rateKg: -0.4, lastWeighInDaysAgo: age, plan: paceWeek(now: -0.4, earlier: nil))
+            let ranged = wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, lastWeighInDaysAgo: age, plan: paceWeek())
+            XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(single), "age \(String(describing: age))")
+            XCTAssertEqual(wiredHeroText(single), "\u{2212}0.4\u{00A0}kg/wk over 4 weeks", "age \(String(describing: age))")
+            XCTAssertEqual(wiredHeroText(ranged), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk", "age \(String(describing: age))")
+        }
+    }
+
+    /// `plan.staleSince` is the server's own word that the week began without a fresh weigh-in: it withholds the rate
+    /// even when the payload omits `lastWeighInDaysAgo`, and the stale action's text is the plan's, never the hero's.
+    func testAPlanThatSaysStaleWithholdsTheRateWithoutTheDays() {
+        let plan = paceWeek(now: -0.4, earlier: nil, staleSince: "2026-05-10", actionText: staleAction)
+        let stale = wave22(.pace, headline: onPaceHeadline, rateKg: -0.4, lastWeighInDaysAgo: nil, plan: plan)
+        XCTAssertEqual(stale.weightRead?.plan?.staleSince, "2026-05-10")
+        XCTAssertEqual(stale.weightRead?.plan?.action?.text, staleAction)
+        XCTAssertNil(wiredHeroText(stale))
+        // The range goes with it: a stale week prints neither.
+        let ranged = wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(staleSince: "2026-05-10", actionText: staleAction))
+        XCTAssertNil(wiredHeroText(ranged))
+        // A plan that is not stale and a payload with no days are as they were.
+        XCTAssertEqual(
+            wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.4, plan: paceWeek(now: -0.4, earlier: nil))),
+            "\u{2212}0.4\u{00A0}kg/wk over 4 weeks"
+        )
+    }
+
+    /// A server read keeps saying its read in a stale week (the full read, since the goal line carries the nudge), and a
+    /// reached goal is not held to the rule.
+    func testStaleWeekLeavesServerReadsAndAReachedGoalAlone() {
+        for age in [7, 9, 14] {
+            let fortnight = wave22(.plateau, headline: fortnightHeadline, lastWeighInDaysAgo: age, plan: fortnightPlan(flatWeeks: 2))
+            XCTAssertEqual(wiredHeroText(fortnight), GoalProgressLogic.nonBreaking(fortnightHeadline), "age \(age)")
+            let plateau = wave22(.plateau, headline: plateauHeadline, lastWeighInDaysAgo: age)
+            XCTAssertEqual(wiredHeroText(plateau), GoalProgressLogic.nonBreaking(plateauHeadline), "age \(age)")
+        }
+        let reached = wave22(.reached, headline: "Goal reached — 76 kg", rateKg: -0.3, lastWeighInDaysAgo: 20, verdict: .reached)
+        XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(reached))
+        XCTAssertEqual(wiredHeroText(reached), "\u{2212}0.3\u{00A0}kg/wk over 4 weeks")
+    }
 }

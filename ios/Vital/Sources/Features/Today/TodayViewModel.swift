@@ -460,6 +460,23 @@ final class TodayViewModel: ObservableObject {
         goalProgress.map(GoalProgressLogic.usesServerWeightRead) ?? false
     }
 
+    /// True while the weight hero's rate slot must print no weekly rate of its own: the server is
+    /// reading the scale itself (`heroWithholdsLocalRate`) OR the newest weigh-in is a week old or
+    /// more (`GoalProgressLogic.withholdsWeeklyRate`, wave 22w) — a stale week keeps its previous
+    /// plan, so "−0.4 kg/wk" beside the "Last weigh-in 8 days ago" nudge would read as this week's.
+    /// The weigh-in toast keeps `heroWithholdsLocalRate`: it follows a FRESH weigh-in.
+    var heroWithholdsRate: Bool {
+        goalProgress.map(GoalProgressLogic.withholdsWeeklyRate) ?? false
+    }
+
+    /// Wave 22w: the range ("Down 0.37–0.59 kg/wk") the server's card shows for an on-pace week
+    /// whose two paces land either side of the target date, so the hero says the same range instead
+    /// of one rate that argues with it (`GoalProgressLogic.paceRange`); `nil` otherwise and from an
+    /// older server — the hero then keeps `heroGoalRateKgPerWeek` exactly as before.
+    var heroGoalRateRange: GoalProgressLogic.PaceRange? {
+        goalProgress.flatMap(GoalProgressLogic.paceRange)
+    }
+
     /// What the hero's rate slot says while `heroWithholdsLocalRate`: a short
     /// complement ("Pace settles after 3 weeks") when the goal line below already
     /// says the server's read in full, the full read ("Early read — down 0.7 kg on
@@ -1622,12 +1639,14 @@ final class TodayViewModel: ObservableObject {
             // refreshed TREND, never the raw number just typed/confirmed —
             // see `WeightHeroLogic.weighInToastMessage`.
             // While the server reads the scale itself (early / returning /
-            // plateau) it withholds a pace, so the toast quotes no rate either.
+            // plateau) it withholds a pace, so the toast quotes no rate either — and
+            // neither does it while the card shows a pace RANGE (wave 22w): the
+            // trend's own 7-day rate would be a single figure beside that range.
             actionToast.show(message: WeightHeroLogic.weighInToastMessage(
                 entries: weightLog?.entries ?? [],
                 trend: weightLog?.trend,
                 system: system,
-                withholdsLocalRate: heroWithholdsLocalRate
+                withholdsLocalRate: heroWithholdsLocalRate || heroGoalRateRange != nil
             ))
         } catch {
             toastMessage = "Couldn't save — try again"
