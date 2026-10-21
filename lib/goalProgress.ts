@@ -160,6 +160,7 @@ import {
   longRunWord,
   mondayOfDay,
   overCapPhrase,
+  CUTBACK_SKIPPED_FRACTION,
   planWeekKm,
   racePhaseInfo,
   racePhaseTargetKm,
@@ -332,6 +333,8 @@ export interface GoalWeekPlan {
    */
   overCap?: boolean;
   overCapRead?: 'touch' | 'well';
+  /** Additive (wave 22e): last week was a cutback that ran more than 10% over its lowered number, so this week holds at the week the cutback replaced. */
+  skippedCutback?: boolean;
 }
 
 export interface GoalRaceProgress {
@@ -2470,6 +2473,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.strides ? { strides: true } : {}),
             ...(plan.longRun.held ? { longRunHeld: true } : {}),
             ...(plan.upTo ? { upTo: true } : {}),
+            ...(plan.hold?.skippedCutback ? { skippedCutback: true } : {}),
             ...(plan.last?.overCap ? { overCap: true, ...(plan.last.capRead != null ? { overCapRead: plan.last.capRead } : {}) } : {}),
           },
         }
@@ -3074,6 +3078,13 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       return finish('building', `Building back — restart at ~${fmt(target)} this week`, body(planLine));
     case 'hold': {
       const hold = plan.hold as NonNullable<EnduranceWeekPlan['hold']>;
+      // A cutback week that ran more than 10% over its lowered number: no +10% build on the skip - hold at the week it replaced.
+      if (hold.skippedCutback === true) {
+        const skippedInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was above the ~${fmt(hold.spikeStepKm)} cutback — the week it replaced stays the bar`, tone: 'watch' };
+        return finish('holding', `You skipped the cutback — hold ~${fmt(target)} this week`, stepDone != null
+          ? body(stepDone, [skippedInfo, planLine])
+          : body(skippedInfo, [planLine]));
+      }
       // A comeback week far past its "up to" ceiling: this week stays AT that ceiling and does not build on the jump.
       if (hold.ceiling === true) {
         const ceilingInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was well over its ~${fmt(hold.spikeStepKm)} ceiling — don't build on the jump`, tone: 'watch' };
@@ -3106,8 +3117,8 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
             ? `long run peak ${fmtLongRunPeak(input, lrProgress.peakKm)} reached`
             : `${longRunWord(lrProgress.lastKm, u)} ${distanceNum(input, lrProgress.lastKm)} of ${formatTargetLongRun(peakTarget, u)}`)
         : null;
-      // A cutback week that ran well past its lowered number says so, whatever the week's last-week read ("30 of ~24 km" is no on-plan cutback).
-      const aboveCutback = plan.cutback != null && doneKm > target * ABOVE_STEP_FRACTION;
+      // A cutback week that ran past its lowered number says so, whatever the week's last-week read ("30 of ~24 km" is no on-plan cutback).
+      const aboveCutback = plan.cutback != null && doneKm > target * CUTBACK_SKIPPED_FRACTION;
       const lead = aboveCutback ? fmt(doneKm) : long ?? `${goalText} a week`;
       const tail = aboveCutback ? `, above the ~${fmt(target)} cutback` : '';
       const headline = race != null
@@ -3123,7 +3134,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     return finish('behind', `Behind — ${fmt(lastKm)} last week${lastPlanKm != null ? `, ~${fmt(lastPlanKm)} was the step` : ''}`, planBody());
   }
   // A cutback week that ran well past its lowered number says so ("Cutback week - 25 of ~20 km, above the cutback"), not last week's read.
-  if (plan.cutback != null && doneKm > target * ABOVE_STEP_FRACTION) {
+  if (plan.cutback != null && doneKm > target * CUTBACK_SKIPPED_FRACTION) {
     return finish('building', `Cutback week — ${done} of ~${fmt(target)}, above the cutback`, planBody());
   }
   const above = level === 'good' && lastPlanKm != null && lastKm > lastPlanKm * ABOVE_STEP_FRACTION;

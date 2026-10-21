@@ -67,8 +67,9 @@ test('"hit" only when the rounded km reach the step: 20 of ~22 km is "Close to y
   const climb = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25, 0, 0, 12, 14.5]));
   assert.equal(climb.win, 'Back on the way up: 14.5 km, up from 12 km last week.');
   // At the goal: 28 of 30 is close, 30 of 30 is held.
-  assert.match(computeWeeklyReview(planReview([22, 24, 26, 28, 30, 28])).win ?? '', /^Close to your weekly goal: 28 of 30 km — aim for 30 again\.$/);
-  assert.equal(computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30])).win, 'You held your weekly goal: 30 of 30 km.');
+  // (The fifth week here, 2026-09-21, is the calendar's cutback week: run as planned, 24 km - a full 30 would be a skipped cutback, wave 22e.)
+  assert.match(computeWeeklyReview(planReview([22, 24, 26, 30, 24, 28])).win ?? '', /^Close to your weekly goal: 28 of 30 km — aim for 30 again\.$/);
+  assert.equal(computeWeeklyReview(planReview([22, 24, 26, 30, 24, 30])).win, 'You held your weekly goal: 30 of 30 km.');
 });
 
 test('a goal he has never run is "Build to", not "Hold"', () => {
@@ -81,7 +82,7 @@ test('a goal he has never run is "Build to", not "Hold"', () => {
 
 test('a short build week 15-21 days before a half is the taper starting early: fine, not "8 km short"', () => {
   const race = { raceDate: '2026-10-18', raceDistanceKm: 21.1 }; // 20 days after the reviewed Monday
-  const early = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 22], race));
+  const early = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 24, 22], race));
   assert.equal(early.weekRating, 'good');
   assert.equal(early.weekGap, null);
   // Wave 21e: easing off early is fine, so it is a (neutral) win - never a slip.
@@ -89,14 +90,14 @@ test('a short build week 15-21 days before a half is the taper starting early: f
   assert.equal(early.win, 'Started tapering early — fine.');
   assert.doesNotMatch(`${early.headline} ${early.slip}`, /short/);
   // Further out (30 days) it is a genuine short week; a marathon taper is not this rule either.
-  const far = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 22], { raceDate: '2026-10-28', raceDistanceKm: 21.1 }));
+  const far = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 24, 22], { raceDate: '2026-10-28', raceDistanceKm: 21.1 }));
   assert.equal(far.weekRating, 'mixed');
   assert.match(far.slip ?? '', /short/);
-  const marathon = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 22], { raceDate: '2026-10-18', raceDistanceKm: 42.2 }));
+  const marathon = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 24, 22], { raceDate: '2026-10-18', raceDistanceKm: 42.2 }));
   assert.notEqual(marathon.win, 'Started tapering early — fine.');
   assert.notEqual(marathon.slip, 'Started tapering early — fine.');
   // Far under half the target is not "tapering early".
-  const tiny = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 30, 10], race));
+  const tiny = computeWeeklyReview(planReview([22, 24, 26, 28, 30, 24, 10], race));
   assert.notEqual(tiny.win, 'Started tapering early — fine.');
   assert.notEqual(tiny.slip, 'Started tapering early — fine.');
 });

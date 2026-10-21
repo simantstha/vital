@@ -2227,19 +2227,20 @@ function planReview(weeks: number[], over: Partial<WeeklyReviewInput> = {}): Wee
 }
 
 test('spike week: no "volume is up" win, no +74% [good] stat, a jump Slip, and Next week holds one step up from the STEP', () => {
-  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 40]));
+  // (The week before the reviewed one, 2026-09-21, is the calendar's cutback week: run as planned, 18 km - 23 km would be a skipped cutback.)
+  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 18, 40]));
   assert.equal(r.weekRating, 'mixed');
-  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 25, targetKm: 30 });
-  assert.equal(r.headline, '4 sessions, 40 of ~25 km — well above the safe step · goal 30 km');
+  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 23, targetKm: 30 });
+  assert.equal(r.headline, '4 sessions, 40 of ~23 km — well above the safe step · goal 30 km');
   assert.equal(r.win, null);
   assert.doesNotMatch(r.win ?? '', /volume/i);
   assert.equal(statByLabel(r, 'Volume')!.tone, 'watch');
-  assert.equal(r.slip, "Jumped 15 km over this week's step — big jumps raise injury risk");
-  assert.equal(r.nextWeek, 'Hold around ~28 km next week, then build ~10% a week toward 30 km.');
+  assert.equal(r.slip, "Jumped 17 km over this week's step — big jumps raise injury risk");
+  assert.equal(r.nextWeek, 'Hold around ~25 km next week, then build ~10% a week toward 30 km.');
 });
 
 test('the week after a spike, holding as advised is good: win says so, no "fell X%" slip, no "Rebuild toward 40 km"', () => {
-  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 40, 28]));
+  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 18, 40, 28]));
   assert.equal(r.weekRating, 'good');
   assert.equal(r.weekGap, null);
   assert.equal(r.win, "Held back after last week's jump — exactly right.");
@@ -2251,7 +2252,7 @@ test('the week after a spike, holding as advised is good: win says so, no "fell 
   // (the 40 km week's 16 km long run is still inside the 14 days the long run grows from; half of the week is 15 km, so it is held at 16)
   assert.equal(r.nextWeek, 'Hold 30 km; long run 16 km, the rest easy.');
   // Not holding (another 40 km) is the same mistake again, not praise.
-  const again = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 40, 40]));
+  const again = computeWeeklyReview(planReview([15, 17, 19, 21, 18, 40, 40]));
   assert.equal(again.weekRating, 'mixed');
   assert.equal(again.weekGap?.kind, 'spike');
   assert.equal(again.win, null);

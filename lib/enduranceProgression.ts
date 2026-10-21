@@ -757,9 +757,10 @@ export interface EnduranceWeekPlan {
   /**
    * Hold week: last week's jump and the target it was graded against (the target its cards showed: a cutback week's is the cutback number).
    * `ceiling` (wave 22e): the jump was a comeback week well over its "up to" ceiling - this week stays AT that ceiling, and `ladder` keeps
-   * the climb back to the pre-break median alive for the week after.
+   * the climb back to the pre-break median alive for the week after. `skippedCutback` (wave 22e): the jump was a cutback week that ran
+   * more than 10% over its lowered number - this week holds at the week the cutback replaced instead of building 10% on the skip.
    */
-  hold: { spikeKm: number; spikeStepKm: number; ceiling?: boolean; ladder?: { medianKm: number; fraction: number; weeksSince: number } } | null;
+  hold: { spikeKm: number; spikeStepKm: number; ceiling?: boolean; skippedCutback?: boolean; ladder?: { medianKm: number; fraction: number; weeksSince: number } } | null;
   /** Taper / race week / recovery: the race phase read on this week's Monday and the peak week its target is a share of. */
   wind: { phase: 'taper' | 'race_week' | 'recovery'; info: RacePhaseInfo; peakKm: number } | null;
   /** Rebuild: whole days since race day on this week's Monday. */
@@ -860,6 +861,8 @@ const TAPER_LONG_RUN_SHARE = 0.65;
 /** Every 4th plain build / maintain week is a cutback at ~80% of the week it replaces (long run held). */
 export const CUTBACK_EVERY_WEEKS = 4;
 export const CUTBACK_FRACTION = 0.8;
+/** A cutback week that ran more than this multiple of its lowered number skipped the cutback (the shared 10% ceiling slack). */
+export const CUTBACK_SKIPPED_FRACTION = PHASE_CEILING_TOLERANCE;
 /** The last 2 build weeks before a taper carry a few strides, so race-pace work is not brand new in the taper. */
 export const STRIDES_COPY = 'plus 4–6 strides after one easy run';
 export const STRIDES_WEEKS_BEFORE_TAPER = 2;
@@ -1291,6 +1294,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
         : `${verb} ${formatKm(plan.goalKm, u)} this week, the rest of the runs easy${strides}`;
     }
     case 'hold':
+      if (plan.hold?.skippedCutback) return `You skipped the cutback — hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
       return `Hold ~${formatKm(t ?? plan.goalKm, u)} this week, no step up after last week's jump${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
     case 'restart':
       return `Restart at ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
@@ -1589,6 +1593,12 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       };
       kind = 'hold';
       targetKm = ceilingBroken ? spikeStepKm : stepFromShownTarget(prevPlan.cutback?.normalKm ?? spikeStepKm, ctx.goalKm, ctx.units);
+    } else if (prevPlan != null && prevIsTraining && prevPlan.cutback != null && prevPlan.targetKm != null && prevGrade?.gap === 'over') {
+      // A cutback week that ran more than 10% over its lowered number skipped the cutback: no +10% build on the skip - this week holds at the
+      // week the cutback replaced ("You skipped the cutback - hold ~25 km"), and the week after builds on from there.
+      hold = { spikeKm: round1(prev.km), spikeStepKm: prevPlan.targetKm, skippedCutback: true };
+      kind = 'hold';
+      targetKm = Math.min(ctx.goalKm, prevPlan.cutback.normalKm);
     } else {
       // Build: ~10% over last week — and, for up to three weeks after a restart, at least the next rung of the climb
       // back to the pre-break median (restart -> 80% -> 100%), a rung only when the week before graded good.
@@ -1857,6 +1867,8 @@ export function gradeEnduranceWeek(
   if (plan.band.overKm != null && isSpikeWeek(km, target, plan.goalKm, units) && km > medianGuard) {
     return { level: 'mixed', gap: 'spike' };
   }
+  // A cutback week that ran more than 10% over its lowered number skipped the cutback (wave 22e): not a good week, and not a spike either.
+  if (plan.cutback != null && km > target * CUTBACK_SKIPPED_FRACTION + 1e-9) return { level: 'mixed', gap: 'over' };
   // A cutback week that ended in days off before it reached even its (lowered) number is a rest week, not a good cutback.
   if (plan.cutback != null && plan.endedOff && km < target) return { level: 'light', gap: null };
   if (km >= plan.band.goodFromKm - 1e-9) return { level: 'good', gap: null };

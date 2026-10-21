@@ -130,3 +130,21 @@ test('a cutback week that ran far past its lowered number says so on the card, i
   const kept = computeGoalProgress(input(weeks(sun2, [wk(24), ...history.slice(1)]), { todayKey: sun2, race, racePeakWeekKm: 30 }));
   assert.doesNotMatch(kept.headline, /above the/);
 });
+
+// ── P2.1: a skipped cutback is not rewarded ────────────────────────────────
+
+test('the Monday after a skipped cutback holds at the week the cutback replaced - "You skipped the cutback" (22e)', () => {
+  const monday = '2026-10-26';
+  const card = computeGoalProgress(input(weeks(monday, [[], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }));
+  assert.equal(card.verdict, 'holding');
+  assert.equal(card.headline, 'You skipped the cutback — hold ~25 km this week');
+  assert.equal(card.distance!.stepTargetKm, 25);
+  assert.equal(card.distance!.plan?.kind, 'hold');
+  assert.equal(card.distance!.plan?.skippedCutback, true);
+  assert.match(card.reasons.find(r => r.kind === 'volume')!.text, /^Last week's 25 km was above the ~20 km cutback/);
+  // A kept cutback builds on the week before it (23 -> 25), as before.
+  const kept = computeGoalProgress(input(weeks(monday, [[], wk(20), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }));
+  assert.equal(kept.distance!.plan?.kind, 'build');
+  assert.equal(kept.distance!.stepTargetKm, 25);
+  assert.equal(kept.distance!.plan?.skippedCutback, undefined);
+});

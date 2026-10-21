@@ -1095,3 +1095,51 @@ invariant(RUNNERS, 'a cutback week that ran more than 15% over its lowered targe
   }
   return out;
 });
+
+// ── wave 22e / P2.1: a skipped cutback is not rewarded ──────────────────────
+
+/** A cutback week more than 10% over its lowered target that is not a spike (a spike has its own read): the cutback was skipped. */
+function skippedCutbacks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> {
+  return cutbackWeeks(snaps).filter(w => w.ranKm > w.targetKm * 1.1 + 1e-9 && !/Over the safe step/i.test(plain(w.sunday.card?.headline ?? '')));
+}
+
+invariant(RUNNERS, 'a skipped cutback (more than 10% over its lowered number) is a hold at the week it replaced, graded mixed with a "Cutback skipped" slip - never a +12% build rewarded as good', (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  let skipped = 0;
+  for (const w of skippedCutbacks(snaps)) {
+    skipped++;
+    const nextMonday = byDate.get(addDays(w.monday, 7));
+    const plan = nextMonday?.card?.distance?.plan;
+    const normalKm = w.targetKm / 0.8;
+    if (nextMonday && plan?.kind !== 'hold') out.push({ snap: nextMonday, detail: `plan kind ${plan?.kind} after ${w.ranKm} of ~${w.targetKm} km (a skipped cutback): "${visible(nextMonday.card?.headline ?? '')}"` });
+    if (nextMonday?.card?.distance && nextMonday.card.distance.stepTargetKm > Math.ceil(normalKm) + 1 + 1e-9) out.push({ snap: nextMonday, detail: `target ${nextMonday.card.distance.stepTargetKm} km steps up after a skipped cutback (the week it replaced was ~${Math.round(normalKm)} km)` });
+    if (nextMonday && !/skipped the cutback/i.test(plain(nextMonday.card?.headline ?? ''))) out.push({ snap: nextMonday, detail: `card headline "${visible(nextMonday.card?.headline ?? '')}" does not say the cutback was skipped` });
+    const review = nextMonday?.review;
+    if (review && review.weekStart === w.monday) {
+      const rv = review.review;
+      if (rv.weekRating !== 'mixed') out.push({ snap: nextMonday as DaySnapshot, detail: `review rated ${rv.weekRating} for ${w.ranKm} of ~${w.targetKm} km: "${visible(rv.headline)}"` });
+      if (!/Cutback skipped: [\d.]+ (?:km|mi) vs ~[\d.]+ (?:km|mi) planned/.test(plain(rv.slip ?? ''))) out.push({ snap: nextMonday as DaySnapshot, detail: `review slip "${visible(rv.slip ?? '')}" does not say "Cutback skipped: N km vs ~M km planned"` });
+      if (rv.stats.find(st => st.label === 'Volume')?.tone === 'good') out.push({ snap: nextMonday as DaySnapshot, detail: `Volume stat is good-toned for a skipped cutback: "${visible(rv.stats.find(st => st.label === 'Volume')?.value ?? '')}"` });
+      if (!/skipped the cutback/i.test(plain(rv.nextWeek))) out.push({ snap: nextMonday as DaySnapshot, detail: `next week "${visible(rv.nextWeek)}" does not say the cutback was skipped` });
+    }
+  }
+  if (name === 'runner_on_plan' || name === 'runner_no_race') assert.ok(skipped > 0, `${name}: no cutback was skipped, so this invariant checked nothing`);
+  return out;
+});
+
+// S1 walks the other path: a cutback that is run as planned is "Cutback week done", a good week, and the week after builds on the week before it.
+invariant(['runner_on_plan_obedient'], 'a cutback run as planned is a good week with "Cutback week done" and is never called skipped', (snaps, name) => {
+  const out: Violation[] = [];
+  let done = 0;
+  for (const w of cutbackWeeks(snaps)) {
+    const review = snaps.find(s => s.date === addDays(w.monday, 7))?.review;
+    if (!review || review.weekStart !== w.monday) continue;
+    done++;
+    const rv = review.review;
+    if (rv.weekRating !== 'good' || !/^Cutback week done: /.test(plain(rv.win ?? ''))) out.push({ snap: snaps.find(s => s.date === addDays(w.monday, 7)) as DaySnapshot, detail: `rating ${rv.weekRating}, win "${visible(rv.win ?? '')}" for ${w.ranKm} of ~${w.targetKm} km` });
+    for (const t of [rv.headline, rv.slip ?? '', rv.nextWeek]) if (/skipped|above the cutback/i.test(plain(t))) out.push({ snap: snaps.find(s => s.date === addDays(w.monday, 7)) as DaySnapshot, detail: `"${visible(t)}"` });
+  }
+  assert.ok(done > 0, `${name}: no reviewed cutback week, so this invariant checked nothing`);
+  return out;
+});

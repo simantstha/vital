@@ -62,6 +62,7 @@ import {
   isWindDownPhase,
   longRunCapNote,
   longRunWord,
+  CUTBACK_SKIPPED_FRACTION,
   comebackCapRead,
   overCapPhrase,
   overUpToCap,
@@ -159,6 +160,8 @@ export type WeekGap =
    * shortfall — see `isSpikeWeek`). Only when a step below the goal applies.
    */
   | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number; ceiling?: boolean }
+  /** A cutback week that ran more than 10% over its lowered number (`targetKm`); `normalKm` is the week it replaced. */
+  | { kind: 'cutback'; doneKm: number; targetKm: number; normalKm: number }
   /**
    * Endurance, race lifecycle: a taper / race-week / recovery week whose running
    * km sat off that phase's target (lib/enduranceProgression.ts). `over` is true
@@ -1386,6 +1389,8 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
           ...(stepped ? { stepKm: plan.targetKm as number } : {}),
           ...(plan.comeback != null ? { comebackFromKm: round1(rp.prevWeek.km) } : {}),
         };
+  } else if (grade.gap === 'over' && plan.cutback != null) {
+    gap = { kind: 'cutback', doneKm: round1(km), targetKm: plan.targetKm as number, normalKm: plan.cutback.normalKm };
   } else if (grade.gap === 'over' || grade.gap === 'under') {
     gap = { kind: 'phase', phase: plan.kind as 'taper' | 'race_week' | 'recovery', doneKm: round1(km), targetKm: plan.targetKm as number, over: grade.gap === 'over' };
   }
@@ -1492,7 +1497,7 @@ function distanceHeadline(
   }
   // A cutback week is graded against its own lowered number, so a week that ran far past it says so before the weekly goal is looked at
   // ("30 of ~24 km — above the cutback", never "30 of 30 km" that hides the skipped cutback).
-  if (opts.cutback && km > stepKm * ABOVE_STEP_FRACTION) {
+  if (opts.cutback && km > stepKm * CUTBACK_SKIPPED_FRACTION + 1e-9) {
     return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — above the cutback · goal ${distanceText(input, targetKm)}`;
   }
   if (stepKm >= targetKm || km >= targetKm) return `${distanceNumber(input, km)} of ${distanceText(input, targetKm)}`;
@@ -1832,6 +1837,8 @@ function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: W
       return gap.stepKm != null
         ? `${distanceNumber(input, gap.doneKm)} of ~${distanceText(input, gap.stepKm)} — ${withUnit(round1(distanceNumber(input, gap.stepKm) - distanceNumber(input, gap.doneKm)), isImperial(input) ? 'mi' : 'km')} short of this week's step`
         : `${distanceNumber(input, gap.doneKm)} of ${distanceText(input, gap.targetKm)} target — ${distanceText(input, gap.targetKm - gap.doneKm)} short`;
+    case 'cutback':
+      return `Cutback skipped: ${distanceText(input, gap.doneKm)} vs ~${distanceText(input, gap.targetKm)} planned`;
     case 'spike':
       // A comeback week far past its "up to" ceiling.
       if (gap.ceiling === true) {
@@ -2207,7 +2214,10 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
       break;
     }
     case 'hold':
-      text = next.hold?.ceiling === true
+      text = next.hold?.skippedCutback === true
+        // A cutback week that ran more than 10% over its lowered number: no +10% on the skip.
+        ? `You skipped the cutback — hold ~${t} next week${lr ? `; ${lr}` : ''}, then build ~${growth} a week toward ${goalText}.`
+        : next.hold?.ceiling === true
         // A comeback week far past its ceiling: next week stays AT that ceiling.
         ? `Stay at ~${t} next week — don't build on last week's jump; then build ~${growth} a week toward ${goalText}.`
         : (next.targetKm as number) >= next.goalKm
@@ -2379,6 +2389,7 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
     }
     // The gap names the week; "Next week" is the coming week's plan (normally answered before this safety net).
     case 'distance':
+    case 'cutback':
     case 'spike': return plannedNextWeek(input)?.text ?? fallbackNextWeek(input, week);
     // Normally answered by the coming week's phase (`windDownNextWeek`); this is the safety net.
     case 'phase': return windDownNextWeek(input, week) ?? fallbackNextWeek(input, week);

@@ -163,6 +163,10 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
         : `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
     }
     case 'hold':
+      // A cutback week that ran more than 10% over its lowered number: hold at the week it replaced.
+      if (plan.skippedCutback) {
+        return `- This week's target: hold ~${t} — last week skipped the cutback (ran well over its lowered number); do not build 10% on the skip, and do not praise it${strides}`;
+      }
       // A comeback week far past its "up to" ceiling: stay at that ceiling.
       if (plan.overCapRead === 'well') {
         return `- This week's target: stay at ~${t} — last week was well over its comeback ceiling (a spike); do not build on the jump, and do not praise the extra km${strides}`;
