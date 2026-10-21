@@ -665,7 +665,7 @@ test('muscle: lifts up but <70% of planned sessions → "Lifts up, sessions behi
   }));
   const low = mk(10); // 10/16 = 63%
   assert.equal(low.verdict, 'behind');
-  assert.equal(low.headline, 'Lifts up, sessions behind — Squat +10 kg');
+  assert.equal(low.headline, 'Lifts up, sessions behind — Squat est. 1RM +10 kg');
   assert.equal(mk(12).verdict, 'progressing'); // 75%
   // No weekly target: nothing to be behind on.
   const noTarget = computeGoalProgress(base({
@@ -2880,7 +2880,7 @@ test('a week that cannot reach its target: "0 of 4 sessions this week (last: Oct
   const sun = computeGoalProgress(lapseInput(0, { todayKey: sunday, strengthDays: sunDays, trainingDays: sunDays }));
   assert.deepEqual(sun.reasons[0], { kind: 'week_sessions', text: '2 of 4 sessions this week (last: Oct 2)', tone: 'watch' });
   assert.equal(sun.verdict, 'holding');
-  assert.equal(sun.headline, 'Lifts up, week short — Squat +12 kg');
+  assert.equal(sun.headline, 'Lifts up, week short — Squat est. 1RM +12 kg');
   assert.doesNotMatch(JSON.stringify(sun), /Progressing/);
   assertWellFormed(sun);
   // The day before it can still be hit (2 + Sat + Sun = 4): the normal read, no amber.
@@ -2939,13 +2939,13 @@ test('Thursday of a one-session week is already "week short": the card does not 
   assert.equal(wed.verdict, 'progressing');
   const thu = at('2026-10-01', ['2026-10-01']);
   assert.equal(thu.verdict, 'holding');
-  assert.equal(thu.headline, 'Lifts up, week short — Squat +12 kg');
+  assert.equal(thu.headline, 'Lifts up, week short — Squat est. 1RM +12 kg');
   assert.deepEqual(thu.reasons[0], { kind: 'week_sessions', text: '1 of 4 sessions this week (last: Oct 1)', tone: 'watch' });
   // Friday and the weekend say the same thing.
   for (const day of ['2026-10-02', '2026-10-03', '2026-10-04']) {
     const p = at(day, ['2026-10-01']);
     assert.equal(p.verdict, 'holding', day);
-    assert.equal(p.headline, 'Lifts up, week short — Squat +12 kg', day);
+    assert.equal(p.headline, 'Lifts up, week short — Squat est. 1RM +12 kg', day);
   }
   // Monday of the next week starts clean: no amber week line (it is the lapse, 4 days off, that holds the card then).
   assert.ok(at('2026-10-05', ['2026-10-01']).reasons.every(r => r.kind !== 'week_sessions' || r.tone !== 'watch'));

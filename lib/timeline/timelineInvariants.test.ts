@@ -1124,3 +1124,17 @@ invariant(LIFTERS, 'a "back at / above / at or above pre-break" sentence matches
   if (name === 'lifter') assert.ok(sentences > 0, `${name}: no comeback sentence naming lifts that are back appeared, so this invariant checked nothing`);
   return out;
 });
+
+// "Lifts up, week short — Squat +10 kg" read like a load added to the bar: the number is the estimated 1RM, so the headline says so.
+invariant(LIFTERS, 'a "Lifts up, ..." headline says the number is the est. 1RM', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const h = snap.card?.headline;
+    if (h == null || !/^Lifts up\b/.test(plain(h))) continue;
+    seen++;
+    if (!/est\. 1RM/.test(plain(h))) out.push({ snap, detail: `card.headline: "${visible(h)}"` });
+  }
+  if (name === 'lifter_short_week') assert.ok(seen > 0, `${name}: no "Lifts up" headline appeared, so this invariant checked nothing`);
+  return out;
+});

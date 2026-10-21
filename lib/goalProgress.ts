@@ -2218,9 +2218,9 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     if (liftsUp) {
       // A week that can no longer reach its target is never "Progressing" (the 28-day line alone stays neutral through it).
       liftState = sessionsBehind
-        ? { verdict: 'behind', headline: clip(`Lifts up, sessions behind — ${head.name} ${liftDeltaText(headDisplay)}`) }
+        ? { verdict: 'behind', headline: clip(`Lifts up, sessions behind — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
         : weekShort
-          ? { verdict: 'holding', headline: clip(`Lifts up, week short — ${head.name} ${liftDeltaText(headDisplay)}`) }
+          ? { verdict: 'holding', headline: clip(`Lifts up, week short — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
           : { verdict: 'progressing', headline: clip(`Progressing — ${head.name} est. 1RM ${liftDeltaText(headDisplay)} vs 4 weeks ago`) };
     } else if (otherUp && otherUpDisplay) {
       liftState = {
@@ -2247,7 +2247,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
       return {
         verdict: 'behind',
         headline: liftsUp && head && headDisplay
-          ? clip(`Lifts up, sessions behind — ${head.name} ${liftDeltaText(headDisplay)}`)
+          ? clip(`Lifts up, sessions behind — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`)
           : sessionsBehindHeadline,
         reasons,
       };
