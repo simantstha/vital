@@ -2575,14 +2575,15 @@ test('after a deload every main lift goes back to full loads; a week off eases e
   assert.equal(off.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg, bench ~80 kg), starting today.');
 });
 
-test('before the first 4-week comparison the review and the goal card quote the same week over week, rounded from the same shown numbers', () => {
-  // 100.4 -> 102.6 kg: the shown endpoints are 100 -> 103, so +3 (rounding the 2.2 kg difference would say +2).
+test('before the first 4-week comparison the review and the goal card quote the same week over week, rounded from the change itself', () => {
+  // 100.4 -> 102.6 kg: a 2.2 kg change is "+2" on both surfaces. It is not the difference of two rounded endpoints (100 -> 103 would say +3):
+  // a constant +2.5 kg step read +3, +4, +3 week to week (wave 22s), and the text prints no endpoints for them to add up to.
   const progression: ProgressionSummary = { squat: [lwk('2026-09-21', 100.4, 80), lwk(WEEK_START, 102.6, 82.5)] };
   const review = computeWeeklyReview(liftReview({ progression, signupDay: '2026-09-14' }));
   const stat = statByLabel(review, 'Squat est. 1RM')!;
-  assert.equal(stat.value, '+3 kg');
+  assert.equal(stat.value, '+2 kg');
   assert.equal(stat.comparison, 'vs the week before');
-  assert.match(review.headline, /Squat est\. 1RM \+3 kg vs the week before$/);
+  assert.match(review.headline, /Squat est\. 1RM \+2 kg vs the week before$/);
   const monday = '2026-10-05'; // the card, read the morning the review is (this week has no sets yet)
   const days = [...onTarget(PREV), ...onTarget(WEEK)];
   const card = computeGoalProgress({
@@ -2590,7 +2591,7 @@ test('before the first 4-week comparison the review and the goal card quote the 
     weightReadings: [], intakeDays: [], budget: null, progression, trainingDays: days, strengthDays: days, workouts: [], restingHr: [], hrv: [], sleepMinutes: [], sleepGoalMinutes: 480,
   });
   // The card, read that Monday, says the same pair, labelled with its window: the review's week is "last week" by then.
-  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'lift')!.text), 'Last week: Squat est. 1RM +3 kg vs the week before');
+  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'lift')!.text), 'Last week: Squat est. 1RM +2 kg vs the week before');
 });
 
 test('rebuilding: the headline carries the rebuild with the shown numbers, and the percentage is computed from them', () => {

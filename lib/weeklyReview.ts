@@ -36,6 +36,7 @@ import {
   isMainLift,
   latestTopLoadKg,
   liftDisplayChange,
+  liftWeekChangeDisplay,
   liftDisplayName,
   liftReturnDisplay,
   liftShortName,
@@ -845,7 +846,7 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
     if (wow) {
       best = {
         name: liftDisplayName(wow.exercise, input.exerciseDisplay),
-        shown: liftDisplayChange({ baselineKg: wow.change.previousKg, recentKg: wow.change.currentKg, changeKg: wow.change.changeKg }, imperial).change,
+        shown: liftWeekChangeDisplay(wow.change, imperial),
         // The window the card labels the same pair with ("Last week: … vs the week before"; lib/liftChange.ts weekOverWeekWording).
         windowLabel: weekOverWeekWording(wow.change, wow.end, liftAnchor(week)).vs,
         stalled: true,

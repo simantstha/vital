@@ -123,6 +123,7 @@ import {
   isLiftStalled,
   liftChange4w,
   liftDisplayChange,
+  liftWeekChangeDisplay,
   liftDisplayName,
   liftLapseMinDays,
   liftLastBest,
@@ -2093,13 +2094,13 @@ function weekOverWeekReason(input: GoalProgressInput): GoalProgressReason | null
   const pick = pickWeekOverWeek(input.progression, anchor, [addDays(anchor, -7), anchor]);
   if (!pick) return null;
   const imperial = input.unitSystem === 'imperial';
-  const d = liftDisplayChange({ baselineKg: pick.change.previousKg, recentKg: pick.change.currentKg, changeKg: pick.change.changeKg }, imperial);
-  const delta = d.change === 0 ? 'unchanged' : liftDeltaText({ ...d, unit: imperial ? 'lb' : 'kg' });
+  const change = liftWeekChangeDisplay(pick.change, imperial);
+  const delta = change === 0 ? 'unchanged' : liftDeltaText({ baseline: 0, recent: 0, change, unit: imperial ? 'lb' : 'kg' });
   const wording = weekOverWeekWording(pick.change, pick.end, anchor);
   return {
     kind: 'lift',
     text: `${wording.window ? `${wording.window}: ` : ''}${liftDisplayName(pick.exercise, input.exerciseDisplay)} est. 1RM ${delta} ${wording.vs}`,
-    tone: d.change > 0 ? 'good' : d.change < 0 && pick.end < anchor && !isDeloadWeek(input.progression, pick.end) ? 'watch' : 'neutral',
+    tone: change > 0 ? 'good' : change < 0 && pick.end < anchor && !isDeloadWeek(input.progression, pick.end) ? 'watch' : 'neutral',
   };
 }
 

@@ -1182,3 +1182,33 @@ test('lifter_imperial: the weekly weight stat says "no change" on exactly the Mo
 // "inside the 0.1–0.5% safe band" / "under the 0.1% a week floor" is jargon to a lifter. The muscle card says what the range is for.
 invariant(LIFTERS, 'no card, coach line or opener calls the weight range a "safe band", "floor" or "ceiling"', snaps =>
   textMatches(snaps, s => [...cardTexts(s), ...coachTexts(s)], /safe band|a week floor|a week ceiling/i));
+
+// The same +2.5 kg on the bar reads the same change every week: the week-over-week change was the difference of two ROUNDED e1RMs, so one
+// step read "+3", then "+4", then "+3" (lifter days 14, 21, 28). Computed from the unrounded change (the 4-week number keeps its printed
+// endpoints, "126 → 136 kg", which must add up). The squat is stepped +2.5 kg at the same reps and RPE, so its e1RM moves by one amount.
+invariant(LIFTERS, 'a constant +2.5 kg step on the squat reads the same week-over-week change in every review', (snaps, name) => {
+  const scn = buildScenario(name);
+  const topSquat = (monday: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === 'squat' && !s.isWarmup && s.day >= monday && s.day <= addDays(monday, 6) && s.loadKg != null).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  const seen = new Map<string, string[]>();
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const stat = r.stats.find(st => st.label === 'Squat est. 1RM' && st.comparison === 'vs the week before');
+    if (!stat) continue;
+    const now = topSquat(r.weekStart);
+    const before = topSquat(addDays(r.weekStart, -7));
+    if (now == null || before == null || now - before !== 2.5) continue;
+    seen.set(stat.value, [...(seen.get(stat.value) ?? []), snap.date]);
+  }
+  const out: Violation[] = [];
+  if (seen.size > 1) {
+    const detail = [...seen.entries()].map(([value, days]) => `${plain(value)} on ${days.join(', ')}`).join(' vs ');
+    const first = snaps.find(s => s.review && s.date === [...seen.values()][1][0]) as DaySnapshot;
+    out.push({ snap: first, detail: `the same +2.5 kg step reads differently: ${detail}` });
+  }
+  assert.ok([...seen.values()].flat().length >= 2, `${name}: fewer than two +2.5 kg squat weeks were compared, so this invariant checked nothing`);
+  return out;
+});

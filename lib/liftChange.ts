@@ -664,6 +664,16 @@ export function liftWeekOverWeek(weeks: LiftWeekPoint[], endWeekStart: string): 
   };
 }
 
+/**
+ * The week-over-week change as printed: whole kg (lb), rounded from the change itself, not subtracted from two rounded endpoints. A
+ * constant +2.5 kg step on the bar moves the e1RM by one amount, and rounding both ends first read it "+3", "+4", "+3" week to week. The
+ * week-over-week text prints no endpoints ("Squat est. 1RM +3 kg vs the week before"), so nothing has to add up; the 4-week change, which
+ * does print them ("126 → 136 kg"), keeps `liftDisplayChange`.
+ */
+export function liftWeekChangeDisplay(c: LiftWeekChange, imperial: boolean): number {
+  return Math.round(c.changeKg * (imperial ? LB_PER_KG : 1)) || 0; // never -0
+}
+
 export interface PickedWeekChange {
   /** Canonical exercise key ("squat"). */
   exercise: string;

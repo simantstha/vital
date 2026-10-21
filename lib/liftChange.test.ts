@@ -4,7 +4,7 @@ import {
   shiftDay,
   cuedLifts, easedLoad, findRecentBreak, headlineLeader, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
   furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
-  liftReturnStates, liftShortName, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, weekOverWeekWording,
+  liftReturnStates, liftShortName, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, weekOverWeekWording,
   type LiftWeekPoint,
 } from './liftChange';
 
@@ -132,6 +132,18 @@ test('rankLifts: the week being trained does not swing the ranking (only complet
   assert.deepEqual(rankLifts(prog, ANCHOR), ['squat', 'bench press']);
   // A brand-new lifter (no completed week yet) is ranked on the week so far.
   assert.deepEqual(rankLifts({ squat: [ls('2026-10-05', 100, 1)], 'bench press': [ls('2026-10-05', 80, 2)] }, ANCHOR), ['bench press', 'squat']);
+});
+
+test('liftWeekChangeDisplay: whole kg / lb rounded from the change itself, so one +2.5 kg step reads the same every week (wave 22s)', () => {
+  // The squat e1RM climbs 3.1 kg a step: 130.4 -> 133.5 -> 136.6. Subtracting the rounded endpoints says +4 (130 -> 134) then +3 (134 -> 137).
+  const step = (a: number, b: number) => liftWeekOverWeek([wk('2026-09-14', a), wk('2026-09-21', b)], '2026-09-21')!;
+  assert.equal(liftDisplayChange({ baselineKg: 130.4, recentKg: 133.5, changeKg: 3.1 }, false).change, 4);
+  assert.equal(liftDisplayChange({ baselineKg: 133.5, recentKg: 136.6, changeKg: 3.1 }, false).change, 3);
+  assert.equal(liftWeekChangeDisplay(step(130.4, 133.5), false), 3);
+  assert.equal(liftWeekChangeDisplay(step(133.5, 136.6), false), 3);
+  // Pounds round the lb change: 3.1 kg = 6.8 lb -> 7; -0.2 kg = -0.4 lb -> 0.
+  assert.equal(liftWeekChangeDisplay(step(130.4, 133.5), true), 7);
+  assert.equal(liftWeekChangeDisplay(step(133.5, 133.3), true), 0);
 });
 
 // ── Next week's loads after a short week (wave 22s) ─────────────────────────
