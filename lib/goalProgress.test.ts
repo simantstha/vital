@@ -2927,6 +2927,19 @@ test('Thursday of a one-session week is already "week short": the card does not 
   assert.ok(at('2026-10-05', ['2026-10-01']).reasons.every(r => r.kind !== 'week_sessions' || r.tone !== 'watch'));
 });
 
+test('headlineLift: the muscle card sends the key of the lift it leads with (sticky), and no other goal carries it (wave 22s)', () => {
+  const squat = computeGoalProgress(lapseInput(3));
+  assert.equal(squat.headlineLift, 'squat');
+  assert.match(squat.headline, /^Progressing — Squat est\. 1RM/);
+  // The most-trained lift that has a 4-week comparison, like the headline: bench has none here, so the squat leads.
+  const bench = [lw('2026-09-21', 100)];
+  assert.equal(computeGoalProgress(lapseInput(3, { progression: { squat: LAPSE_SQUAT, 'bench press': bench } })).headlineLift, 'squat');
+  // No lift in rotation: null, never undefined, for a muscle goal.
+  assert.equal(computeGoalProgress(lapseInput(3, { progression: {} })).headlineLift, null);
+  // Other goals: the key is absent (their payloads are byte-identical to before).
+  assert.equal('headlineLift' in computeGoalProgress(base({ goal: 'weight_loss', target: { weightKg: 80, date: null, weeklySessions: null } })), false);
+});
+
 test('a lapse is not a time to praise the scale: the weight line is neutral and about the lapse (wave 21)', () => {
   const weightReadings = ramp(30, 80, 0.03); // ~0.21 kg a week, 0.26% of bodyweight: inside the gain band
   const normal = computeGoalProgress(lapseInput(3, { weightReadings }));

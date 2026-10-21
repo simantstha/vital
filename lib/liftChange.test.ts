@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  cuedLifts, easedLoad, findRecentBreak, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
+  shiftDay,
+  cuedLifts, easedLoad, findRecentBreak, headlineLeader, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
   furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
-  liftReturnStates, liftShortName, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, weekOverWeekWording,
+  liftReturnStates, liftShortName, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, weekOverWeekWording,
   type LiftWeekPoint,
 } from './liftChange';
 
@@ -131,6 +132,79 @@ test('rankLifts: the week being trained does not swing the ranking (only complet
   assert.deepEqual(rankLifts(prog, ANCHOR), ['squat', 'bench press']);
   // A brand-new lifter (no completed week yet) is ranked on the week so far.
   assert.deepEqual(rankLifts({ squat: [ls('2026-10-05', 100, 1)], 'bench press': [ls('2026-10-05', 80, 2)] }, ANCHOR), ['bench press', 'squat']);
+});
+
+// ── Next week's loads after a short week (wave 22s) ─────────────────────────
+
+test('shortWeekLoadCues: a lift not trained (or only a light day) repeats its planned step; a trained one follows the normal rule; the lead is first', () => {
+  const top = (weekStart: string, kg: number, sessions = 2): LiftWeekPoint => ls(weekStart, kg * 1.2, sessions, { topLoadKg: kg });
+  const steady = (kg: number): LiftWeekPoint[] => [top('2026-09-07', kg), top('2026-09-14', kg), top('2026-09-21', kg)];
+  const prog = {
+    squat: steady(110), // not trained in the reviewed week 09-28
+    'bench press': [...steady(87.5), top('2026-09-28', 75, 1)], // one light volume day: 75 < 90% of 87.5
+    deadlift: [...steady(125), top('2026-09-28', 130, 1)], // trained above its best
+    'lat pulldown': [top('2026-09-21', 60)], // an accessory is never cued
+  };
+  const cues = shortWeekLoadCues(prog, '2026-09-28', { imperial: false, leadKey: 'bench press', rebuilding: false });
+  assert.deepEqual(cues.map(c => [c.key, c.kind, c.load.start, c.load.to]), [
+    ['bench press', 'light', 87.5, 90], // the lead first; the planned step from the last working load
+    ['squat', 'skipped', 110, 112.5],
+    ['deadlift', 'trained', 130, 132.5],
+  ]);
+  // Pounds: the planned step is the same 5 lb grid step as everywhere ("~195 -> 200").
+  assert.deepEqual(shortWeekLoadCues(prog, '2026-09-28', { imperial: true, leadKey: null, rebuilding: false }).map(c => [c.key, c.load.start, c.load.to]), [
+    ['squat', 245, 250], ['bench press', 195, 200], ['deadlift', 285, 290],
+  ]);
+  // A lift whose e1RM fell more than 1% holds, except while rebuilding after a break.
+  const fell = { squat: [...steady(110), top('2026-09-28', 110, 2)].map(w => (w.weekStart === '2026-09-28' ? { ...w, bestEstimatedOneRepMaxKg: 120 } : w)) };
+  assert.equal(shortWeekLoadCues(fell, '2026-09-28', { imperial: false, leadKey: null, rebuilding: false })[0].kind, 'hold');
+  assert.equal(shortWeekLoadCues(fell, '2026-09-28', { imperial: false, leadKey: null, rebuilding: true })[0].kind, 'trained');
+  // No load known in the 4 weeks before: nothing to repeat.
+  assert.deepEqual(shortWeekLoadCues({ squat: [top('2026-07-20', 100)] }, '2026-09-28', { imperial: false, leadKey: null, rebuilding: false }), []);
+});
+
+// ── The headline lift is sticky (wave 22s) ──────────────────────────────────
+
+/** Mondays from `from` for `count` weeks. */
+const mondays = (from: string, count: number): string[] => Array.from({ length: count }, (_, i) => shiftDay(from, 7 * i));
+/** One lift, one entry per Monday: `sessionsOf(i)` sessions in the i-th week (0 -> no entry). */
+const series = (from: string, count: number, sessionsOf: (i: number) => number, e = 100): LiftWeekPoint[] =>
+  mondays(from, count).flatMap((w, i) => (sessionsOf(i) > 0 ? [ls(w, e, sessionsOf(i))] : []));
+
+test('rankLifts / headlineLeader: one short week does not hand the lead to another lift (lifter_short_week: squat -> bench by one session)', () => {
+  // 12 weeks from 2026-07-27 to 2026-10-12: squat and bench two sessions a week; in week 8 (09-14) only one bench session happens.
+  const prog = (anchor: string) => ({
+    squat: series('2026-07-27', 12, i => (i === 7 ? 0 : 2)).filter(w => w.weekStart < anchor),
+    'bench press': series('2026-07-27', 12, i => (i === 7 ? 1 : 2)).filter(w => w.weekStart < anchor),
+  });
+  // The anchor after the short week (week 8 = 09-14, anchor 09-21): bench has 1 session more, the squat keeps the lead.
+  assert.deepEqual(rankLifts(prog('2026-09-21'), '2026-09-21'), ['squat', 'bench press']);
+  // ... and for every Monday after it (the plain ranking said bench from then on, for good).
+  for (const anchor of ['2026-09-28', '2026-10-05', '2026-10-12']) assert.equal(rankLifts(prog(anchor), anchor)[0], 'squat', anchor);
+  assert.equal(headlineLeader(prog('2026-10-05'), '2026-10-05'), 'squat');
+});
+
+test('headlineLeader: the lead changes hands only at 2+ sessions ahead, and at two Mondays in a row', () => {
+  // Bench two a week throughout; the squat is trained twice a week until week 6, then once a week.
+  const squat = (anchor: string) => series('2026-07-27', 14, i => (i < 6 ? 2 : 1)).filter(w => w.weekStart < anchor);
+  const bench = (anchor: string) => series('2026-07-27', 14, () => 2).filter(w => w.weekStart < anchor);
+  const lead = (anchor: string) => rankLifts({ squat: squat(anchor), 'bench press': bench(anchor) }, anchor)[0];
+  // Anchor 09-14: the weeks so far hold 13 squat sessions against 14 bench: one ahead - not enough.
+  assert.equal(lead('2026-09-14'), 'squat');
+  // 09-21: squat 14, bench 16 -> 2 ahead, the first Monday; 09-28: squat 13, bench 16 -> 3 ahead, the second in a row -> bench takes the lead.
+  assert.equal(lead('2026-09-21'), 'squat');
+  assert.equal(lead('2026-09-28'), 'bench press');
+  // ... and keeps it while the squat stays behind.
+  assert.equal(lead('2026-10-12'), 'bench press');
+});
+
+test('headlineLeader: a lead that left the rotation is replaced at once; a new lifter ranks on the week so far; nothing in rotation -> null', () => {
+  const squat = [ls('2026-07-27', 120, 2), ls('2026-08-03', 120, 2)]; // no e1RM in the last 8 weeks at 2026-10-05: out of rotation
+  const bench = [ls('2026-09-14', 100, 2), ls('2026-09-21', 100, 2), ls('2026-09-28', 100, 2)];
+  assert.deepEqual(rankLifts({ squat, 'bench press': bench }, '2026-10-05'), ['bench press']);
+  assert.equal(headlineLeader({ squat }, '2026-10-05'), null);
+  assert.equal(headlineLeader({}, '2026-10-05'), null);
+  assert.deepEqual(rankLifts({ squat: [ls('2026-10-05', 100, 1)], 'bench press': [ls('2026-10-05', 80, 2)] }, '2026-10-05'), ['bench press', 'squat']);
 });
 
 test('pickHeadlineLift: a most-trained lift without a comparison is skipped; none comparable → null', () => {

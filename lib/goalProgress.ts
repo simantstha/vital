@@ -513,6 +513,14 @@ export interface GoalProgress {
    * `liftReturn` is; absent for every other goal.
    */
   liftReturns?: GoalLiftReturn[] | null;
+  /**
+   * Muscle goal only, additive: the canonical key ("squat", "bench press") of the headline lift — the lift the card's
+   * headline and lead lift line name, and the one the Trends Strength card must lead with. It is the sticky lead
+   * (lib/liftChange.ts `headlineLeader`: another lift takes it only by out-training it by 2+ sessions for 2 weeks running)
+   * that has a 4-week comparison, else the lead itself. A client prefers this key over ranking the lifts itself. Null when no
+   * lift is in rotation; absent for every other goal.
+   */
+  headlineLift?: string | null;
   dataSufficiency: { weighIns: number; needed: number; sessionsLast28d: number };
 }
 
@@ -1290,6 +1298,12 @@ function liftChanges(progression: ProgressionSummary, todayKey: string, display?
   const head = out.find(l => l.exercise === headlineKey);
   const rest = out.filter(l => l !== head);
   return (head ? [head, ...rest] : rest).slice(0, 3);
+}
+
+/** The headline lift's canonical key: what the card leads with (`liftChanges`' first entry), sent so a client need not rank the lifts itself. */
+function headlineLiftKey(progression: ProgressionSummary, todayKey: string): string | null {
+  const anchor = weekStartKeyForDay(todayKey);
+  return pickHeadlineLift(progression, anchor)?.exercise ?? rankLifts(progression, anchor)[0] ?? null;
 }
 
 function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason | null {
@@ -3443,7 +3457,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     adherence: input.goal === 'muscle' ? sessionAdherence(input) : null,
     liftReturn,
     // Muscle only (absent for every other goal, so their payloads are byte-identical to before).
-    ...(input.goal === 'muscle' ? { liftReturns: liftReturns.length > 0 ? liftReturns : null } : {}),
+    ...(input.goal === 'muscle' ? { liftReturns: liftReturns.length > 0 ? liftReturns : null, headlineLift: headlineLiftKey(input.progression, input.todayKey) } : {}),
     lastSessionOn: lastSessionDay(input),
     dataSufficiency: { weighIns: w.weighIns, needed: WEIGH_INS_NEEDED, sessionsLast28d },
   };

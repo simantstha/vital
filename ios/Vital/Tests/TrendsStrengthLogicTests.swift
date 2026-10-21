@@ -477,6 +477,43 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertEqual(card.lifts.last?.status.text, "New")
     }
 
+    /// Wave 22: the server's headline lift is sticky (another lift takes the lead only by
+    /// out-training it by 2+ sessions for 2 weeks running), which the local ranking does not
+    /// replay. When the goal card sends its key the Strength card leads with it, whatever the
+    /// local rule says; without a usable key the local rule stands.
+    func testCardLeadsWithTheServersStickyHeadlineLift() throws {
+        let k = rankKeys
+        // Bench: 10 completed sessions, squat: 3 - the local rule puts bench first.
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "bench press": [3, 4, 5, 6, 7, 8].map { counted(k[$0], sessions: 2) },
+            "squat": [3, 4, 7, 8].map { counted(k[$0], sessions: 1) },
+        ])
+        XCTAssertEqual(TrendsStrengthLogic.headlineLift(in: summary, today: today), "bench press")
+        let local = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
+        XCTAssertEqual(local.lifts.map(\.key), ["bench press", "squat"])
+
+        let served = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: "squat"))
+        XCTAssertEqual(served.lifts.map(\.key), ["squat", "bench press"])
+        // The key is matched the way the server normalises lift keys.
+        let spelled = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: "Squat"))
+        XCTAssertEqual(spelled.lifts.map(\.key), ["squat", "bench press"])
+        // A key that is not in rotation (or an empty one) falls back to the local rule.
+        let unknown = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: "overhead press"))
+        XCTAssertEqual(unknown.lifts.map(\.key), ["bench press", "squat"])
+        let empty = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: ""))
+        XCTAssertEqual(empty.lifts.map(\.key), ["bench press", "squat"])
+        // The server's lift stays first next to a break return, whichever lift is being rebuilt.
+        let rebuilding = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: summary, system: .metric, today: today,
+            liftReturn: GoalProgressDTO.LiftReturn(
+                exercise: "bench press", name: "Bench Press", breakDays: 14, endedOn: "2026-09-20",
+                preBreakKg: 100, recentKg: 96, pct: 96, regained: false
+            ),
+            headlineLift: "squat"
+        ))
+        XCTAssertEqual(rebuilding.lifts.map(\.key), ["squat", "bench press"])
+    }
+
     // MARK: - Building back after a break (GoalProgressDTO.liftReturn)
 
     private func liftReturn(

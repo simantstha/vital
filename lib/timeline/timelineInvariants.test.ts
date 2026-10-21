@@ -967,3 +967,65 @@ invariant(LIFTERS, 'every next-load cue ("Squat 110 → 112.5 kg", "bench ~195 �
   assert.ok(cues > 0, `${name}: no next-load cue appeared, so this invariant checked nothing`);
   return out;
 });
+
+// The lift the card leads with is sticky: it changes to another lift only when that lift has out-trained it by 2+ sessions (over the 8
+// completed weeks the ranking looks at) at two Mondays in a row. lifter_short_week: one short week (the squat and deadlift sessions
+// dropped) made bench the most-trained lift by ONE session, and from day 49 to the end the card led with "Bench Press" instead of "Squat".
+// Counted from the scenario's own rows. Days with a lapse or a return in progress lead with a different lift on purpose and are skipped.
+invariant(LIFTERS, 'the lift the card leads with changes only when another lift has out-trained it by 2+ sessions at two Mondays in a row', (snaps, name) => {
+  const scn = buildScenario(name);
+  const keyOf = new Map<string, string>(scn.sets.map(s => [s.display, s.exercise]));
+  const sessionsOf = (exercise: string, anchor: string): number => {
+    const days = new Set(scn.sets.filter(s => s.exercise === exercise && !s.isWarmup && s.day >= addDays(anchor, -56) && s.day < anchor).map(s => s.day));
+    return days.size;
+  };
+  const out: Violation[] = [];
+  let prev: { exercise: string; snap: DaySnapshot } | null = null;
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card || card.liftReturn != null || inLapse(snap)) continue;
+    const lead = card.reasons.find(r => r.kind === 'lift');
+    const named = lead ? /^(?:(?:This|Last) week: )?(.+?) est\. 1RM [+−]/.exec(plain(lead.text))?.[1] : undefined;
+    const exercise = named != null ? keyOf.get(named) : undefined;
+    if (exercise == null) continue;
+    if (prev && prev.exercise !== exercise) {
+      const anchor = mondayOfDate(snap.date);
+      const margin = (at: string): number => sessionsOf(exercise, at) - sessionsOf(prev!.exercise, at);
+      if (margin(anchor) < 2 || margin(addDays(anchor, -7)) < 2) {
+        out.push({ snap, detail: `the card led with ${prev.exercise} on ${prev.snap.date} and leads with ${exercise} now, but ${exercise} out-trained it by ${margin(anchor)} session(s) this Monday and ${margin(addDays(anchor, -7))} the Monday before (8 completed weeks each): "${visible(lead?.text ?? '')}"` });
+      }
+    }
+    prev = { exercise, snap };
+  }
+  return out;
+});
+
+// The server SENDS the headline lift (GoalProgress.headlineLift) so the iOS Trends Strength card leads with the same lift as the goal card
+// instead of ranking the lifts itself: it is the lift the card's lead lift line names, and it exists for the muscle goal only.
+invariant(ALL, 'headlineLift is sent for the muscle goal only, and is the lift the card\'s lead lift line names', (snaps, name) => {
+  const scn = buildScenario(name);
+  const keyOf = new Map<string, string>(scn.sets.map(s => [s.display, s.exercise]));
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card) continue;
+    if (card.goal !== 'muscle') {
+      if ('headlineLift' in card) out.push({ snap, detail: `a ${card.goal} card carries headlineLift ${JSON.stringify(card.headlineLift)}` });
+      continue;
+    }
+    const sent = card.headlineLift;
+    if (typeof sent !== 'string' || sent === '') {
+      if (card.reasons.some(r => r.kind === 'lift')) out.push({ snap, detail: `a lift line is shown but headlineLift is ${JSON.stringify(sent)}` });
+      continue;
+    }
+    if (card.liftReturn != null || inLapse(snap)) continue; // those lines name the lift furthest behind / the last one trained, not the headline lift
+    const lead = card.reasons.find(r => r.kind === 'lift');
+    const named = lead ? /^(?:(?:This|Last) week: )?(.+?) est\. 1RM [+−]/.exec(plain(lead.text))?.[1] : undefined;
+    if (named == null) continue;
+    checked++;
+    if (keyOf.get(named) !== sent) out.push({ snap, detail: `headlineLift "${sent}" but the lead lift line names ${named}: "${visible(lead?.text ?? '')}"` });
+  }
+  if (LIFTERS.includes(name)) assert.ok(checked > 0, `${name}: no lead lift line was compared, so this invariant checked nothing`);
+  return out;
+});

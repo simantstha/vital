@@ -45,6 +45,8 @@
  *                                                //   weigh in to update your progress"), no eta; 7-14 -> verdict kept, eta and
  *                                                //   onPaceForTargetDate null. The eta is never moved forward to today.
  *   lastSessionDaysAgo: number | null,           // newest session in the trailing 28 days (strength sessions for muscle); null if none
+ *   headlineLift?: string | null,                // muscle only: canonical key of the lift the card leads with ("squat"); sticky (another lift
+ *                                                //   takes it only by out-training it by 2+ sessions for 2 weeks running). Clients prefer it to ranking lifts themselves.
  *   adherence: { done, planned, weeklyTarget, pct, windowDays } | null,   // muscle + weekly sessions target only; the window is
  *                                                //   28 days, or the goal's age (min 7) while it is newer: planned = weeklyTarget x windowDays / 7
  *   dataSufficiency: { weighIns, needed, sessionsLast28d }
