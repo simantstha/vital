@@ -2589,6 +2589,8 @@ struct GoalProgressDTO: Decodable, Equatable {
         enum State: String, Equatable {
             case early
             case returning
+            /// Three flat weeks — or, wave 22w, a flat fortnight (`plan.flatWeeks` 2: two flat weeks
+            /// after a confirmed loss pace, a calm hold). The server's headline says which.
             case plateau
             /// Wave 21: the 14 days after a plateau ends, the weekly average falling
             /// again — no date, no pace, no "behind".
@@ -2623,18 +2625,61 @@ struct GoalProgressDTO: Decodable, Equatable {
                 }
             }
 
+            /// A weekly pace the plan rests on (`WeightPlanPace` in `lib/weightWeekPlan.ts`). Only the signed
+            /// rate is kept: it is all the app reads (`GoalProgressLogic.paceRange`).
+            struct Pace: Decodable, Equatable {
+                /// Signed: negative = losing.
+                let kgPerWeek: Double
+
+                private enum CodingKeys: String, CodingKey { case kgPerWeek }
+
+                init(kgPerWeek: Double) {
+                    self.kgPerWeek = kgPerWeek
+                }
+
+                /// Throws without a rate so the enclosing `try?` drops the whole pace (a range is never half-built).
+                init(from decoder: Decoder) throws {
+                    let c = try decoder.container(keyedBy: CodingKeys.self)
+                    kgPerWeek = try c.decode(Double.self, forKey: .kgPerWeek)
+                }
+            }
+
             /// Monday ('YYYY-MM-DD') of the week the plan covers.
             let weekStart: String?
             /// The plan's state (`maintenance`, which `State` has no case for, reads as `nil`).
             let state: State?
             let action: Action?
+            /// Wave 22w, plateau only: how many flat weekly means the state rests on — 3 for a plateau,
+            /// 2 for a flat fortnight (two flat weeks after a confirmed loss pace: a calm "common, your
+            /// plan holds", not yet a plateau). `nil` from an older server (which only ever sent a
+            /// plateau of 3), in every other state and for a value that is not a whole number.
+            let flatWeeks: Int?
+            /// The pace the week states (kg/wk, signed); `nil` for an early read, a return, "moving
+            /// again", a flat fortnight and from an older server.
+            let pace: Pace?
+            /// Wave 22w, an on-pace week only: "on pace" rests on two paces that land either side of the
+            /// target date, and `pace` alone would land more than a week off it, so this is the pace a
+            /// week earlier — the card then shows the range ("Down 0.37–0.59 kg/wk"), and so must the
+            /// app (`GoalProgressLogic.paceRange`). `nil` otherwise and from an older server.
+            let earlierPace: Pace?
+            /// Wave 22w: the week began with no weigh-in for 7+ days, so this is the plan from the day of
+            /// that last weigh-in ('YYYY-MM-DD') with a neutral "No weigh-in since…" action. `nil` for a
+            /// week that began with fresh data, from an older server and for a blank day.
+            let staleSince: String?
 
-            private enum CodingKeys: String, CodingKey { case weekStart, state, action }
+            private enum CodingKeys: String, CodingKey { case weekStart, state, action, flatWeeks, pace, earlierPace, staleSince }
 
-            init(weekStart: String? = nil, state: State? = nil, action: Action? = nil) {
+            init(
+                weekStart: String? = nil, state: State? = nil, action: Action? = nil,
+                flatWeeks: Int? = nil, pace: Pace? = nil, earlierPace: Pace? = nil, staleSince: String? = nil
+            ) {
                 self.weekStart = weekStart
                 self.state = state
                 self.action = action
+                self.flatWeeks = flatWeeks
+                self.pace = pace
+                self.earlierPace = earlierPace
+                self.staleSince = staleSince
             }
 
             init(from decoder: Decoder) throws {
@@ -2642,6 +2687,10 @@ struct GoalProgressDTO: Decodable, Equatable {
                 weekStart = try? c.decode(String.self, forKey: .weekStart)
                 state = (try? c.decode(String.self, forKey: .state)).flatMap(State.init(rawValue:))
                 action = try? c.decode(Action.self, forKey: .action)
+                flatWeeks = tolerantWholeNumber(c, .flatWeeks)
+                pace = try? c.decode(Pace.self, forKey: .pace)
+                earlierPace = try? c.decode(Pace.self, forKey: .earlierPace)
+                staleSince = (try? c.decode(String.self, forKey: .staleSince)).flatMap { $0.isEmpty ? nil : $0 }
             }
         }
 

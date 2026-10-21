@@ -111,10 +111,19 @@ enum WeightHeroLogic {
     /// hero shows that SAME number ("−0.9 lb/wk over 4 weeks") so the hero and
     /// the card never disagree; without it the 7-day rate above is used.
     ///
+    /// `goalRateRange` (wave 22w): when the server's card shows a RANGE for an
+    /// on-pace week (`GoalProgressLogic.paceRange`: "Down 0.37–0.59 kg/wk"), the hero
+    /// says that same range, never the one rate ("−0.6 kg/wk over 4 weeks") that
+    /// argues with it. It wins over `goalRateKgPerWeek`; `nil` (an older server, any
+    /// other week) keeps today's behaviour exactly.
+    ///
     /// `withholdsLocalRate` / `serverRead`: while the server is reading the scale
     /// itself (`GoalProgressLogic.usesServerWeightRead` — an early read, a
     /// return after a gap, a plateau) it sends no weekly pace on purpose, so the
     /// 7-day fallback must NOT fill the gap with a jumpier number of its own.
+    /// The same while the newest weigh-in is a week old or more
+    /// (`GoalProgressLogic.withholdsWeeklyRate`): a rate off it must not read as
+    /// this week's, and the goal line below carries the stale-weigh-in nudge.
     /// The hero then shows `serverRead` — the slot text from `serverReadSlotText`
     /// (a short complement while the goal line says the read, the full read
     /// otherwise; it wraps, the hero's rate line has no line limit) — or nothing
@@ -122,13 +131,16 @@ enum WeightHeroLogic {
     /// keeps today's behaviour exactly.
     static func weeklyChangeText(
         trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
-        goalRateKgPerWeek: Double? = nil,
+        goalRateKgPerWeek: Double? = nil, goalRateRange: GoalProgressLogic.PaceRange? = nil,
         withholdsLocalRate: Bool = false, serverRead: String? = nil
     ) -> String? {
         guard let trend, trend.established else { return nil }
         if withholdsLocalRate {
             guard let serverRead, !serverRead.isEmpty else { return nil }
             return GoalProgressLogic.nonBreaking(serverRead)
+        }
+        if let goalRateRange {
+            return GoalProgressLogic.paceRangeText(goalRateRange, system: system)
         }
         if let goalRate = goalRateKgPerWeek, goalRate.isFinite {
             var text = "\(UnitFormat.weightDelta(kgPerWeek: goalRate, system)) over 4 weeks"
@@ -195,6 +207,10 @@ enum WeightHeroLogic {
     static let earlyReadHeroText = "Pace settles after 3 weeks"
     static let returningReadHeroText = "Welcome back — weigh in a few more days"
     static let plateauReadHeroText = "Flat for 3 weeks"
+    /// Wave 22w: the flat fortnight — two flat weeks after a confirmed loss pace
+    /// (`weightRead.plan.flatWeeks` 2). Not yet a plateau: a calm hold, "common, your
+    /// plan holds" (the goal line says "Two flat weeks — common; your plan holds").
+    static let flatFortnightReadHeroText = "Flat for 2 weeks — common"
     /// Moving again (wave 21): the 14 days after a plateau ends. Never `plateauReadHeroText`
     /// — the plateau is over. The fallback when the payload carries no week plan.
     static let movingAgainReadHeroText = "Moving again after a plateau"
@@ -216,6 +232,14 @@ enum WeightHeroLogic {
         return olderGoalEarlyReadHeroText
     }
 
+    /// The plateau's short complement: "Flat for 2 weeks — common" for the server's flat
+    /// fortnight (`weightRead.plan.flatWeeks == 2`), `plateauReadHeroText` for a plateau
+    /// (3) — and for an older server that sends no `flatWeeks` (`nil`), which only ever
+    /// named a plateau of three flat weeks, exactly as before.
+    static func plateauSlotText(flatWeeks: Int?) -> String {
+        flatWeeks == 2 ? flatFortnightReadHeroText : plateauReadHeroText
+    }
+
     /// The text for the hero's rate slot during a server weight read, `nil` when
     /// the server is not reading the scale (the hero then keeps its own rate
     /// logic) or has nothing to say:
@@ -230,7 +254,7 @@ enum WeightHeroLogic {
         switch state {
         case .early:       return earlyReadSlotText(goalAgeDays: progress.weightRead?.goalAgeDays)
         case .returning:   return returningReadHeroText
-        case .plateau:     return plateauReadHeroText
+        case .plateau:     return plateauSlotText(flatWeeks: progress.weightRead?.plan?.flatWeeks)
         case .movingAgain: return movingAgainSlotText(plan: progress.weightRead?.plan)
         case .pace, .reached: return nil
         }

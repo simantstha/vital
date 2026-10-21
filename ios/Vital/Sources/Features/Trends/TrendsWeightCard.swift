@@ -49,14 +49,26 @@ enum TrendsWeightCardLogic {
     /// welcome back / plateau / moving again — `GoalProgressLogic.usesServerWeightRead`) and has
     /// withheld a pace on purpose, so no pill of this card's own 7-day rate may
     /// contradict the goal card above it. Defaults to `false` (older server).
+    ///
+    /// `paceRange` (wave 22w): the goal card shows a RANGE for an on-pace week
+    /// (`GoalProgressLogic.paceRange`: "Down 0.37–0.59 kg/wk"), so the pill says the same
+    /// range — "↓ 0.37–0.59 kg/wk", always a loss, tinted `.positive` — rather than this
+    /// card's own single 7-day rate beside it. Behind the same gates as the single rate.
+    /// Defaults to `nil` (an older server, any other week): the pill is exactly as before.
     static func ratePill(
         trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
-        withholdsLocalRate: Bool = false
+        withholdsLocalRate: Bool = false, paceRange: GoalProgressLogic.PaceRange? = nil
     ) -> RatePill? {
         guard !withholdsLocalRate else { return nil }
         guard let trend, trend.established else { return nil }
         guard let span = WeightHeroLogic.daySpan(entries: entries),
               span >= WeightHeroLogic.minimumSpanDaysForWeeklyRate else { return nil }
+        if let paceRange {
+            return RatePill(
+                text: "↓\(UnitFormat.nbsp)\(GoalProgressLogic.paceRangeValueText(paceRange, system: system))",
+                tone: .positive
+            )
+        }
         guard let deltaPerWeek = trend.delta7dKgPerWeek ?? trend.delta30dKgPerWeek else { return nil }
 
         let displayValue = system == .metric ? deltaPerWeek : UnitConvert.kgToLb(deltaPerWeek)
@@ -163,6 +175,10 @@ struct TrendsWeightCard: View {
     /// The server is reading the scale itself (`GoalProgressLogic.usesServerWeightRead`):
     /// the rate pill is dropped rather than quote a 7-day rate the goal card withholds.
     var withholdsLocalRate: Bool = false
+    /// Wave 22w: the range the goal card shows for an on-pace week (`GoalProgressLogic.paceRange`);
+    /// the pill then says that range instead of this card's own 7-day rate. `nil` (an older server,
+    /// any other week) keeps the pill exactly as before.
+    var paceRange: GoalProgressLogic.PaceRange? = nil
     /// The goal's progress weight on a wave 21 weight-loss server (`GoalProgressLogic.progressWeight`):
     /// the big number is then that weight, labelled, so this card and the goal card above it do not
     /// show two different weights; the chart line below stays the smoothed trend. `nil` (an older
@@ -173,7 +189,9 @@ struct TrendsWeightCard: View {
 
     private var trendHeadline: String { WeightHeroLogic.trendHeadline(trend: trend, system: system) }
     private var ratePill: TrendsWeightCardLogic.RatePill? {
-        TrendsWeightCardLogic.ratePill(trend: trend, entries: entries, system: system, withholdsLocalRate: withholdsLocalRate)
+        TrendsWeightCardLogic.ratePill(
+            trend: trend, entries: entries, system: system, withholdsLocalRate: withholdsLocalRate, paceRange: paceRange
+        )
     }
 
     /// Split from `trendHeadline`'s combined "Trend 82.0 kg" into the two pieces the big number

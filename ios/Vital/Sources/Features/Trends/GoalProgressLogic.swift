@@ -581,7 +581,9 @@ enum GoalProgressLogic {
     /// pace (`ratePerWeek.kg` is null) and no ETA, and its headline is the read.
     /// (`movingAgain`, wave 21: the 14 days after a plateau — the week plan carries
     /// no pace and no date, `lib/weightWeekPlan.ts`; the 21-day line still covers
-    /// the flat weeks, so it would call the goal "behind".)
+    /// the flat weeks, so it would call the goal "behind". `plateau` since wave 22w
+    /// is also the flat fortnight, `plan.flatWeeks` 2: "Two flat weeks — common;
+    /// your plan holds", the same withheld pace.)
     /// Surfaces that would otherwise compute a pace of their own (the Today hero,
     /// the Trends weight card's rate pill) must stay silent about one. `false`
     /// for `pace`, `reached`, an unknown state, other goals and an older server
@@ -831,10 +833,84 @@ enum GoalProgressLogic {
         return nonBreaking(text)
     }
 
-    /// "−0.6 kg/wk" (signed, user's unit) or `nil` without a measured rate.
+    /// "−0.6 kg/wk" (signed, user's unit) or `nil` without a measured rate. While the server's card
+    /// shows a RANGE (`paceRange`) this says the same range ("Down 0.37–0.59 kg/wk"), never the one
+    /// rate that argues with it.
     static func rateText(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
+        if let range = paceRange(progress) { return paceRangeText(range, system: system) }
         guard let kg = progress.ratePerWeek.kg else { return nil }
         return UnitFormat.weightDelta(kgPerWeek: kg, system)
+    }
+
+    // MARK: - Pace range (wave 22w: an on-pace week rests on two paces)
+
+    /// The two weekly paces an on-pace week rests on, as magnitudes (kg/wk, positive), the slower first.
+    struct PaceRange: Equatable {
+        let slowKgPerWeek: Double
+        let fastKgPerWeek: Double
+    }
+
+    /// A weight-loss week is "on pace" when two paces — now and a week earlier — land either side of the
+    /// target date, and the pace now alone would land more than a week off it. The server then sends the
+    /// earlier one (`weightRead.plan.earlierPace`) and its card prints the honest range ("Down 0.37–0.59
+    /// kg/wk") instead of one rate that argues with "on track". Every surface that composes a weekly rate
+    /// of its own (Today's hero, the Trends weight card's pill, the goal sheet's "Trend" row) says that same
+    /// range (`paceRangeText`), so no single rate contradicts the card.
+    ///
+    /// `nil` — the single rate is shown exactly as before — for an older server (no `earlierPace`), any
+    /// other goal or state (the server sends none), a reached goal, and unless BOTH paces are a loss (the
+    /// server's own condition for printing a range). The pace now is the plan's `pace`, else the payload's
+    /// `ratePerWeek.kg` (the same number, rounded).
+    static func paceRange(_ progress: GoalProgressDTO) -> PaceRange? {
+        guard progress.goal == "weight_loss", progress.verdict != .reached,
+              progress.weightRead?.state == .pace,
+              let plan = progress.weightRead?.plan,
+              let earlier = plan.earlierPace?.kgPerWeek, earlier.isFinite, earlier < 0,
+              let current = plan.pace?.kgPerWeek ?? progress.ratePerWeek.kg, current.isFinite, current < 0
+        else { return nil }
+        let magnitudes = [abs(current), abs(earlier)].sorted()
+        return PaceRange(slowKgPerWeek: magnitudes[0], fastKgPerWeek: magnitudes[1])
+    }
+
+    /// "0.37–0.59 kg/wk" in the user's unit — the figures the server's card prints — with the en dash
+    /// glued to its numbers (`nonBreaking`) so a narrow line cannot split the range.
+    static func paceRangeValueText(_ range: PaceRange, system: UnitSystem) -> String {
+        nonBreaking(UnitFormat.weightRateRange(
+            slowKgPerWeek: range.slowKgPerWeek, fastKgPerWeek: range.fastKgPerWeek, system
+        ))
+    }
+
+    /// "Down 0.37–0.59 kg/wk": the server card's own wording, for the hero's rate line and the goal
+    /// sheet's "Trend" row. (The Trends pill puts the arrow "↓" before `paceRangeValueText` instead.)
+    static func paceRangeText(_ range: PaceRange, system: UnitSystem) -> String {
+        "Down \(paceRangeValueText(range, system: system))"
+    }
+
+    // MARK: - An aging weigh-in (wave 22w)
+
+    /// Days since the newest weigh-in at which the server calls it aging (`WEIGH_IN_AGING_DAYS` in
+    /// `lib/goalProgress.ts`): the verdict is kept but no date is quoted. A week that BEGINS this old keeps
+    /// the plan of the day of the last weigh-in (`weightRead.plan.staleSince`) under a neutral "No weigh-in
+    /// since…" action — a plan is never remade from stale data.
+    static let agingWeighInDays = 7
+
+    /// True for a weight-loss goal whose newest weigh-in is `agingWeighInDays` or more old, or whose plan
+    /// says the week began without a fresh one (`staleSince`). `false` once the goal is reached and for
+    /// every other goal. A rate computed off such a weigh-in must not read as this week's.
+    static func hasAgingWeighIn(_ progress: GoalProgressDTO) -> Bool {
+        guard progress.goal == "weight_loss", progress.verdict != .reached else { return false }
+        if progress.weightRead?.plan?.staleSince != nil { return true }
+        guard let days = progress.lastWeighInDaysAgo else { return false }
+        return days >= agingWeighInDays
+    }
+
+    /// True when Today's weight hero must print no weekly rate of its own: the server is reading the
+    /// scale itself (`usesServerWeightRead`: early / returning / plateau / moving again, which send no
+    /// pace) or the newest weigh-in is aging (`hasAgingWeighIn`: the stale-weigh-in nudge under the hero
+    /// says so, and a fresh-looking "−0.4 kg/wk" beside it would not). `false` for a pace on a recent
+    /// weigh-in, a reached goal, other goals and an older server with a recent weigh-in.
+    static func withholdsWeeklyRate(_ progress: GoalProgressDTO) -> Bool {
+        usesServerWeightRead(progress) || hasAgingWeighIn(progress)
     }
 
     // MARK: - One displayed weight (weight loss, wave 21)

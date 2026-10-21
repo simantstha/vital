@@ -24,8 +24,13 @@ struct WeightHeroView: View {
     /// Goal-progress 4-week rate (kg/wk, signed). When present the hero shows it
     /// ("over 4 weeks") so it agrees with the goal card below.
     var goalRateKgPerWeek: Double? = nil
+    /// Wave 22w: the range the server's card shows for an on-pace week
+    /// (`GoalProgressLogic.paceRange`, "Down 0.37–0.59 kg/wk"); the hero then says the same
+    /// range instead of `goalRateKgPerWeek`. `nil` (an older server, any other week) keeps it.
+    var goalRateRange: GoalProgressLogic.PaceRange? = nil
     /// The server is reading the scale itself (early read / welcome back /
-    /// plateau / moving again — `GoalProgressLogic.usesServerWeightRead`) and withholds a pace:
+    /// plateau / moving again — `GoalProgressLogic.usesServerWeightRead`) and withholds a pace,
+    /// or the newest weigh-in is a week old or more (`GoalProgressLogic.withholdsWeeklyRate`):
     /// the hero must not compute a 7-day rate of its own.
     var withholdsLocalRate: Bool = false
     /// What the rate's place says while `withholdsLocalRate` — a short complement
@@ -55,7 +60,7 @@ struct WeightHeroView: View {
     private var weeklyChange: String? {
         WeightHeroLogic.weeklyChangeText(
             trend: trend, entries: entries, system: system, goalRateKgPerWeek: goalRateKgPerWeek,
-            withholdsLocalRate: withholdsLocalRate, serverRead: serverWeightRead
+            goalRateRange: goalRateRange, withholdsLocalRate: withholdsLocalRate, serverRead: serverWeightRead
         )
     }
 
