@@ -138,14 +138,14 @@ test('far behind: the date is not quoted — "the Jul 6 date won\'t hold" — an
   assert.equal(card.onPaceForTargetDate, false);
   assert.equal(card.headline, "Behind pace — at this rate the Jul 6 date won't hold");
   assert.equal(card.weightRead?.weeksVsTarget, null);
-  assert.match(plainSpaces(actionText(card) ?? ''), /^Move the date to ~[A-Z][a-z]{2}( \d{4})? or trim ~200 kcal a day \(to ~1,800 kcal\)$/);
+  assert.equal(plainSpaces(actionText(card) ?? ''), 'Move the date or trim ~150 kcal a day (to ~1,850 kcal)');
   assert.equal(review.nextWeek, plan?.action.text);
   const opener = goalOpenerLine(card, 'metric') ?? '';
   assert.match(opener, /, but at this rate your Jul 6 date won't hold\.$/);
   assert.doesNotMatch(opener, /weeks? behind/);
   const coach = formatGoalProgressLines(card, 'metric').join('\n');
   assert.match(coach, /more than 8 weeks past the target date: do not quote a projected date/);
-  assert.match(coach, /This week's plan.*Move the date to/);
+  assert.match(coach, /This week's plan.*Move the date or trim/);
 });
 
 test('the opener says "weekly average" for the 7-day mean and "on the scale" only for a single reading', () => {
@@ -235,7 +235,9 @@ test('the coach signals follow the plan: "plateau" only in a plateau week, "too 
   };
   // Day 52: the scale has been flat 3 weeks as of today, but the week's plan (made from Sunday 48) has not named a plateau.
   const early = at(52);
-  assert.equal(early.card.weightRead?.state, 'pace');
+  // (Wave 22w: day 52 is a flat fortnight - two flat weeks after a confirmed loss - which the card calls a calm hold, not a plateau.)
+  assert.equal(early.card.weightRead?.state, 'plateau');
+  assert.equal(early.card.weightRead?.plan?.flatWeeks, 2);
   assert.ok(early.daily.includes('plateau'), 'read from today\'s scale the plateau is already there');
   assert.ok(!early.planned.includes('plateau'), 'the coach says what the card says');
   // Day 57: the plan names it.

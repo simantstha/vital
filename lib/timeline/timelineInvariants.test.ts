@@ -507,7 +507,8 @@ invariant(WEIGHT, 'trim advice is at most 200 kcal a day in one step and never g
     const target = snap.card?.weightRead?.plan?.action.kcalTarget;
     if (target != null && target < floor) out.push({ snap, detail: `plan action kcalTarget ${target} is under the ${floor} kcal floor: "${visible(snap.card?.weightRead?.plan?.action.text ?? '')}"` });
   }
-  assert.ok(trims > 0, `${name}: no trim advice appeared, so this invariant checked nothing`);
+  // Wave 22w: a user who logs no food is never told to trim (see the wave 22w block), so only the logged scenario has trim advice to check.
+  if (name === 'weight_loss_logged') assert.ok(trims > 0, `${name}: no trim advice appeared, so this invariant checked nothing`);
   return out;
 });
 
@@ -594,6 +595,106 @@ const WEIGHT_AS_TREND = /weight trend|trend weight|trend change|smoothed trend/i
 
 invariant(WEIGHT, 'no card or review string calls the progress weight a "trend" (weight trend, trend weight, trend change)', snaps =>
   textMatches(snaps, s => [...cardTexts(s), ...reviewTexts(s)], WEIGHT_AS_TREND));
+
+// ── weight loss, wave 22w (round-4 dietitian + "Sam" findings) ──────────────────────────────────────────────────────────────────────
+// Everything between this banner and the "one target per week" banner below is weight-loss only (wave 22w).
+
+const WL_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WL_MEAN_MIN_WEIGH_INS = 3;
+const WL_FLAT_KG = 0.2;
+const WL_FAR_BEHIND_DAYS = 56;
+
+/** Mean of the scenario's raw weigh-ins in the 7 days ending `end`; null under 3 weigh-ins. */
+function wlWeekMean(weighIns: ReadonlyArray<{ day: string; kg: number }>, end: string): number | null {
+  const from = addDays(end, -6);
+  const inWeek = weighIns.filter(w => w.day >= from && w.day <= end);
+  return inWeek.length >= WL_MEAN_MIN_WEIGH_INS ? inWeek.reduce((s, w) => s + w.kg, 0) / inWeek.length : null;
+}
+
+/** The flat fortnight (P1-1): the last two 7-day means up to the plan's Sunday are within 0.2 kg, after a confirmed loss pace 14+ days earlier. */
+function wlFlatFortnightDays(snaps: DaySnapshot[], name: ScenarioName): DaySnapshot[] {
+  const weighIns = buildScenario(name).weighIns;
+  return snaps.filter(snap => {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null) return false;
+    const w2 = wlWeekMean(weighIns, plan.asOf);
+    const w1 = wlWeekMean(weighIns, addDays(plan.asOf, -7));
+    if (w1 == null || w2 == null || Math.abs(w2 - w1) > WL_FLAT_KG) return false;
+    // A confirmed loss pace in a plan made 14+ days before this plan's Sunday.
+    return snaps.some(s => {
+      const earlier = s.card?.weightRead?.plan;
+      return earlier != null && earlier.asOf <= addDays(plan.asOf, -14) && earlier.state === 'pace' && earlier.confirmed
+        && earlier.pace != null && earlier.pace.kgPerWeek < 0;
+    });
+  });
+}
+
+const WONT_HOLD_OR_BEHIND = /won't hold|behind pace|move the date/i;
+
+invariant(WEIGHT, 'a flat fortnight after a confirmed loss pace is a calm hold: never "behind", "won\'t hold" or "move the date" (P1-1)', (snaps, name) => {
+  const out: Violation[] = [];
+  const days = wlFlatFortnightDays(snaps, name);
+  assert.ok(days.length > 0, `${name}: no flat fortnight after a confirmed loss appeared, so this invariant checked nothing`);
+  for (const snap of days) {
+    const verdict = snap.card?.verdict;
+    if (verdict === 'behind' || verdict === 'stalled') {
+      out.push({ snap, detail: `flat fortnight after a confirmed loss reads verdict ${verdict}: "${visible(snap.card?.headline ?? '')}"` });
+    }
+    const plan = snap.card?.weightRead?.plan;
+    if (plan?.farBehind || plan?.call === 'behind') out.push({ snap, detail: `flat fortnight plan call ${plan.call}, farBehind ${plan.farBehind}` });
+    for (const t of allTexts(snap)) {
+      if (WONT_HOLD_OR_BEHIND.test(plain(t.text)) && !/do not quote a projected date/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  return out;
+});
+
+/** A month quoted without a day ("Jan 2027", "~Aug"): the first day of that month. Dates with a day ("Jul 6") are not month quotes. */
+const MONTH_QUOTE = new RegExp(`\\b(${WL_MONTHS.join('|')})\\b(?! \\d{1,2}\\b)(?: (\\d{4}))?`, 'g');
+
+invariant(WEIGHT, 'no user-facing string quotes a projected month more than 8 weeks past the target date (P1-1)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.targetDate as string;
+  const year = Number(target.slice(0, 4));
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const t of allTexts(snap)) {
+      for (const m of plain(t.text).matchAll(MONTH_QUOTE)) {
+        const monthStart = `${m[2] ?? year}-${String(WL_MONTHS.indexOf(m[1]) + 1).padStart(2, '0')}-01`;
+        if (dayDiff(monthStart, target) > WL_FAR_BEHIND_DAYS) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" quotes ${m[0]}, ${dayDiff(monthStart, target)} days past the ${target} target date` });
+      }
+    }
+  }
+  return out;
+});
+
+/** The kcal level a plan action states: its `kcalTarget`, else the first "(to ~1,800 kcal)" / "keep 2,000 kcal" / "your 2,000 kcal target" in its text. */
+function wlStatedKcal(action: { text: string; kcalTarget?: number }): number | null {
+  if (action.kcalTarget != null) return action.kcalTarget;
+  const m = /(?:\(to ~|keep |your |toward |full )([\d,]{4,})\s*kcal/i.exec(plain(action.text));
+  return m ? Number(m[1].replace(/,/g, '')) : null;
+}
+
+const WL_KCAL_REVERSAL_SENTENCE = /go back to [\d,]+ kcal|last week's trim/i;
+
+invariant(WEIGHT, 'a stated calorie target never moves back up on the next Monday without a sentence saying so (P1-2)', snaps => {
+  const out: Violation[] = [];
+  let prev: { snap: DaySnapshot; kcal: number } | null = null;
+  for (const snap of snaps) {
+    if (snap.weekday !== 'Mon') continue;
+    const plan = snap.card?.weightRead?.plan;
+    const kcal = plan != null && plan.state !== 'reached' && plan.state !== 'maintenance' ? wlStatedKcal(plan.action) : null;
+    if (prev != null && kcal != null && kcal > prev.kcal && plan != null && !WL_KCAL_REVERSAL_SENTENCE.test(plain(plan.action.text))) {
+      out.push({ snap, detail: `Mon ${prev.snap.date} stated ${prev.kcal} kcal, Mon ${snap.date} states ${kcal} kcal without saying so: "${visible(plan.action.text)}"` });
+    }
+    prev = kcal != null ? { snap, kcal } : null;
+  }
+  return out;
+});
+
+// A user who logs no food gets no calorie trim they cannot check: the first step is activity or logging (P1-2).
+invariant(['weight_loss'], 'a user with no food logs is never told to trim calories (P1-2)', snaps =>
+  textMatches(snaps, allTexts, /trim ~[\d,]+ kcal/i));
 
 // ── one target per week (wave 21b) ──────────────────────────────────────────
 

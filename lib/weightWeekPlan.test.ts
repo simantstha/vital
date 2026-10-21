@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { plainSpaces } from './displayText';
-import { calorieFloorKcal, isInstruction, weightWeekPlan, type WeightPlanInput, type WeightWeekPlan } from './weightWeekPlan';
+import {
+  calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weightWeekPlan, type WeightPlanInput, type WeightWeekPlan,
+} from './weightWeekPlan';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 
 // Day 0 is Mon 2026-03-02; day n is n days later. Weeks start on the Mondays 0, 7, 14, ...
@@ -114,21 +116,32 @@ const PLATEAU = readings(range(0, 100), n => (n < 35 ? 92 - 0.1 * n : n < 63 ? 8
 // A slow, steady loss (0.25 kg/wk): 6.5 kg to go at day 42 is a projection far past a date at day 126.
 const SLOW = readings(range(0, 100), n => 92 - 0.035 * n + wobble(n));
 
+/** A user who logs food (about 2,000 kcal a day from day 20): a calorie trim can be checked. One who logs none is told activity and logging first (wave 22w). */
+const LOGGER = intake(range(20, 100), n => 1980 + (n % 3) * 20);
+
 test('a pace slow enough to put the date more than 8 weeks out quotes no date: the date will not hold', () => {
-  const p = planAt(SLOW, 49);
+  const p = planAt(SLOW, 49, { intakeDays: LOGGER });
   assert.equal(p.state, 'pace');
   assert.equal(p.call, 'behind');
   assert.equal(p.farBehind, true);
   assert.equal(p.etaDate, null);
   assert.equal(p.weeksVsTarget, null);
   assert.equal(p.onPace, false);
-  assert.match(plainSpaces(p.action.text), /^Move the date to ~[A-Z][a-z]{2}( \d{4})? or trim ~200 kcal a day \(to ~1,800 kcal\)$/);
-  assert.equal(p.action.kcalTarget, 1800);
+  // The action never names the month the pace projects to - only that the date moves.
+  assert.equal(plainSpaces(p.action.text), 'Move the date or trim ~150 kcal a day (to ~1,850 kcal)');
+  assert.equal(p.action.kcalTarget, 1850);
   assert.equal(p.action.kind, 'trim');
+  // A user who logs no food gets activity and logging first, not a trim there is nothing to check against.
+  const noLogs = planAt(SLOW, 49);
+  assert.equal(noLogs.action.kind, 'move_date');
+  assert.equal(plainSpaces(noLogs.action.text), 'Move the date, or add two 30-minute walks and log a few days so we can see where the calories go');
+  assert.equal(noLogs.action.kcalTarget, undefined);
 });
 
-test('the trim is one weekly step: at most 200 kcal, rounded to 50, and never under the calorie floor', () => {
-  const at = (over: Partial<WeightPlanInput>) => planAt(SLOW, 49, over);
+test('the trim is ONE step (TRIM_STEP_KCAL): never over 200 kcal, and never under the calorie floor', () => {
+  assert.equal(TRIM_STEP_KCAL, 150);
+  assert.ok(TRIM_STEP_KCAL <= TRIM_MAX_KCAL_PER_STEP);
+  const at = (over: Partial<WeightPlanInput>) => planAt(SLOW, 49, { intakeDays: LOGGER, ...over });
   // A budget 100 over the floor: the step shrinks to what the floor allows.
   const near = at({ targetKcal: 1600, floorKcal: 1500 });
   assert.equal(plainSpaces(near.action.text).match(/trim ~(\d+) kcal/)?.[1], '100');
@@ -137,22 +150,22 @@ test('the trim is one weekly step: at most 200 kcal, rounded to 50, and never un
   const onFloor = at({ targetKcal: 1500, floorKcal: 1500 });
   assert.equal(onFloor.action.kind, 'move_date');
   assert.equal(onFloor.action.kcalTarget, undefined);
-  assert.match(plainSpaces(onFloor.action.text), /^Move the date to ~.* — your calories are already near the 1,500 kcal floor$/);
+  assert.equal(plainSpaces(onFloor.action.text), 'Move the date — your calories are already near the 1,500 kcal floor');
   // No floor on the budget: 1,500 for men, 1,200 for women, 1,400 when the profile says neither.
   assert.equal(calorieFloorKcal(0, 'male'), 1500);
   assert.equal(calorieFloorKcal(null, 'female'), 1200);
   assert.equal(calorieFloorKcal(undefined, null), 1400);
   assert.equal(calorieFloorKcal(1350, 'male'), 1350, "the budget's own floor wins");
-  assert.equal(plainSpaces(at({ targetKcal: 1450, floorKcal: 0, sex: 'female' }).action.text).match(/trim ~(\d+) kcal/)?.[1], '200');
+  assert.equal(plainSpaces(at({ targetKcal: 1450, floorKcal: 0, sex: 'female' }).action.text).match(/trim ~(\d+) kcal/)?.[1], '150');
   assert.equal(plainSpaces(at({ targetKcal: 1450, floorKcal: 0, sex: 'male' }).action.kind), 'move_date');
   // No budget at all: the step is named without a target to land on.
   const none = at({ targetKcal: null });
-  assert.match(plainSpaces(none.action.text), /trim ~200 kcal a day$/);
+  assert.match(plainSpaces(none.action.text), /trim ~150 kcal a day$/);
   assert.equal(none.action.kcalTarget, undefined);
 });
 
 test('the trim does not move from one day to the next inside a week, and is a step per week, not a sum', () => {
-  const week = range(49, 55).map(n => planAt(SLOW, n));
+  const week = range(49, 55).map(n => planAt(SLOW, n, { intakeDays: LOGGER }));
   assert.equal(new Set(week.map(p => p.action.text)).size, 1);
 });
 
@@ -307,8 +320,8 @@ test('held for 2+ weeks on logged intake, the weight names its own maintenance t
 
 test('plan text joins numbers to units with U+00A0, in kg and in lb', () => {
   const NB = '\u00a0';
-  const kg = planAt(SLOW, 49).action.text;
-  assert.ok(kg.includes(`200${NB}kcal`), kg);
+  const kg = planAt(SLOW, 49, { intakeDays: LOGGER }).action.text;
+  assert.ok(kg.includes(`150${NB}kcal`), kg);
   assert.doesNotMatch(kg, /\d kcal/);
   const slow = readings(range(0, 100), n => 92 - 0.04 * n);
   const lb = planAt(slow, 70, { unitSystem: 'imperial', targetDate: D(150) });
@@ -322,4 +335,106 @@ test('no weigh-ins, no plan', () => {
     todayKey: D(10), days: [], startDay: null, startKg: null, targetKg: 80, targetDate: null, reached: false, reachedAt: null,
     intakeDays: [], targetKcal: null, floorKcal: null, weeklySessions: null,
   }), null);
+});
+
+// ── Wave 22w: round-4 dietitian + "Sam" findings ────────────────────────────────────────────────────────────────────────
+
+// Sam: down 0.5 kg/wk to day 34, then flat at 89.5 kg (two flat weeks are common; the 21-day line still holds the good weeks).
+const STALL = readings(range(0, 100), n => (n < 35 ? 92 - 0.0714 * n : 89.5) + wobble(n));
+
+test('P1-1: a flat fortnight after a confirmed loss is a calm hold, never "behind", a date or a trim', () => {
+  const week = range(49, 55).map(n => planAt(STALL, n));
+  for (const p of week) assert.equal(decision(p), decision(week[0]), 'the same all week');
+  const p = week[0];
+  assert.equal(p.state, 'plateau');
+  assert.equal(p.flatWeeks, 2);
+  assert.equal(p.verdict, 'holding');
+  assert.equal(p.call, 'none');
+  assert.equal(p.etaDate, null);
+  assert.equal(p.weeksVsTarget, null);
+  assert.equal(p.farBehind, false);
+  assert.equal(p.onPace, null);
+  assert.equal(p.pace, null, 'the 21-day line holds the good weeks: no stale rate next to "two flat weeks"');
+  assert.ok(p.plateauMeanKg != null && Math.abs(p.plateauMeanKg - 89.5) < 0.2);
+  // No food log: nothing to judge the cause on, and nothing to trim.
+  assert.equal(p.action.kind, 'plateau_water');
+  assert.equal(plainSpaces(p.action.text), "Keep 2,000 kcal; we'll look again next Monday");
+  assert.equal(p.action.kcalTarget, 2000);
+  assert.doesNotMatch(p.action.text, /trim|move the date|[A-Z][a-z]{2} \d{4}/);
+  // The week before was an ordinary pace: the fortnight is the news.
+  assert.equal(planAt(STALL, 42).state, 'pace');
+  // One more flat week and it is a plateau (flatWeeks 3).
+  const plateau = planAt(STALL, 56);
+  assert.equal(plateau.state, 'plateau');
+  assert.equal(plateau.flatWeeks, 3);
+});
+
+test('P1-1: the flat fortnight judges its cause over its own 14 days of logs', () => {
+  const weekends = intake(range(0, 70), n => 1950 + (dow(n) >= 5 ? 420 : 0) + (n % 3 === 0 ? 40 : -20));
+  const p = planAt(STALL, 49, { intakeDays: weekends });
+  assert.equal(p.flatWeeks, 2);
+  assert.equal(p.plateauCause?.kind, 'weekends');
+  assert.equal(p.plateauCause?.spanDays, 14);
+  assert.equal(p.action.kind, 'plateau_weekends');
+  assert.match(plainSpaces(p.action.text), /^Weekends averaged ~2,\d{3} kcal vs 1,9\d0 on weekdays — bring them back toward your 2,000 kcal target$/);
+  assert.doesNotMatch(p.action.text, /trim/);
+  // Logged days on target are not blamed.
+  const onTarget = planAt(STALL, 49, { intakeDays: intake(range(0, 70), n => 2000 + (n % 2 === 0 ? 40 : -40)) });
+  assert.equal(plainSpaces(onTarget.action.text), "Keep 2,000 kcal; we'll look again next Monday");
+});
+
+test('P1-1: a slow steady loss, or a loss that never was confirmed, is not a flat fortnight', () => {
+  assert.equal(planAt(SLOW, 49).flatWeeks, null);
+  assert.equal(planAt(STEADY, 56).flatWeeks, null);
+  // The goal's first weeks (no confirmed pace 14 days ago) are never a fortnight.
+  assert.notEqual(planAt(STALL, 28).flatWeeks, 2);
+});
+
+test('P1-1: after a flat fortnight the weekly average falling again is "moving again", not "behind"', () => {
+  const stallThenFall = readings(range(0, 100), n => (n < 35 ? 92 - 0.0714 * n : n < 49 ? 89.5 : 89.5 - 0.1 * (n - 48)) + wobble(n));
+  assert.equal(planAt(stallThenFall, 49).flatWeeks, 2);
+  const p = planAt(stallThenFall, 56);
+  assert.equal(p.state, 'moving_again');
+  assert.equal(p.verdict, 'progressing');
+  assert.equal(p.action.text, 'Keep doing what restarted it');
+  assert.ok(p.plateauMeanKg != null && Math.abs(p.plateauMeanKg - 89.5) < 0.2);
+});
+
+test('P1-1: no user-facing plan string names a projected month (far behind says only that the date moves)', () => {
+  for (const day of [42, 49, 56]) {
+    const p = planAt(SLOW, day, { intakeDays: LOGGER });
+    assert.doesNotMatch(plainSpaces(p.action.text), /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b(?! \d{1,2}\b)/);
+  }
+});
+
+test('P1-2: a calorie target never moves back up on the next Monday without a sentence saying so', () => {
+  // 0.21 kg/wk to day 34, then flat: behind with a trim on Monday 42; on Monday 49 the weeks are a plateau and the plan keeps 2,000 kcal.
+  const slowThenFlat = readings(range(0, 100), n => (n < 35 ? 92 - 0.03 * n : 90.95) + wobble(n));
+  const before = planAt(slowThenFlat, 42, { intakeDays: LOGGER });
+  assert.equal(before.action.kind, 'trim');
+  assert.equal(before.action.kcalTarget, 1850);
+  const after = planAt(slowThenFlat, 49, { intakeDays: LOGGER });
+  assert.equal(after.state, 'plateau');
+  assert.equal(after.action.kcalTarget, 2000);
+  assert.match(plainSpaces(after.action.text), /^Go back to 2,000 kcal — last week's trim isn't needed\. Common and often water: keep 2,000 kcal/);
+  assert.equal(after.action.kind, 'plateau_water', 'the kind stays the cause\'s');
+  // The sentence belongs to that one Monday: the next one just carries the plan.
+  assert.doesNotMatch(planAt(slowThenFlat, 56, { intakeDays: LOGGER }).action.text, /Go back to/);
+  // A week that trims again is the same step, so nothing is walked back.
+  const again = planAt(SLOW, 56, { intakeDays: LOGGER });
+  assert.equal(again.action.kcalTarget, 1850);
+  assert.doesNotMatch(again.action.text, /Go back to/);
+});
+
+test('P1-2: one trim step for a behind pace and a plateau alike, and no trim for a user who logs no food', () => {
+  const logged = planAt(PLATEAU, 56, { intakeDays: intake(range(0, 70), n => 2000 + (n % 2 === 0 ? 60 : -40)) });
+  assert.match(plainSpaces(logged.action.text), new RegExp(`trim ~${TRIM_STEP_KCAL} kcal a day`));
+  const behind = planAt(SLOW, 49, { intakeDays: LOGGER });
+  assert.match(plainSpaces(behind.action.text), new RegExp(`trim ~${TRIM_STEP_KCAL} kcal a day`));
+  // No food log: the plateau's second step is activity and logging, the behind pace's too.
+  const noLogs = planAt(PLATEAU, 56);
+  assert.equal(plainSpaces(noLogs.action.text), 'Common and often water: keep 2,000 kcal and 3 sessions; if still flat in 2 weeks, add two 30-minute walks and log a few days so we can see where the calories go');
+  assert.doesNotMatch(noLogs.action.text, /trim/);
+  // Two or fewer logged days is still "no food log".
+  assert.doesNotMatch(planAt(PLATEAU, 56, { intakeDays: intake([50, 52], () => 2000) }).action.text, /trim/);
 });

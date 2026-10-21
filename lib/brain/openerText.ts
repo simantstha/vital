@@ -205,7 +205,12 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
       const base = `You're ${weightAmount(done, units)} of ${weightAmount(total, units)} ${unit} ${losing ? 'down' : 'up'}`;
       if (gp.goal === 'weight_loss') {
         if (read?.state === 'early' || read?.state === 'returning') return `${base} ${downBasis(gp)}; ${paceWaitClause(gp)}.`;
-        if (read?.state === 'plateau') return `${base}, though the scale has been flat for 3 weeks.`;
+        if (read?.state === 'plateau') {
+          // Two flat weeks after a confirmed loss (wave 22w) are common and not yet a plateau.
+          return read.plan?.flatWeeks === 2
+            ? `${base}; the scale has been flat for 2 weeks, which is common.`
+            : `${base}, though the scale has been flat for 3 weeks.`;
+        }
         // The week's plan (lib/weightWeekPlan.ts) says what the scale is doing; the opener only repeats it.
         if (read?.state === 'moving_again') return `${base}, and your weekly average is moving down again.`;
         if (read?.plan?.farBehind && target != null) {

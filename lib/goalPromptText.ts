@@ -286,7 +286,10 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (read?.state === 'returning') {
     lines.push('- The user is back after a gap in weigh-ins: welcome them back and keep weighing in; do not call the pace too fast or behind until 3 weigh-ins are back.');
   }
-  if (read?.state === 'plateau') {
+  if (read?.state === 'plateau' && plan?.flatWeeks === 2) {
+    // Two flat weeks after a confirmed loss (wave 22w): a calm hold. The 21-day line still holds the good weeks, so it must not be called behind.
+    lines.push('- Two flat weeks on the raw weekly averages after weeks of steady loss: common, not a failure and not "behind" — the plan holds. No projected date, no calorie cut; give the week\'s one action. If the third week is flat too it becomes a plateau.');
+  } else if (read?.state === 'plateau') {
     const cause = plan?.plateauCause ?? null;
     if (cause?.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
       // The logs of the plateau's own weeks name the weekends, and the cause is kept for the whole plateau.

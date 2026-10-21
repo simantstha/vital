@@ -1598,11 +1598,16 @@ function returningOutcome(input: GoalProgressInput, w: WeightBlock, plan: Weight
   };
 }
 
-/** Three flat weeks of raw weekly means: named as a plateau, with the week's one action and the cause it named. */
+/**
+ * Three flat weeks of raw weekly means: named as a plateau, with the week's one action and the cause it named. Two flat weeks after a
+ * confirmed loss (`plan.flatWeeks` 2, wave 22w) are not yet a plateau: a calm "common, your plan holds", never "behind".
+ */
 function plateauOutcome(input: GoalProgressInput, plan: WeightWeekPlan, build: ReasonBuilder): Outcome {
   return {
     verdict: 'holding',
-    headline: clip(`Plateau — weekly average ~${fmtWeightFixed(input, plan.plateauMeanKg as number)} for 3 weeks`),
+    headline: plan.flatWeeks === 2
+      ? 'Two flat weeks — common; your plan holds'
+      : clip(`Plateau — weekly average ~${fmtWeightFixed(input, plan.plateauMeanKg as number)} for 3 weeks`),
     reasons: build({ kind: 'plateau', text: plan.action.text, tone: 'neutral' }),
   };
 }
@@ -3301,7 +3306,7 @@ function weightReadOf(input: GoalProgressInput, w: WeightBlock, verdict: GoalVer
 function loggedOverBudgetDays(input: GoalProgressInput, cause: NonNullable<WeightWeekPlan['plateauCause']>): number {
   const target = cause.targetKcal;
   if (target == null) return 0;
-  const from = addDays(cause.namedAt, -(PLATEAU_SPAN_DAYS - 1));
+  const from = addDays(cause.namedAt, -((cause.spanDays ?? PLATEAU_SPAN_DAYS) - 1));
   return (input.intakeHistoryDays ?? input.intakeDays).filter(d =>
     d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD && d.day >= from && d.day <= cause.namedAt
     && d.kcal > target * CALORIE_ADHERENCE_TOLERANCE).length;
