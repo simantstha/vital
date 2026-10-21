@@ -148,3 +148,20 @@ test('the Monday after a skipped cutback holds at the week the cutback replaced 
   assert.equal(kept.distance!.stepTargetKm, 25);
   assert.equal(kept.distance!.plan?.skippedCutback, undefined);
 });
+
+// ── P2.2: the restart number does not change overnight ─────────────────────
+
+test('on a break the restart number is "if you restart tomorrow": Sunday quotes the number Monday will, and says why it dropped (22e)', () => {
+  // Last run Sunday 2026-10-11: two empty weeks, now Sunday 10-25 (14 days off) and Monday 10-26 (15).
+  const history = (todayKey: string) => weeks(todayKey, [[], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]);
+  const sunday = computeGoalProgress(input(history('2026-10-25'), { todayKey: '2026-10-25' }));
+  const monday = computeGoalProgress(input(weeks('2026-10-26', [[], [], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-26' }));
+  const number = (headline: string): string => /Restart at ~(\d+) km/.exec(headline)![1];
+  assert.match(sunday.headline, /^On a break — 14 days since your last run\. Restart at ~\d+ km\.$/);
+  assert.equal(number(sunday.headline), number(monday.headline));
+  assert.match(sunday.reasons.find(r => r.kind === 'plan')!.text, /^Two weeks off now — restart a bit lower, ~\d+ km, with easy runs/);
+  // Saturday (13 days off, "restart tomorrow" is a 14-day gap) is still the higher band.
+  const saturday = computeGoalProgress(input(history('2026-10-24'), { todayKey: '2026-10-24' }));
+  assert.ok(Number(number(saturday.headline)) > Number(number(sunday.headline)), `${saturday.headline} / ${sunday.headline}`);
+  assert.doesNotMatch(saturday.reasons.find(r => r.kind === 'plan')!.text, /Two weeks off/);
+});

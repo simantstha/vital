@@ -1143,3 +1143,50 @@ invariant(['runner_on_plan_obedient'], 'a cutback run as planned is a good week 
   assert.ok(done > 0, `${name}: no reviewed cutback week, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P2.2: the restart number does not change overnight ───────────
+
+const RESTART_NUMBER = /\b[Rr]estart(?: at)? ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
+
+invariant(RUNNERS, "the restart number a Sunday shows is the number Monday's card and Monday's review show (the card quotes 'if you restart tomorrow')", (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const sunday of snaps) {
+    if (weekdayOf(sunday.date) !== 'Sun') continue;
+    const sundayText = [...cardTexts(sunday)].map(t => RESTART_NUMBER.exec(plain(t.text))).find(m => m != null);
+    if (!sundayText) continue;
+    const monday = snaps.find(s => s.date === addDays(sunday.date, 1));
+    if (!monday) continue;
+    const shown = Number(sundayText[1]);
+    const mondayCard = [...cardTexts(monday)].map(t => RESTART_NUMBER.exec(plain(t.text))).find(m => m != null);
+    const mondayReview = RESTART_NUMBER.exec(plain(monday.review?.review.nextWeek ?? ''));
+    for (const [where, m] of [['Monday card', mondayCard], ['Monday review next week', mondayReview]] as const) {
+      if (!m) continue;
+      compared++;
+      if (Number(m[1]) !== shown) out.push({ snap: monday, detail: `${where} says restart at ~${m[1]} ${m[2]}, Sunday ${sunday.date} said ~${shown}: "${visible(sunday.card?.headline ?? '')}" then "${visible(monday.card?.headline ?? '')}"` });
+    }
+  }
+  if (name === 'runner_no_race') assert.ok(compared > 0, `${name}: no Sunday restart number met a Monday, so this invariant checked nothing`);
+  return out;
+});
+
+// When the number drops during a break the card says why ("Two weeks off now - restart a bit lower, ~12 km"), never a silent change.
+invariant(RUNNERS, 'when the restart number shown during a break drops from one day to the next, the card says why', (snaps, name) => {
+  const out: Violation[] = [];
+  let drops = 0;
+  const onBreak = (s: DaySnapshot): number | null => {
+    if (!/^On a break/.test(plain(s.card?.headline ?? ''))) return null;
+    const m = RESTART_NUMBER.exec(plain(s.card?.headline ?? ''));
+    return m ? Number(m[1]) : null;
+  };
+  for (let i = 1; i < snaps.length; i++) {
+    const a = onBreak(snaps[i - 1]);
+    const b = onBreak(snaps[i]);
+    if (a == null || b == null || b >= a) continue;
+    drops++;
+    const texts = cardTexts(snaps[i]).map(t => plain(t.text)).join(' | ');
+    if (!/weeks? off now — restart a bit lower/i.test(texts)) out.push({ snap: snaps[i], detail: `restart ~${a} -> ~${b} with no reason on the card: "${visible(snaps[i].card?.headline ?? '')}"` });
+  }
+  if (name === 'runner_no_race') assert.ok(drops > 0, `${name}: the restart number never dropped during a break, so this invariant checked nothing`);
+  return out;
+});

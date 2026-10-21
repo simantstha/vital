@@ -173,7 +173,7 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
       }
       return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump${strides}`;
     case 'restart':
-      return `- This week's target: restart at ~${t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
+      return `- This week's target: restart at ~${plan.restartKm != null ? distKm(plan.restartKm, units) : t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
     case 'rebuild': {
       const atGoal = plan.targetKm != null && plan.targetKm >= d.targetKm - 1e-9;
       return `- This week's target: rebuilding after the race, ~${t}, easy runs${atGoal ? '' : '; add about 10% a week'}`;

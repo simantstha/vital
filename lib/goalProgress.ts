@@ -335,6 +335,8 @@ export interface GoalWeekPlan {
   overCapRead?: 'touch' | 'well';
   /** Additive (wave 22e): last week was a cutback that ran more than 10% over its lowered number, so this week holds at the week the cutback replaced. */
   skippedCutback?: boolean;
+  /** Additive (wave 22e): on a break, the restart number "if you restart tomorrow" when it differs from the week's own `targetKm` (a lower band past two weeks off). */
+  restartKm?: number;
 }
 
 export interface GoalRaceProgress {
@@ -2467,6 +2469,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             comebackKm: plan.comeback != null ? plan.comeback.medianKm : plan.restart != null ? plan.restart.medianKm : null,
             goalReachedBefore: plan.goalReachedBefore,
             ...(plan.cutback != null ? { cutback: true } : {}),
+            ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
             ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
             ...(plan.preTaper != null ? { preTaper: plan.preTaper.nextPhase } : {}),
@@ -3013,8 +3016,12 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     const after = usual != null && usual > plan.restartKm + 0.5
       ? `, then build back toward your usual ~${fmt(usual)}`
       : plan.restartKm >= plan.goalKm - 1e-9 ? '' : ', then build about 10% a week';
+    // The number is "if you restart tomorrow": past two weeks off it drops a band, and the card says why instead of changing silently.
+    const restartText = plan.restartLong
+      ? `Two weeks off now — restart a bit lower, ~${fmt(plan.restartKm)}, with easy runs${after}`
+      : `Restart at ~${fmt(plan.restartKm)} with easy runs${after}`;
     return finish('building', `On a break — ${days} days since your last run. Restart at ~${fmt(plan.restartKm)}.`, body(
-      { kind: 'plan', text: `Restart at ~${fmt(plan.restartKm)} with easy runs${after}`, tone: 'neutral' },
+      { kind: 'plan', text: restartText, tone: 'neutral' },
     ));
   }
 

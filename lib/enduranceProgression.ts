@@ -746,6 +746,8 @@ export interface EnduranceWeekPlan {
   comeback: { medianKm: number; fraction: number; weeksSince: number } | null;
   /** The restart target (km) the card quotes while the runner is on a break; equals `targetKm` in a restart week. */
   restartKm: number;
+  /** The restart number is the lower band for a gap of more than two weeks (55% of the pre-break median): the copy says why it is lower. */
+  restartLong: boolean;
   /** Last week's long run ran 2 km or more over its plan: this week's long run is held there. */
   longRunJump: { actualKm: number; plannedKm: number; heldKm: number } | null;
   /** True when a training week before this one reached the weekly goal (else a maintain week is still "build to"). */
@@ -1297,6 +1299,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       if (plan.hold?.skippedCutback) return `You skipped the cutback — hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
       return `Hold ~${formatKm(t ?? plan.goalKm, u)} this week, no step up after last week's jump${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
     case 'restart':
+      if (plan.restartLong) return `Two weeks off — restart a bit lower, ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
       return `Restart at ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
     case 'rebuild': {
       const atGoal = t != null && t >= plan.goalKm - 1e-9;
@@ -1493,11 +1496,10 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 
   // The restart target quoted to a runner who is on a break: by the length of the gap so far.
   const holdKm = prevPlan?.targetKm ?? null;
-  // Read on the week's last day, a 7-day gap is tomorrow's 8-day gap: the card quotes NEXT week's restart number, so
-  // Sunday's "~25 km" never turns into Monday's "~17 km". Only a gap still open today (no run in the week yet) moves.
-  const lastDay = asOf === weekEnd;
-  const gapOnDay = (gap: number | null, open: boolean): number | null =>
-    gap != null && open && lastDay && gap <= RESTART_HOLD_GAP_DAYS ? gap + 1 : gap;
+  // The restart number a break quotes is "if you restart tomorrow": a gap still open today (no run in the week yet) is tomorrow's gap + 1,
+  // every day of the break (wave 22e: it used to be only a 7-day gap on the last day). Sunday's "~17 km" is then never Monday's "~12 km" -
+  // the band drops on the day the gap becomes 15 days, and the card says why (`restartLong`).
+  const gapOnDay = (gap: number | null, open: boolean): number | null => (gap != null && open ? gap + 1 : gap);
   const restartFor = (windowKm: number[], gapDays: number | null): { km: number; medianKm: number; fraction: number } => {
     const f = restartFractionFor(gapDays);
     if (f === 'hold' && holdKm != null) {
@@ -1511,7 +1513,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     return { ...restartTargetKm(ctx, windowKm, fraction), fraction };
   };
   const trailingGap = daysSinceRun;
-  const breakRestart = restartFor(breakWindow, onBreak ? gapOnDay(trailingGap, true) : null);
+  const breakGapShown = onBreak ? gapOnDay(trailingGap, true) : null;
+  const breakRestart = restartFor(breakWindow, breakGapShown);
 
   let kind: EnduranceWeekKind;
   let targetKm: number | null;
@@ -1521,6 +1524,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   let rebuild: EnduranceWeekPlan['rebuild'] = null;
   let cutback: EnduranceWeekPlan['cutback'] = null;
   let upTo = false;
+  // The window the restart number is read from (an empty week: the weeks before it; a break noticed mid-week: the weeks before this one).
+  let restartWindow: number[] = breakWindow;
   let medianKm: number | null = null;
   let mode: BandMode = 'normal';
   // The base the week's ~10% step is taken from: last week, or after a cutback the larger of the two weeks before it.
@@ -1545,6 +1550,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   } else {
     if (inRebuild) rebuild = { daysSince: daysAfterRace as number };
     let triggered: { reason: 'break' | 'low_week' | 'no_runs'; target: { km: number; medianKm: number; fraction: number }; gapDays: number | null } | null = null;
+    restartWindow = prev.km < MIN_BASE_WEEK ? beforeWindow : breakWindow;
     if (prev.km < MIN_BASE_WEEK) {
       // An empty week: the gap runs from the last run before it (an almost-empty week still counts as 8+ days).
       const before = lastRunBefore(ctx, w);
@@ -1782,7 +1788,14 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     endedOff,
     restart,
     comeback,
-    restartKm: kind === 'restart' && targetKm != null ? targetKm : breakRestart.km,
+    // On a break a gap-based restart week quotes "if you restart tomorrow" (the same window, the gap + 1); the week's own number once back.
+    restartKm: kind === 'restart' && targetKm != null
+      ? (onBreak && breakGapShown != null && restart != null && restart.reason !== 'low_week' ? restartFor(restartWindow, breakGapShown).km : targetKm)
+      : breakRestart.km,
+    restartLong: (() => {
+      const gap = onBreak ? breakGapShown : kind === 'restart' ? restart?.gapDays ?? null : null;
+      return gap != null && restartFractionFor(gap) === RESTART_LONG_FRACTION;
+    })(),
     longRunJump,
     goalReachedBefore: goalReachedBefore(ctx, w),
     raceDaysToGo,
