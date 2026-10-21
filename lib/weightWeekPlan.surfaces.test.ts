@@ -294,3 +294,23 @@ test('P2-4: while the plan is ahead (or a kilo from the target) the review does 
   const behind = reviewOn(slow, MEALS, 49);
   assert.equal(behind.review.nextWeek, behind.card.weightRead?.plan?.action.text);
 });
+
+test('P2-5: an on-pace call that rests on two paces either side of the date shows the range, and the coach never calls the target date an ETA', () => {
+  // A loss that slowed (0.65 kg/wk, then 0.4) against a date the slower pace misses: on pace because the two straddle it.
+  const slowing = readings(range(0, 130), n => (n < 14 ? 92 - 0.093 * n : 92 - 0.093 * 14 - 0.055 * (n - 14)) + wobble(n));
+  const card = cardAt(slowing, [], 35, { target: { weightKg: 84, date: D(126), weeklySessions: 3 } });
+  const plan = card.weightRead?.plan;
+  assert.equal(card.verdict, 'on_track');
+  assert.equal(plan?.call, 'on_pace');
+  assert.ok(plan?.earlierPace != null, 'the pace a week earlier is carried');
+  const rate = card.reasons.find(r => r.kind === 'rate')?.text ?? '';
+  assert.match(plainSpaces(rate), /^Down \d\.\d\d–\d\.\d\d kg\/wk \(\d\.\d+–\d\.\d+% of bodyweight\) over the last 3 weeks/);
+  const coach = formatGoalProgressLines(card, 'metric').join('\n');
+  assert.doesNotMatch(coach, /ETA/);
+  assert.match(coach, /rate -\d\.\d\d to -\d\.\d\d kg\/wk over the last 3 weeks of weigh-ins \(two weekly reads either side of the target date\)/);
+  assert.match(coach, /on pace for target date/);
+  // A pace that supports the call on its own stays a single number.
+  const steady = cardAt(readings(range(0, 130), n => 92 - 0.08 * n + wobble(n)), [], 35, { target: { weightKg: 84, date: D(126), weeklySessions: 3 } });
+  assert.equal(steady.weightRead?.plan?.earlierPace ?? null, null);
+  assert.doesNotMatch(steady.reasons.find(r => r.kind === 'rate')?.text ?? '', /–\d\.\d\d/);
+});

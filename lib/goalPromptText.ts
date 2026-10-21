@@ -218,10 +218,19 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const pct = gp.ratePerWeek.pctBodyweight != null ? ` (${gp.ratePerWeek.pctBodyweight}% bw)` : '';
     // The pace is a line through the raw weigh-ins of the last 3 weeks (lib/weightPace.ts) for a weight-loss goal.
     const weeks = Math.round((read?.paceWindowDays ?? 21) / 7);
-    nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${gp.goal === 'weight_loss' ? ` over the last ${weeks} weeks of weigh-ins` : ''}`);
+    // "On pace" resting on two paces that straddle the date (wave 22w): the range, so the rate does not argue with the call.
+    const earlierKg = plan?.earlierPace != null && plan.earlierPace.kgPerWeek < 0 && gp.ratePerWeek.kg < 0 ? plan.earlierPace.kgPerWeek : null;
+    const overWeeks = gp.goal === 'weight_loss' ? ` over the last ${weeks} weeks of weigh-ins` : '';
+    if (earlierKg != null) {
+      const slow = signedWt(Math.max(gp.ratePerWeek.kg, earlierKg), units, 2).replace(/ (kg|lb)$/, '');
+      nowBits.push(`rate ${slow} to ${signedWt(Math.min(gp.ratePerWeek.kg, earlierKg), units, 2)}/wk${overWeeks} (two weekly reads either side of the target date)`);
+    } else {
+      nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${overWeeks}`);
+    }
   }
   if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));
-  if (gp.eta) nowBits.push(`ETA ${gp.eta}`);
+  // An "on pace" ETA IS the target date (the date to hold, not a projection): it is not called an ETA (wave 22w).
+  if (gp.eta && !(gp.goal === 'weight_loss' && gp.eta === gp.target.date)) nowBits.push(`ETA ${gp.eta}`);
   if (gp.onPaceForTargetDate != null) nowBits.push(gp.onPaceForTargetDate ? 'on pace for target date' : 'not on pace for target date');
   if (gp.race) {
     const daysSince = gp.race.daysSince ?? 0;

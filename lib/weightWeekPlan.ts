@@ -39,6 +39,7 @@ import { withUnit } from './displayText';
 import { weekStartKeyForDay } from './localDay';
 import type { WeightTrendDay } from './weightTrend';
 import {
+  ON_PACE_MARGIN_DAYS,
   PACE_RECHECK_DAYS,
   PACE_SETTLE_DAYS,
   PLATEAU_MIN_WEIGH_INS_PER_WEEK,
@@ -218,6 +219,11 @@ export interface WeightWeekPlan {
   plateauCause: WeightPlateauCause | null;
   /** The pace the week states (kg/wk): null for an early read, a return, "moving again". */
   pace: WeightPlanPace | null;
+  /**
+   * Additive (wave 22w). "On pace" rests on two paces that land on either side of the target date, and the pace above alone would land more than a week
+   * off it: the pace a week earlier, so the card can show the honest range ("Down 0.37-0.58 kg/wk") instead of one rate that argues with "on track".
+   */
+  earlierPace: WeightPlanPace | null;
   /** A pace that a pace a week earlier confirms (the date may be stated). */
   confirmed: boolean;
   /** The goal is younger than 3 weeks as of `asOf`: only an early read. */
@@ -963,7 +969,7 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
     weekStart, asOf, state: 'early', call: 'none', verdict: down ? 'progressing' : 'holding',
     etaDate: null, weeksVsTarget: null,
     action: { kind: 'keep_weighing', text: 'Keep weighing in — your pace settles after 3 weeks of weigh-ins' },
-    plateauCause: null, pace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
+    plateauCause: null, pace: null, earlierPace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
     away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, updated: null, staleSince: null,
   };
 
@@ -1202,10 +1208,23 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
     action = { kind: 'hold', text: 'Keep logging your meals and weigh-ins so the trend reads clearly' };
   }
 
+  // On pace because the pace now and the pace a week ago straddle the date: the single rate shown must not argue with the call (wave 22w).
+  let earlierPace: WeightPlanPace | null = null;
+  if (call === 'on_pace' && !unconfirmed && targetDate != null && targetKg != null) {
+    const projectsOnPace = (p: WeightPace | null): boolean => {
+      if (p == null) return false;
+      const eta = paceEta(p, targetKg, { fromKg: paceCurrentKg(known, p), minPct: PLATEAU_MAX_PCT_PER_WEEK, maxDays: MAX_ETA_DAYS });
+      return eta != null && Math.abs(etaDaysAhead(eta, targetDate)) <= ON_PACE_MARGIN_DAYS;
+    };
+    const earlier = bridgedPace(known, addDays(anchor, -PACE_RECHECK_DAYS));
+    if (earlier != null && !projectsOnPace(pace)) earlierPace = { kgPerWeek: earlier.kgPerWeek, pctPerWeek: earlier.pctPerWeek, windowDays: earlier.windowDays };
+  }
+
   return {
     ...blank,
     state: 'pace',
     call,
+    earlierPace,
     verdict,
     etaDate,
     weeksVsTarget: read.state === 'confirmed' && etaDate != null ? weeks : null,

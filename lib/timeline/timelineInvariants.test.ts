@@ -886,6 +886,47 @@ invariant(WEIGHT, "the review's next week does not tighten anything while the pl
   return out;
 });
 
+// P2-5: the rate must not contradict the call. "On track for Jul 6" over "Down 0.37 kg/wk" (6.5 kg to go at 0.37 kg/wk lands weeks after Jul 6) is a
+// card arguing with itself: when an on-pace call rests on two paces that straddle the date, the card shows the range ("0.37-0.58 kg/wk"), and the
+// coach never calls the target date an "ETA" (it is the date to hold, not a projection).
+const RATE_RANGE = /\d+(?:\.\d+)?\s?[-–]\s?\d+(?:\.\d+)?\s?(?:kg|lb)\/wk/;
+
+invariant(WEIGHT, "an on-pace call whose single rate would land more than a week off the date shows the rate as a range (P2-5)", (snaps, name) => {
+  const weighIns = buildScenario(name).weighIns;
+  const out: Violation[] = [];
+  let straddling = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const card = snap.card;
+    if (card?.verdict !== 'on_track' || plan?.call !== 'on_pace' || plan.pace == null || card.target.date == null || card.target.weightKg == null) continue;
+    // The plan's own projection: from the 7-day mean at the last weigh-in through its Sunday (the pace is anchored to that day).
+    const anchor = [...weighIns].filter(w => w.day <= plan.asOf).sort((a, b) => (a.day < b.day ? 1 : -1))[0];
+    const kg = wlWeekMean(weighIns, anchor.day) ?? anchor.kg;
+    if (plan.pace.kgPerWeek >= 0) continue;
+    const finish = addDays(anchor.day, Math.ceil(((kg - card.target.weightKg) / -plan.pace.kgPerWeek) * 7));
+    if (Math.abs(dayDiff(finish, card.target.date)) <= 7) continue;
+    straddling++;
+    const rate = card.reasons.find(r => r.kind === 'rate');
+    if (rate == null || !RATE_RANGE.test(plain(rate.text))) {
+      out.push({ snap, detail: `"${visible(card.headline)}" over a single rate that lands on ${finish}, ${dayDiff(finish, card.target.date)} days from ${card.target.date}: "${visible(rate?.text ?? '(no rate reason)')}"` });
+    }
+  }
+  assert.ok(straddling > 0, `${name}: no on-pace card had a rate off the date, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'the coach lines never call the target date an "ETA" (P2-5)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const date = snap.card?.target.date;
+    if (date == null) continue;
+    for (const [i, line] of (snap.coach ?? []).entries()) {
+      if (new RegExp(`ETA ${date}`).test(line)) out.push({ snap, detail: `coach[${i}]: "${visible(line.slice(0, 260))}"` });
+    }
+  }
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {

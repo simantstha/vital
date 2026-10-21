@@ -1439,12 +1439,15 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
  * a pace wobbling around 1% never flips the tone from one day to the next; with the call on, a pace between 0.9% and the ceiling
  * keeps the watch ("close to the ceiling", hysteresis) and is not called "safe".
  * `easeToMaintenance`: the target is reached and the loss is still past the ceiling, so the warning says what to do.
+ * `other` (wave 22w): the pace a week earlier, when "on pace" rests on two paces that straddle the date - the rate is then the honest
+ * range ("Down 0.37-0.58 kg/wk"), not one number that lands weeks off the date it is called on track for.
  */
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null } = {},
 ): GoalProgressReason {
+  if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
   // The shown figure decides the band: a rate printed as "1%" is never called "above the 1% ceiling".
   const abs = round2(Math.abs(pace.pctPerWeek));
@@ -1471,6 +1474,25 @@ function paceReason(
   } else {
     tone = 'watch';
     text += ', the opposite way from your goal';
+  }
+  return { kind: 'rate', text, tone };
+}
+
+/** "Down 0.37–0.58 kg/wk (0.41–0.64% of bodyweight) over the last 3 weeks": the two paces an on-pace call rests on. */
+function paceRangeReason(
+  input: GoalProgressInput,
+  pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
+  other: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'>,
+): GoalProgressReason {
+  const band = FAT_LOSS_BAND;
+  const kgs = [Math.abs(pace.kgPerWeek), Math.abs(other.kgPerWeek)].sort((a, b) => a - b);
+  const pcts = [round2(Math.abs(pace.pctPerWeek)), round2(Math.abs(other.pctPerWeek))].sort((a, b) => a - b);
+  const weeks = Math.round(pace.windowDays / 7);
+  let text = `Down ${weightNum(input, kgs[0], 2)}–${fmtWeight(input, kgs[1], 2)}/wk (${pcts[0]}–${pcts[1]}% of bodyweight) over the last ${weeks} weeks`;
+  let tone: ReasonTone = 'neutral';
+  if (pcts[0] >= band.minPct && pcts[1] <= band.maxPct) {
+    tone = 'good';
+    text += `, inside the ${band.minPct}–${band.maxPct}% safe band`;
   }
   return { kind: 'rate', text, tone };
 }
@@ -1715,7 +1737,7 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  const rate = paceReason(input, p, { tooFast: plan.tooFast });
+  const rate = paceReason(input, p, { tooFast: plan.tooFast, other: plan.earlierPace });
   const action = planActionReason(plan);
 
   if (plan.tooFast && !plan.nearlyThere) {
