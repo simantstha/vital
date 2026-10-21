@@ -743,6 +743,39 @@ invariant(WEIGHT, 'on a Monday every "Holding at X" across card, opener, review 
   return out;
 });
 
+// P2-6: easing toward maintenance is a number, not a direction. "Start easing calories toward maintenance" always carries the step
+// ("add ~150-200 kcal a day (to ~2,150-2,200 kcal)"), and for the first 3 weeks after the target is reached the plan's action states a
+// calorie figure (the step, the user's own held intake, or a budget that already is maintenance). The maintenance watch is two-sided.
+const KCAL_FIGURE = /~[\d,]+(?:\s?[-–]\s?[\d,]+)?\s?kcal/;
+const MAINTENANCE_STEP_WINDOW_DAYS = 21;
+
+invariant(WEIGHT, 'easing toward maintenance and a reached goal\'s first 3 weeks state a calorie figure; the maintenance watch is two-sided (P2-6)', (snaps, name) => {
+  const out: Violation[] = [];
+  let easing = 0;
+  let reachedChecked = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null) continue;
+    for (const t of allTexts(snap)) {
+      if (/easing calories toward maintenance/i.test(plain(t.text)) && /^(?:card\.reasons|review\.nextWeek|coach)/.test(t.where)) {
+        easing++;
+        if (!KCAL_FIGURE.test(plain(t.text)) && !/This week's plan|Nearly there/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" names no calorie figure` });
+      }
+    }
+    if (plan.action.kind === 'ease_to_maintenance' && !KCAL_FIGURE.test(plain(plan.action.text))) out.push({ snap, detail: `plan action [ease_to_maintenance] "${visible(plan.action.text)}" names no calorie figure` });
+    const reachedDaysAgo = snap.card?.weightRead?.reachedDaysAgo;
+    if (snap.card?.verdict === 'reached' && reachedDaysAgo != null && reachedDaysAgo <= MAINTENANCE_STEP_WINDOW_DAYS) {
+      reachedChecked++;
+      if (!KCAL_FIGURE.test(plain(plan.action.text))) out.push({ snap, detail: `reached ${reachedDaysAgo} days ago, plan action [${plan.action.kind}] "${visible(plan.action.text)}" names no calorie figure` });
+    }
+    if (plan.state === 'maintenance' && /drifts?\b/.test(plain(plan.action.text)) && !/above or below/.test(plain(plan.action.text))) {
+      out.push({ snap, detail: `maintenance watch is one-sided: "${visible(plan.action.text)}"` });
+    }
+  }
+  assert.ok(easing > 0 && reachedChecked > 0, `${name}: nothing easing toward maintenance or reached appeared, so this invariant checked nothing`);
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {

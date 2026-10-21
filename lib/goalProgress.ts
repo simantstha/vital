@@ -900,6 +900,8 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
       targetKcal: input.budget?.targetKcal ?? null,
       floorKcal: input.budget?.floorKcal ?? null,
       formulaTdee: input.budget?.formulaTdee ?? null,
+      // The learned maintenance, only when the logs are confident enough to quote it (the same gate as the tdee reason).
+      learnedTdee: input.budget?.tdeeConfidence === 'medium' || input.budget?.tdeeConfidence === 'high' ? input.budget.learnedTdee : null,
       weeklySessions: input.target.weeklySessions,
     });
     if (plan != null) {

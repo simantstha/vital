@@ -274,7 +274,9 @@ test('within a kilo of the target a too-fast loss is "nearly there": ease toward
   const p = planAt(fast, 58, { targetKg: 82.5, targetDate: D(80) });
   assert.equal(p.nearlyThere, true);
   assert.equal(p.action.kind, 'ease_to_maintenance');
-  assert.equal(plainSpaces(p.action.text), 'Start easing calories toward maintenance as you close in on 82.5 kg');
+  // The step is a number (wave 22w): from the 2,000 kcal budget, 150-200 kcal a day, then watch the weekly average.
+  assert.equal(plainSpaces(p.action.text), 'Start easing calories toward maintenance as you close in on 82.5 kg — add ~150–200 kcal a day (to ~2,150–2,200 kcal) and watch the weekly average for 2 weeks');
+  assert.equal(p.action.kcalTarget, 2150);
   assert.notEqual(p.verdict, 'too_fast');
 });
 
@@ -286,7 +288,7 @@ test('reached: "set a new target or switch to maintenance" for the first 7 days,
     const p = planOn(n);
     assert.equal(p.state, 'reached', `day ${n}`);
     assert.equal(p.action.kind, 'next_target');
-    assert.equal(p.action.text, 'Set a new target or switch to maintenance');
+    assert.equal(plainSpaces(p.action.text), 'Set a new target or switch to maintenance — add ~150–200 kcal a day (to ~2,150–2,200 kcal) and watch the weekly average for 2 weeks');
     assert.equal(p.verdict, 'reached');
   }
   for (const n of range(70, 80)) {
@@ -294,6 +296,39 @@ test('reached: "set a new target or switch to maintenance" for the first 7 days,
     assert.equal(p.state, 'maintenance', `day ${n}`);
     assert.notEqual(p.action.kind, 'next_target');
   }
+});
+
+test('P2-6: maintenance is a number - the step from the budget (capped at the TDEE estimate), then a two-sided watch', () => {
+  const calm = readings(range(0, 140), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
+  const at = (n: number, over: Partial<WeightPlanInput> = {}) => planAt(calm, n, { reached: true, reachedAt: D(62), ...over });
+  const step = '~150–200 kcal a day (to ~2,150–2,200 kcal) and watch the weekly average for 2 weeks';
+  // No logged intake to name the held weight: the weeks after the question carry the step, not "no calorie change".
+  const first = at(77); // Monday 77 is 15 days after the reach
+  assert.equal(first.state, 'maintenance');
+  assert.equal(first.action.kind, 'maintenance_target');
+  assert.equal(plainSpaces(first.action.text), `Target reached — add ${step}; a drift of 1 kg above or below your target is your cue to act`);
+  assert.equal(first.action.kcalTarget, 2150);
+  assert.equal(isInstruction(first.action), true);
+  // A learned TDEE (or the formula) caps the landing: 2,150 kcal of maintenance leaves one 150 kcal step.
+  const capped = at(77, { learnedTdee: 2150, formulaTdee: 2500 });
+  assert.match(plainSpaces(capped.action.text), /^Target reached — add ~150 kcal a day \(to ~2,150 kcal\) and watch/);
+  assert.equal(capped.action.kcalTarget, 2150);
+  // The learned estimate wins over the formula.
+  assert.match(plainSpaces(at(77, { learnedTdee: 2400, formulaTdee: 2100 }).action.text), /\(to ~2,150–2,200 kcal\)/);
+  // No budget: only the amounts.
+  assert.match(plainSpaces(at(77, { targetKcal: null }).action.text), /^Target reached — add ~150–200 kcal a day and watch the weekly average for 2 weeks;/);
+  // A budget that already is maintenance keeps it, and the watch is two-sided.
+  const already = at(77, { formulaTdee: 2050 });
+  assert.equal(already.action.kind, 'hold');
+  assert.match(plainSpaces(already.action.text), /^Your calorie target is already at maintenance — keep it there and watch the weekly average; a drift of 1 kg above or below your target is your cue to act\.$/);
+  // After MAINTENANCE_STEP_DAYS the step has been said enough: the two-sided watch alone.
+  const later = at(98); // Monday 98: 36 days after the reach
+  assert.equal(later.action.kind, 'hold');
+  assert.equal(plainSpaces(later.action.text), 'Keep weighing in a few mornings a week; if your average drifts 1 kg above or below your target, that is your cue to act.');
+  // Imperial users read lb in the cue.
+  assert.match(plainSpaces(at(98, { unitSystem: 'imperial' }).action.text), /drifts 2\.2 lb above or below your target/);
+  // One thing all week.
+  assert.equal(new Set(range(77, 83).map(n => at(n).action.text)).size, 1);
 });
 
 test('held for 2+ weeks on logged intake, the weight names its own maintenance target', () => {
@@ -307,10 +342,10 @@ test('held for 2+ weeks on logged intake, the weight names its own maintenance t
   assert.equal(plainSpaces(p.action.text), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target");
   assert.equal(p.action.kcalTarget, 2050);
   assert.equal(isInstruction(p.action), true);
-  // Not before two weeks have been held...
-  assert.notEqual(at(70).action.kind, 'maintenance_target');
+  // Not before two weeks have been held (the step toward maintenance is the plan's action until then)...
+  assert.doesNotMatch(at(70).action.text, /You've held/);
   // ...nor on fewer than 8 logged days...
-  assert.notEqual(at(77, { intakeDays: intake([70, 71, 72, 73, 74, 75, 76], () => 2050) }).action.kind, 'maintenance_target');
+  assert.doesNotMatch(at(77, { intakeDays: intake([70, 71, 72, 73, 74, 75, 76], () => 2050) }).action.text, /You've held/);
   // ...and a budget already there keeps its target.
   const same = at(77, { targetKcal: 2050 });
   assert.equal(same.action.kind, 'hold');

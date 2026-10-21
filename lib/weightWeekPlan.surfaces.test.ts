@@ -193,7 +193,7 @@ test('the pace tone: "above the ceiling" and the watch colour belong to the too-
 
 test('reached: "Set a new target or switch to maintenance" for 7 days after the target, then not every day', () => {
   const reached = readings(range(0, 130), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
-  const shows = (n: number) => cardAt(reached, [], n).reasons.some(r => r.text === 'Set a new target or switch to maintenance');
+  const shows = (n: number) => cardAt(reached, [], n).reasons.some(r => r.text.startsWith('Set a new target or switch to maintenance'));
   const first = cardAt(reached, [], 80);
   assert.equal(first.verdict, 'reached');
   assert.ok(first.reachedAt != null);
@@ -220,8 +220,13 @@ test('held for two weeks on logged intake: the maintenance target is that intake
 
 test('after the first week a reached goal is told to hold, not to "switch to maintenance"', () => {
   const reached = readings(range(0, 130), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
+  // Monday 77 is still inside the first 3 weeks of maintenance (wave 22w): the step toward maintenance, as a number.
   const { review } = reviewOn(reached, [], 77);
-  assert.match(plainSpaces(review.nextWeek), /^Keep weighing in a few mornings a week; if your average drifts 1 kg above your target, that is your cue to act\.$/);
+  assert.match(plainSpaces(review.nextWeek), /^Target reached — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\) and watch the weekly average for 2 weeks; a drift of 1 kg above or below your target is your cue to act$/);
+  assert.doesNotMatch(review.nextWeek, /switch to maintenance/i);
+  // Later it is the two-sided watch alone.
+  const later = reviewOn(reached, [], 98).review;
+  assert.match(plainSpaces(later.nextWeek), /^Keep weighing in a few mornings a week; if your average drifts 1 kg above or below your target, that is your cue to act\.$/);
 });
 
 test('the coach signals follow the plan: "plateau" only in a plateau week, "too fast" only while the call is on', () => {
@@ -270,5 +275,5 @@ test('a reached goal whose calorie target already is maintenance is told to keep
   }
   // On a deficit budget the same week says to set a new target or switch.
   const deficit = cardAt(reached, [], reachedDay + 1, { budget: { ...BUDGET, formulaTdee: 2350 } });
-  assert.equal(deficit.reasons.find(r => r.kind === 'next_step')?.text, 'Set a new target or switch to maintenance');
+  assert.match(plainSpaces(deficit.reasons.find(r => r.kind === 'next_step')?.text ?? ''), /^Set a new target or switch to maintenance — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\)/);
 });

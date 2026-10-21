@@ -1845,7 +1845,12 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   assert.equal(p.reasons[0].tone, 'good');
   assert.match(p.reasons[0].text, /^You hit 85\.6 kg — weekly average 8\d\.\d kg, first reached \w{3} \d{1,2}$/);
   assert.doesNotMatch(p.reasons[0].text, /at or past/);
-  assert.deepEqual(p.reasons[2], { kind: 'next_step', text: 'Set a new target or switch to maintenance', tone: 'neutral' });
+  // Wave 22w: switching to maintenance is a number - the step from the budget (no budget here: only the amounts).
+  assert.deepEqual(p.reasons[2], {
+    kind: 'next_step',
+    text: 'Set a new target or switch to maintenance — add ~150–200 kcal a day and watch the weekly average for 2 weeks',
+    tone: 'neutral',
+  });
   // Continued loss is not "inside the safe band" any more.
   assert.ok(!p.reasons.some(r => r.kind === 'rate' || /safe band/.test(r.text)));
   // Weekly average ~85.5 kg vs 86 kg: within 1 kg.
@@ -1853,9 +1858,15 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   assert.match(p.reasons[1].text, /^Holding at 85\.\d kg, within 1 kg of 85\.6 kg$/);
   assert.equal(p.reasons[1].tone, 'neutral');
   assertWellFormed(p);
-  // Past that first week the question is not asked again every day (it was shown daily for 25 days).
+  // Past that first week the question is not asked again every day (it was shown daily for 25 days) - wave 22w: for the first 3 weeks of
+  // maintenance the step toward it is the next step instead (about 16 days after the reach here)...
   const later = computeGoalProgress(reachedLossInput());
-  assert.deepEqual(later.reasons.map(r => r.kind), ['reached', 'position']);
+  assert.deepEqual(later.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
+  assert.doesNotMatch(later.reasons[2].text, /Set a new target/);
+  // ...and after that the card has no next step at all.
+  const muchLater = computeGoalProgress(reachedLossInput({ weightReadings: ramp(60, 88, -0.07) }));
+  assert.equal(muchLater.verdict, 'reached');
+  assert.ok(!muchLater.reasons.some(r => r.kind === 'next_step'), JSON.stringify(muchLater.reasons));
 });
 
 test('reached (weight loss): well past the target reads "Below target by X kg"; imperial reads lb', () => {
@@ -2730,8 +2741,11 @@ test('F. reached: the weekly average reaches the target before the lagging trend
   assert.equal(p.weightRead?.state, 'reached');
   assert.ok(p.weightRead!.reachedDaysAgo! >= 0);
   assert.equal(p.reasons[1].text, 'Holding at 84.0 kg, within 1 kg of 84 kg');
-  // Wave 21w: reached 12 days ago — past the first week, "Set a new target or switch to maintenance" is not asked again.
-  assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position']);
+  // Wave 21w: reached 12 days ago — past the first week, "Set a new target or switch to maintenance" is not asked again; wave 22w: the
+  // first 3 weeks of maintenance carry the step toward it as a number instead.
+  assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
+  assert.doesNotMatch(p.reasons[2].text, /Set a new target/);
+  assert.match(p.reasons[2].text, /^Target reached — add ~150–200 kcal a day/);
 });
 
 test('F. reached copy is unit-aware: lb for imperial users', () => {

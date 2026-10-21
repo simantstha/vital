@@ -122,6 +122,11 @@ export const MAINTENANCE_MIN_LOGGED_DAYS = 8;
 const MAINTENANCE_ALREADY_KCAL = 25;
 /** A calorie target within this many kcal of the formula maintenance estimate (or above it) is already a maintenance budget. */
 const MAINTENANCE_BUDGET_MARGIN_KCAL = 100;
+/** The step toward maintenance (wave 22w): add this many kcal a day to the budget (capped at the TDEE estimate), then watch the weekly average. */
+export const MAINTENANCE_STEP_LO_KCAL = 150;
+export const MAINTENANCE_STEP_HI_KCAL = 200;
+/** The step is the plan's instruction until this many days after the target was reached (counted on the week's Monday): add, watch 2 weeks, once more. */
+export const MAINTENANCE_STEP_DAYS = 21;
 
 const KG_TO_LB = 2.20462;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -144,7 +149,7 @@ export type WeightPlanActionKind =
   | 'move_date'
   /** Losing too fast: eat up to the full calorie target. */
   | 'eat_to_target'
-  /** Within a kilo of the target and still losing fast: start easing toward maintenance. */
+  /** Within a kilo of the target and still losing fast: start easing toward maintenance (with the step: "add ~150-200 kcal a day"). */
   | 'ease_to_maintenance'
   | 'plateau_water'
   | 'plateau_intake'
@@ -153,7 +158,7 @@ export type WeightPlanActionKind =
   | 'keep_what_worked'
   /** The target was just reached: set a new one or switch to maintenance. */
   | 'next_target'
-  /** Held the weight on real intake: make that the maintenance target. */
+  /** Held the weight on real intake: make that the maintenance target - or, before there is intake to read, the step toward it (wave 22w). */
   | 'maintenance_target'
   /** Nothing to do: hold. */
   | 'hold';
@@ -272,6 +277,8 @@ export interface WeightPlanInput {
   floorKcal: number | null;
   /** The formula maintenance estimate (kcal); a target at or above it (within 100) is already a maintenance budget. */
   formulaTdee?: number | null;
+  /** The maintenance learned from the user's own logs (kcal), passed only at medium / high confidence; preferred over the formula (wave 22w). */
+  learnedTdee?: number | null;
   /** Biological sex from the profile; only used when the budget carries no floor. */
   sex?: string | null;
   weeklySessions: number | null;
@@ -1069,9 +1076,13 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
 
   let action: WeightPlanAction;
   if (nearlyThere) {
+    // The step is a number (wave 22w): "Start easing calories toward maintenance" alone gave no figure to ease to.
+    const step = maintenanceStep(input);
+    const lead = targetKg != null ? `Start easing calories toward maintenance as you close in on ${planWeightText(input, targetKg)}` : 'Start easing calories toward maintenance';
     action = {
       kind: 'ease_to_maintenance',
-      text: targetKg != null ? `Start easing calories toward maintenance as you close in on ${planWeightText(input, targetKg)}` : 'Start easing calories toward maintenance',
+      text: step != null ? `${lead} — ${step.text}` : lead,
+      ...(step?.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
     };
   } else if (tooFast) {
     const t = input.targetKcal;
@@ -1114,6 +1125,39 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
   };
 }
 
+/** The maintenance estimate the step may land on: the learned one when the caller has it, else the formula's; null when neither is known. */
+function tdeeEstimate(input: WeightPlanInput): number | null {
+  return input.learnedTdee ?? input.formulaTdee ?? null;
+}
+
+/** A calorie target that already is (within 100 kcal of, or above) the maintenance estimate has nothing to step toward. */
+function budgetIsMaintenance(input: WeightPlanInput): boolean {
+  const tdee = tdeeEstimate(input);
+  return input.targetKcal != null && tdee != null && input.targetKcal >= tdee - MAINTENANCE_BUDGET_MARGIN_KCAL;
+}
+
+/**
+ * The concrete step toward maintenance (wave 22w): "add ~150-200 kcal a day (to ~2,150-2,200 kcal) and watch the weekly average for 2
+ * weeks". From the budget, capped at the maintenance estimate when there is one; with no budget only the amounts are named.
+ * `kcalTarget` is the first notch (budget + 150). Null when the budget already is at or past the estimate.
+ */
+function maintenanceStep(input: WeightPlanInput): { text: string; kcalTarget: number | null } | null {
+  const watch = 'and watch the weekly average for 2 weeks';
+  const budget = input.targetKcal != null && input.targetKcal > 0 ? input.targetKcal : null;
+  if (budget == null) return { text: `add ~${fmtKcal(MAINTENANCE_STEP_LO_KCAL)}–${kcalText(MAINTENANCE_STEP_HI_KCAL)} a day ${watch}`, kcalTarget: null };
+  const tdee = tdeeEstimate(input);
+  let hi = budget + MAINTENANCE_STEP_HI_KCAL;
+  let lo = budget + MAINTENANCE_STEP_LO_KCAL;
+  if (tdee != null) {
+    hi = Math.min(hi, roundTo(tdee, TRIM_ROUND_KCAL));
+    lo = Math.min(lo, hi);
+  }
+  if (hi <= budget) return null;
+  const amount = lo === hi ? kcalText(hi - budget) : `${fmtKcal(lo - budget)}–${kcalText(hi - budget)}`;
+  const landing = lo === hi ? kcalText(hi) : `${fmtKcal(lo)}–${kcalText(hi)}`;
+  return { text: `add ~${amount} a day (to ~${landing}) ${watch}`, kcalTarget: lo };
+}
+
 /** The plan for a week in which the target is reached: the CTA for its first days, then maintenance. */
 function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPlan {
   const { input, days } = c;
@@ -1135,15 +1179,24 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
   const base: WeightWeekPlan = { ...blank, call: 'none', verdict: 'reached', pace, tooFast };
   if (asking) {
     // A calorie target that already is maintenance has nothing to "switch" to: keep it there (the review says the same).
-    const atMaintenance = input.targetKcal != null && input.formulaTdee != null && input.targetKcal >= input.formulaTdee - MAINTENANCE_BUDGET_MARGIN_KCAL;
-    if (atMaintenance) {
+    if (budgetIsMaintenance(input)) {
       return {
         ...base,
         state: 'reached',
         action: { kind: 'hold', text: 'Your calorie target is already at maintenance — keep it there and the weight should hold.', kcalTarget: input.targetKcal as number },
       };
     }
-    return { ...base, state: 'reached', action: { kind: 'next_target', text: 'Set a new target or switch to maintenance' } };
+    // Switching to maintenance is a number: the step from the budget (the TDEE estimate caps it) and how long to watch.
+    const step = maintenanceStep(input);
+    return {
+      ...base,
+      state: 'reached',
+      action: {
+        kind: 'next_target',
+        text: step != null ? `Set a new target or switch to maintenance — ${step.text}` : 'Set a new target or switch to maintenance',
+        ...(step?.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
+      },
+    };
   }
 
   // Maintenance: the weekly average has held within a kilo for 2+ weeks, on logged intake — make that the target.
@@ -1173,12 +1226,39 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
         : { kind: 'maintenance_target', text: `You've held ${heldText} on ~${kcalText(held.kcal)} — make that your maintenance target`, kcalTarget: held.kcal },
     };
   }
+  // No held intake to name yet. The watch is two-sided: a weekly average 1 kg above OR below the target is the cue.
+  const cue = `${planWeightText(input, HOLDING_NEAR_TARGET_KG)} above or below your target`;
+  if (budgetIsMaintenance(input)) {
+    return {
+      ...base,
+      state: 'maintenance',
+      action: {
+        kind: 'hold',
+        text: `Your calorie target is already at maintenance — keep it there and watch the weekly average; a drift of ${cue} is your cue to act.`,
+        kcalTarget: input.targetKcal as number,
+      },
+    };
+  }
+  // Still on the deficit budget for the first weeks of maintenance (counted on the week's Monday, so the plan is one thing all week).
+  const sinceMonday = since != null ? dayNumber(c.weekStart) - dayNumber(since) : null;
+  const step = sinceMonday != null && sinceMonday > MAINTENANCE_STEP_DAYS ? null : maintenanceStep(input);
+  if (step != null) {
+    return {
+      ...base,
+      state: 'maintenance',
+      action: {
+        kind: 'maintenance_target',
+        text: `Target reached — ${step.text}; a drift of ${cue} is your cue to act`,
+        ...(step.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
+      },
+    };
+  }
   return {
     ...base,
     state: 'maintenance',
     action: {
       kind: 'hold',
-      text: `Keep weighing in a few mornings a week; if your average drifts ${planWeightText(input, HOLDING_NEAR_TARGET_KG)} above your target, that is your cue to act.`,
+      text: `Keep weighing in a few mornings a week; if your average drifts ${cue}, that is your cue to act.`,
     },
   };
 }
