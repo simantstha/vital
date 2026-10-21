@@ -339,9 +339,12 @@ test('held for 2+ weeks on logged intake, the weight names its own maintenance t
   const p = at(77);
   assert.equal(p.state, 'maintenance');
   assert.equal(p.action.kind, 'maintenance_target');
-  assert.equal(plainSpaces(p.action.text), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target");
+  // (The week before gave the budget-based step to ~2,150: a different figure says it replaces it.)
+  assert.equal(plainSpaces(p.action.text), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target (it replaces last week's step to ~2,150 kcal)");
   assert.equal(p.action.kcalTarget, 2050);
   assert.equal(isInstruction(p.action), true);
+  // A week later last week's plan was already the held one: nothing to replace.
+  assert.equal(plainSpaces(at(84).action.text), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target");
   // Not before two weeks have been held (the step toward maintenance is the plan's action until then)...
   assert.doesNotMatch(at(70).action.text, /You've held/);
   // ...nor on fewer than 8 logged days...

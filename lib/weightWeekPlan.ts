@@ -847,6 +847,17 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
  */
 function saidBackFromTrim(input: WeightPlanInput, plan: WeightWeekPlan): WeightWeekPlan {
   const a = plan.action;
+  // The user's own held intake names the maintenance target after a week that gave the budget-based step: a different figure says it replaces
+  // it ("add ~150-200 kcal (to ~2,150-2,200)" and then, in silence, "make ~2,050 your maintenance target" is whiplash).
+  if (plan.state === 'maintenance' && a.kcalTarget != null && a.kind === 'maintenance_target' && a.text.startsWith("You've held")) {
+    const was = makeWeekPlan({ ...input, todayKey: addDays(plan.weekStart, -1) })?.action;
+    const step = was != null && (was.kind === 'maintenance_target' || was.kind === 'next_target' || was.kind === 'ease_to_maintenance')
+      && was.kcalTarget != null && !was.text.startsWith("You've held");
+    if (step && was.kcalTarget != null && Math.abs(a.kcalTarget - was.kcalTarget) >= 100) {
+      return { ...plan, action: { ...a, text: `${a.text} (it replaces last week's step to ~${kcalText(was.kcalTarget)})` } };
+    }
+    return plan;
+  }
   if ((plan.state !== 'plateau' && plan.state !== 'pace') || a.kcalTarget == null || a.kind === 'trim') return plan;
   const previous = makeWeekPlan({ ...input, todayKey: addDays(plan.weekStart, -1), reached: false, reachedAt: null });
   const was = previous?.action;

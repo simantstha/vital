@@ -1025,6 +1025,23 @@ invariant(WEIGHT, 'a weight-loss review never labels its weight change "smoothed
   return out;
 });
 
+// P2-6 (follow-up): inside the reached / maintenance weeks a calorie figure that changes by 100+ kcal from one Monday to the next says so
+// ("it replaces last week's ~2,150 kcal step"): "add to ~2,150-2,200" and then "make ~2,050 your maintenance target" in silence is whiplash.
+invariant(WEIGHT, "a calorie figure that moves 100+ kcal between two reached / maintenance Mondays says it replaces last week's (P2-6)", snaps => {
+  const out: Violation[] = [];
+  let prev: { snap: DaySnapshot; kcal: number } | null = null;
+  for (const snap of snaps) {
+    if (snap.weekday !== 'Mon') continue;
+    const plan = snap.card?.weightRead?.plan;
+    const kcal = plan != null && (plan.state === 'reached' || plan.state === 'maintenance') ? plan.action.kcalTarget ?? null : null;
+    if (prev != null && kcal != null && plan != null && Math.abs(kcal - prev.kcal) >= 100 && !/replaces|instead of|last week/i.test(plain(plan.action.text))) {
+      out.push({ snap, detail: `Mon ${prev.snap.date} ${prev.kcal} kcal -> Mon ${snap.date} ${kcal} kcal without saying so: "${visible(plan.action.text)}"` });
+    }
+    prev = kcal != null ? { snap, kcal } : null;
+  }
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {
