@@ -776,6 +776,27 @@ invariant(WEIGHT, 'easing toward maintenance and a reached goal\'s first 3 weeks
   return out;
 });
 
+// P2-2: a plateau message does not hold while the scale falls. "Moving again" is an event that can enter inside the week: once the week's
+// average (3+ weigh-ins) is a full tolerance (0.2 kg) under the plateau's, the plateau is over. (A smaller gap is inside the tolerance that
+// defines "flat", so it is still a flat week.)
+invariant(WEIGHT, "a plateau is not announced once this week's average is a tolerance under the plateau's (P2-2)", (snaps, name) => {
+  const out: Violation[] = [];
+  let underTolerance = 0;
+  for (const snap of snaps) {
+    const read = snap.card?.weightRead;
+    const plan = read?.plan;
+    if (plan == null || plan.plateauMeanKg == null || read?.weekMeanKg == null || (read.state !== 'plateau' && read.state !== 'moving_again')) continue;
+    const gap = Math.round((plan.plateauMeanKg - read.weekMeanKg) * 10) / 10;
+    if (gap < 0.2 - 1e-9) continue;
+    underTolerance++;
+    if (read.state === 'plateau') {
+      out.push({ snap, detail: `plan state plateau (mean ${plan.plateauMeanKg}) while the weekly average is ${read.weekMeanKg}, ${gap} kg lower: "${visible(snap.card?.headline ?? '')}" / "${visible(snap.opener?.required ?? '')}"` });
+    }
+  }
+  assert.ok(underTolerance > 0, `${name}: the weekly average never fell a tolerance under a plateau, so this invariant checked nothing`);
+  return out;
+});
+
 // P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
 // Compared on each return day with the verdict of the last day before the gap.
 invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {

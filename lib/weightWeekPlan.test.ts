@@ -516,3 +516,20 @@ test('P2-1: the first weigh-in back is a welcome back that keeps the colour from
   assert.equal(slowReturn.state, 'returning');
   assert.ok(slowReturn.verdict === 'progressing' || slowReturn.verdict === 'holding', slowReturn.verdict);
 });
+
+test('P2-2: "moving again" is an event inside the week - the plateau message does not hold while the weekly average falls', () => {
+  // Flat at 88.5 kg to day 58 (a plateau by Monday 56), then 0.2 kg a day.
+  const fallsMidWeek = readings(range(0, 100), n => (n < 35 ? 92 - 0.1 * n : n < 59 ? 88.5 : 88.5 - 0.2 * (n - 58)) + wobble(n));
+  const week = range(56, 62).map(n => planAt(fallsMidWeek, n));
+  assert.deepEqual(week.map(p => p.state), ['plateau', 'plateau', 'plateau', 'plateau', 'plateau', 'plateau', 'moving_again']);
+  // The week's average (3+ weigh-ins) is a full tolerance under the plateau's on day 62, not before.
+  const moving = week[6];
+  assert.equal(moving.verdict, 'progressing');
+  assert.equal(moving.action.text, 'Keep doing what restarted it');
+  assert.ok(moving.plateauMeanKg != null && Math.abs(moving.plateauMeanKg - 88.5) < 0.2);
+  assert.equal(moving.asOf, D(62), 'made as of the day it entered');
+  // It enters once: the next Monday is the same plan.
+  assert.equal(decision(planAt(fallsMidWeek, 63)), decision(moving));
+  // A scale that only wobbles inside the tolerance never ends the plateau mid-week.
+  assert.equal(planAt(PLATEAU, 62).state, 'plateau');
+});

@@ -653,7 +653,7 @@ function plateauCauseFor(c: Ctx, asOf: string): WeightPlateauCause {
  * A flat fortnight as of day `d` (wave 22w): the two 7-day raw means up to it (3+ weigh-ins each) are within PLATEAU_TOLERANCE_KG, and a
  * loss pace inside the safe band was confirmed FLAT_FORTNIGHT_DAYS before. Returns the newest week's mean; null when it is not one.
  */
-function flatFortnightAt(c: Ctx, d: string): { weeklyMeanKg: number } | null {
+function flatFortnightAt(c: Ctx, d: string): { weeklyMeanKg: number; olderMeanKg: number } | null {
   const known = through(c.days, d);
   const w2 = meanOver(known, d, 7);
   const w1 = meanOver(known, addDays(d, -7), 7);
@@ -664,7 +664,17 @@ function flatFortnightAt(c: Ctx, d: string): { weeklyMeanKg: number } | null {
   const then = evaluateAt(c.read, earlier, earlier[earlier.length - 1].day, false).read;
   const pace = then.pace;
   if (then.state !== 'confirmed' || pace == null || pace.kgPerWeek >= 0 || Math.abs(pace.pctPerWeek) < FAT_LOSS_MIN_PCT) return null;
-  return { weeklyMeanKg: w2.meanKg };
+  return { weeklyMeanKg: w2.meanKg, olderMeanKg: w1.meanKg };
+}
+
+/**
+ * The weight a plateau (three flat weeks) or a flat fortnight held at as of day `d`, or null when there is none: the mean of its OLDER
+ * weeks, so a plateau whose newest week has started to fall is still measured against where it held, not against the falling week.
+ */
+function plateauHeldKg(c: Ctx, d: string): number | null {
+  const plateau = rawPlateau(through(c.days, d), d, ageAt(c.read.startDay, d));
+  if (plateau != null) return (plateau.meansKg[0] + plateau.meansKg[1]) / 2;
+  return flatFortnightAt(c, d)?.olderMeanKg ?? null;
 }
 
 /** True when the user's food log has at least LOGGING_MIN_DAYS logged days in the 3 weeks up to the plan's Sunday: a kcal trim can be checked. */
@@ -876,12 +886,30 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     const pace = bridgedPace(known, a);
     return pace != null && pace.kgPerWeek < 0 && tooFastLoss(known, a, { settledFrom });
   };
+  // "Moving again" entering (wave 22w): the plan as of `a` is a plateau (or a flat fortnight) and the 7-day mean up to `d` (3+ weigh-ins)
+  // is a full tolerance under where it held. The scale falling inside the week ends the plateau message in the week, not the Monday after.
+  const movedFrom = (a: string, d: string): number | null => {
+    const at = lastDayThrough(a);
+    if (at == null) return null;
+    const held = plateauHeldKg(c, at);
+    if (held == null) return null;
+    const now = meanOver(through(days, d), d, 7);
+    return now != null && now.n >= WEEK_MEAN_MIN_WEIGH_INS && now.meanKg <= held - PLATEAU_TOLERANCE_KG ? held : null;
+  };
   // The plan reads the weigh-ins through the Sunday — and is re-made as of the day one of the week's events happens:
-  // the welcome back ends (3 weigh-ins are back), the first pace becomes possible, "too fast" enters.
+  // the welcome back ends (3 weigh-ins are back), the first pace becomes possible, "too fast" enters, the plateau ends.
   let asOf = base;
   let prevDay = base;
+  let plateauEndedFrom: number | null = null; // the plateau mean the plan as of `asOf` moved away from (set only by that event)
   for (const d of scan) {
-    if ((returningAt(prevDay) && !returningAt(d)) || (lacksPace(asOf) && !lacksPace(d)) || (!tooFastAt(asOf) && tooFastAt(d))) asOf = d;
+    const moved = movedFrom(asOf, d);
+    if ((returningAt(prevDay) && !returningAt(d)) || (lacksPace(asOf) && !lacksPace(d)) || (!tooFastAt(asOf) && tooFastAt(d))) {
+      asOf = d;
+      plateauEndedFrom = null;
+    } else if (moved != null && movedFrom(asOf, prevDay) == null) {
+      asOf = d;
+      plateauEndedFrom = moved;
+    }
     prevDay = d;
   }
 
@@ -974,10 +1002,20 @@ function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
 
   // Moving again: a plateau ended in the last 14 days and the weekly average is falling again. The 21-day line still
   // covers the flat weeks, so it would call this "behind"; it is not read until the plateau is two weeks behind.
+  if (plateauEndedFrom != null) {
+    // It entered inside the week (the event above): the plan is made as of that day, against the mean the plateau held at.
+    return {
+      ...blank,
+      state: 'moving_again',
+      verdict: 'progressing',
+      action: { kind: 'keep_what_worked', text: 'Keep doing what restarted it' },
+      plateauMeanKg: round1(plateauEndedFrom),
+    };
+  }
   for (let back = 1; back <= MOVING_AGAIN_DAYS; back++) {
     const d = addDays(asOf, -back);
     // A plateau, or a flat fortnight (wave 22w): either one ending and the weekly average falling again is "moving again".
-    const heldKg = rawPlateau(through(days, d), d, ageAt(startDay, d))?.weeklyMeanKg ?? flatFortnightAt(c, d)?.weeklyMeanKg ?? null;
+    const heldKg = plateauHeldKg(c, d);
     if (heldKg == null) continue;
     const now = meanOver(known, asOf, 7);
     if (now != null && now.n >= WEEK_MEAN_MIN_WEIGH_INS && now.meanKg <= heldKg - PLATEAU_TOLERANCE_KG) {
