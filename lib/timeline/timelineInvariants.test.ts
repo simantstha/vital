@@ -1300,3 +1300,25 @@ invariant(RUNNERS, 'the "raise the goal to ~36 km" cap note is never shown in a 
   assert.ok(shown > 0 || name === 'runner_no_race' || name === 'runner_comeback_spike' || name === 'runner_on_plan_imperial', `${name}: the cap note never appeared, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P2.6: a warning before the spike ─────────────────────────────
+
+const BUILD_KINDS = new Set(['build', 'maintain', 'hold', 'rebuild']);
+
+invariant(RUNNERS, 'a build, cutback or hold week at 70% of its target or more (and not yet at it) says "keep the rest to one short easy run" before the spike, not "on plan"', (snaps, name) => {
+  const out: Violation[] = [];
+  let near = 0;
+  for (const snap of snaps) {
+    const d = snap.card?.distance;
+    if (!d?.plan || d.thisWeekKm == null || !BUILD_KINDS.has(d.plan.kind) || weekdayOf(snap.date) === 'Sun') continue;
+    const unit = /\bmi\b/.test(plain(d.text)) ? 'mi' : 'km';
+    const done = inDisplayUnit(d.thisWeekKm, unit);
+    const target = inDisplayUnit(d.stepTargetKm, unit);
+    if (!(done >= 0.7 * target && done < target)) continue;
+    near++;
+    const said = cardTexts(snap).some(t => t.where.startsWith('card.reasons') && /keep the rest to one short easy run/.test(plain(t.text)));
+    if (!said) out.push({ snap, detail: `${done} of ~${target} ${unit} (${Math.round((done / target) * 100)}%) with no remaining-budget line: "${visible(snap.card?.headline ?? '')}"` });
+  }
+  if (name === 'runner_messy' || name === 'runner_no_race') assert.ok(near > 0, `${name}: no build day sat at 70-99% of its target, so this invariant checked nothing`);
+  return out;
+});

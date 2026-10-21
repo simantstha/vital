@@ -2758,6 +2758,9 @@ function changeClause(changePct: number | null): string {
   return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}%)`;
 }
 
+/** From this share of the week's target (not yet run) the card says what is left: "keep the rest to one short easy run". */
+const STEP_NEAR_FRACTION = 0.7;
+
 /** Last week more than this share over its step is "above the step" (still under the spike line), not "on plan". */
 const ABOVE_STEP_FRACTION = 1.15;
 
@@ -3075,8 +3078,18 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       tone: 'watch',
     };
   }
-  /** The week's lead reason: the step-done warning when it applies (the plan line then follows), else the plan line. */
-  const planBody = (): GoalProgressReason[] => (stepDone != null ? body(stepDone, [planLine]) : body(planLine));
+  // Wave 22e: before the spike, not after it. From 70% of the week's target, with the target not yet run, the card says what is left
+  // ("18.7 of ~20 km — keep the rest to one short easy run"), the way the taper's remaining-budget line does.
+  let stepNear: GoalProgressReason | null = null;
+  if (stepDone == null && ['build', 'maintain', 'hold', 'rebuild'].includes(plan.kind) && doneKm > 0
+    && done >= distanceNum(input, target) * STEP_NEAR_FRACTION && done < distanceNum(input, target) && weekdayOf(input.todayKey) !== 0) {
+    const stepped = target < plan.goalKm - 1e-9;
+    stepNear = { kind: 'volume', text: `${done} of ${plan.upTo ? 'up to ~' : stepped ? '~' : ''}${fmt(target)} — keep the rest to one short easy run`, tone: 'neutral' };
+  }
+  /** The week's lead warning: the step-done one when it applies, else the near-the-step one; the plan line then follows. */
+  const stepWarn = stepDone ?? stepNear;
+  /** The week's lead reason: the warning when there is one (the plan line then follows), else the plan line. */
+  const planBody = (): GoalProgressReason[] => (stepWarn != null ? body(stepWarn, [planLine]) : body(planLine));
 
   const short = raceWord(input.race?.date ? raceLabel(input.race.distanceKm ?? null, input.unitSystem) : '');
   switch (plan.kind) {
@@ -3091,24 +3104,24 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       // A cutback week that ran more than 10% over its lowered number: no +10% build on the skip - hold at the week it replaced.
       if (hold.skippedCutback === true) {
         const skippedInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was above the ~${fmt(hold.spikeStepKm)} cutback — the week it replaced stays the bar`, tone: 'watch' };
-        return finish('holding', `You skipped the cutback — hold ~${fmt(target)} this week`, stepDone != null
-          ? body(stepDone, [skippedInfo, planLine])
+        return finish('holding', `You skipped the cutback — hold ~${fmt(target)} this week`, stepWarn != null
+          ? body(stepWarn, [skippedInfo, planLine])
           : body(skippedInfo, [planLine]));
       }
       // A comeback week far past its "up to" ceiling: this week stays AT that ceiling and does not build on the jump.
       if (hold.ceiling === true) {
         const ceilingInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was well over its ~${fmt(hold.spikeStepKm)} ceiling — don't build on the jump`, tone: 'watch' };
-        return finish('holding', `Well over the ceiling last week — stay at ~${fmt(target)} this week`, stepDone != null
-          ? body(stepDone, [ceilingInfo, planLine])
+        return finish('holding', `Well over the ceiling last week — stay at ~${fmt(target)} this week`, stepWarn != null
+          ? body(stepWarn, [ceilingInfo, planLine])
           : body(ceilingInfo, [planLine]));
       }
       const jumpInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was over the safe step of ~${fmt(hold.spikeStepKm)}`, tone: 'watch' };
-      return finish('holding', `Over the safe step last week — hold ~${fmt(target)} this week`, stepDone != null
-        ? body(stepDone, [jumpInfo, planLine])
+      return finish('holding', `Over the safe step last week — hold ~${fmt(target)} this week`, stepWarn != null
+        ? body(stepWarn, [jumpInfo, planLine])
         : body(jumpInfo, [planLine]));
     }
     case 'rebuild':
-      return finish('building', `Rebuilding after your ${short} — ${done} of ~${fmt(target)}`, body(planLine));
+      return finish('building', `Rebuilding after your ${short} — ${done} of ~${fmt(target)}`, stepWarn != null ? body(stepWarn, [planLine]) : body(planLine));
     case 'build':
     case 'maintain':
     default:
@@ -3134,7 +3147,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       const headline = race != null
         ? `On track for the ${raceWord(race.label)} — ${lead}${tail}`
         : `On track — ${lead}${tail}`;
-      return finish('on_track', headline, withRace(enduranceReasons(stepDone ?? planLine, [stepDone ? planLine : null, shareNote, long ? null : lrReason, sessions, ...vitals])));
+      return finish('on_track', headline, withRace(enduranceReasons(stepWarn ?? planLine, [stepWarn ? planLine : null, shareNote, long ? null : lrReason, sessions, ...vitals])));
     }
     if (level === 'tough') return finish('behind', `Behind — ${fmt(lastKm)} last week of ${goalText}`, planBody());
     return finish('holding', `Holding steady — ${fmt(lastKm)} last week of ${goalText}`, planBody());

@@ -182,3 +182,20 @@ test('race day shows the race, not the week: "Race done — 21.1 km", no "N of ~
   assert.equal(morning.distance!.text, 'Race day');
   assert.equal(morning.distance!.thisWeekKm, null);
 });
+
+// ── P2.6: a warning before the spike ───────────────────────────────────────
+
+test('from 70% of the week\'s target, not yet run, the card says "keep the rest to one short easy run" (22e)', () => {
+  // A cutback week (~20 km, 2026-10-19) read on its Thursday with 18.7 km in: the next two runs are where it becomes a 25 km week.
+  const thu = '2026-10-22';
+  const card = computeGoalProgress(input(weeks(thu, [[[1, 9.4], [3, 9.3]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
+  assert.equal(card.distance!.plan?.cutback, true);
+  assert.equal(card.distance!.text, '18.7 of ~20 km running this week · goal 30 km');
+  assert.equal(card.reasons[0].text, '18.7 of ~20 km — keep the rest to one short easy run');
+  assert.equal(card.reasons[0].tone, 'neutral');
+  // Below 70% there is nothing to say yet; at the target the existing "step is done" warning speaks.
+  const early = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
+  assert.ok(!early.reasons.some(r => /one short easy run|step is done|goal is done/.test(r.text)), texts(early));
+  const done = computeGoalProgress(input(weeks(thu, [[[1, 10], [3, 10.5]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
+  assert.match(done.reasons[0].text, /the week's step is done/);
+});
