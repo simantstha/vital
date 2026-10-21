@@ -39,9 +39,12 @@ import { withUnit } from './displayText';
 import { weekStartKeyForDay } from './localDay';
 import type { WeightTrendDay } from './weightTrend';
 import {
+  ON_PACE_MARGIN_DAYS,
   PACE_RECHECK_DAYS,
   PACE_SETTLE_DAYS,
+  PLATEAU_MIN_WEIGH_INS_PER_WEEK,
   PLATEAU_TOLERANCE_KG,
+  WEIGH_IN_GAP_DAYS,
   addDays,
   bridgedPace,
   dayNumber,
@@ -78,15 +81,28 @@ export const FAR_BEHIND_DAYS = 56;
 export const MOVING_AGAIN_DAYS = 14;
 /** A reached weight within this many kg of the target is "holding" (goalProgress HOLDING_NEAR_TARGET_KG). */
 export const HOLDING_NEAR_TARGET_KG = 1;
-/** "Set a new target or switch to maintenance" is offered only this many days after the target was reached. */
+/**
+ * "Set a new target or switch to maintenance" is asked in every plan week whose Monday is less than this many days after the target was
+ * reached (the week it was reached in included): it ends on a Sunday night, never on a day in the middle of a week (wave 22w).
+ */
 export const REACHED_ASK_DAYS = 7;
+/** "Nearly there" is called on the week's Monday, not only once "too fast" enters: within a kilo of the target while losing this % of bodyweight a week or more. */
+export const NEARLY_THERE_MIN_PCT_PER_WEEK = 0.75;
 
 /** A suggested trim is rounded to this many kcal a day (and never under it)... */
 const TRIM_ROUND_KCAL = 50;
-/** ...and one weekly step is never more than this. */
+/** ...one weekly step is never more than this... */
 export const TRIM_MAX_KCAL_PER_STEP = 200;
-/** kcal per kg of body weight lost, the usual rule of thumb. */
-const KCAL_PER_KG = 7700;
+/**
+ * ...and it is ONE size: the behind pace's trim and a plateau's trim are both this step, so a week that says "trim ~200" is never
+ * followed by one that says "trim ~150" (wave 22w). Only a budget near its floor shrinks it.
+ */
+export const TRIM_STEP_KCAL = 150;
+/** A flat fortnight: two flat 7-day means after a loss pace that was confirmed this many days before (wave 22w). */
+export const FLAT_FORTNIGHT_DAYS = 14;
+/** A user "logs food" when this many days in the 3 weeks up to the plan's Sunday carry a logged intake; below it a kcal trim cannot be checked. */
+export const LOGGING_MIN_DAYS = 3;
+const LOGGING_LOOKBACK_DAYS = 21;
 /** The calorie floor when the budget carries none: men, women, and when the profile says neither. */
 const FLOOR_KCAL_MALE = 1500;
 const FLOOR_KCAL_FEMALE = 1200;
@@ -112,6 +128,11 @@ export const MAINTENANCE_MIN_LOGGED_DAYS = 8;
 const MAINTENANCE_ALREADY_KCAL = 25;
 /** A calorie target within this many kcal of the formula maintenance estimate (or above it) is already a maintenance budget. */
 const MAINTENANCE_BUDGET_MARGIN_KCAL = 100;
+/** The step toward maintenance (wave 22w): add this many kcal a day to the budget (capped at the TDEE estimate), then watch the weekly average. */
+export const MAINTENANCE_STEP_LO_KCAL = 150;
+export const MAINTENANCE_STEP_HI_KCAL = 200;
+/** The step is the plan's instruction until this many days after the target was reached (counted on the week's Monday): add, watch 2 weeks, once more. */
+export const MAINTENANCE_STEP_DAYS = 21;
 
 const KG_TO_LB = 2.20462;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -134,7 +155,7 @@ export type WeightPlanActionKind =
   | 'move_date'
   /** Losing too fast: eat up to the full calorie target. */
   | 'eat_to_target'
-  /** Within a kilo of the target and still losing fast: start easing toward maintenance. */
+  /** Within a kilo of the target and still losing fast: start easing toward maintenance (with the step: "add ~150-200 kcal a day"). */
   | 'ease_to_maintenance'
   | 'plateau_water'
   | 'plateau_intake'
@@ -143,7 +164,7 @@ export type WeightPlanActionKind =
   | 'keep_what_worked'
   /** The target was just reached: set a new one or switch to maintenance. */
   | 'next_target'
-  /** Held the weight on real intake: make that the maintenance target. */
+  /** Held the weight on real intake: make that the maintenance target - or, before there is intake to read, the step toward it (wave 22w). */
   | 'maintenance_target'
   /** Nothing to do: hold. */
   | 'hold';
@@ -164,6 +185,8 @@ export interface WeightPlateauCause {
   namedAt: string;
   /** Logged days the judgement rests on (0 for water). */
   loggedDays: number;
+  /** Days of logs the judgement covers: PLATEAU_SPAN_DAYS for a plateau, FLAT_FORTNIGHT_DAYS for a flat fortnight (additive, wave 22w). */
+  spanDays?: number;
   /** Mean of the logged days, kcal; null for water. */
   avgKcal: number | null;
   targetKcal: number | null;
@@ -196,6 +219,11 @@ export interface WeightWeekPlan {
   plateauCause: WeightPlateauCause | null;
   /** The pace the week states (kg/wk): null for an early read, a return, "moving again". */
   pace: WeightPlanPace | null;
+  /**
+   * Additive (wave 22w). "On pace" rests on two paces that land on either side of the target date, and the pace above alone would land more than a week
+   * off it: the pace a week earlier, so the card can show the honest range ("Down 0.37-0.58 kg/wk") instead of one rate that argues with "on track".
+   */
+  earlierPace: WeightPlanPace | null;
   /** A pace that a pace a week earlier confirms (the date may be stated). */
   confirmed: boolean;
   /** The goal is younger than 3 weeks as of `asOf`: only an early read. */
@@ -203,7 +231,7 @@ export interface WeightWeekPlan {
   /** On pace for the target date (false: behind or the wrong way); null without a target date. */
   onPace: boolean | null;
   tooFast: boolean;
-  /** Too fast, and within a kilo of the target. */
+  /** Within a kilo of the target while losing fast (too fast, or 0.75%+ a week): start easing toward maintenance. Called on the Monday. */
   nearlyThere: boolean;
   /** No target date: both paces are under the safe band's floor. */
   slow: boolean;
@@ -215,10 +243,27 @@ export interface WeightWeekPlan {
   projectedEta: string | null;
   /** Plateau / moving again: the weekly average the plateau held at (rounded to 0.1 kg once, here, as every surface prints it). */
   plateauMeanKg: number | null;
+  /**
+   * Plateau only (additive, wave 22w): how many flat weekly means the state rests on: 3 for a plateau, 2 for a flat fortnight (two flat
+   * weeks after a confirmed loss: a calm hold, not "behind"). Null in every other state.
+   */
+  flatWeeks: number | null;
   /** Maintenance: the weekly average it held at. */
   heldKg: number | null;
   /** The first week a pace is read: the one place the smoothed trend gets its one-line explanation. */
   firstPaceWeek: boolean;
+  /**
+   * Additive (wave 22w). The plan was re-made INSIDE its calendar week by an event (target reached, welcome back, "too fast" entering,
+   * the first pace, the plateau ending, closing in on the target): the day it happened and why, in a few words ("losing over 1%/wk").
+   * The coach lines say "updated Tue Jun 9: ..." instead of "the same all week". Null for a plan decided on its Monday.
+   */
+  updated: { day: string; why: string } | null;
+  /**
+   * Additive (wave 22w). The week began with no weigh-in for 7+ days: the plan is the one from the day of that last weigh-in (its call
+   * and colour kept - a plan is never remade from stale data), with the neutral "no weigh-in since..." action. The last weigh-in's day;
+   * null when the week began with fresh data.
+   */
+  staleSince: string | null;
 }
 
 export interface WeightPlanIntakeDay {
@@ -249,6 +294,8 @@ export interface WeightPlanInput {
   floorKcal: number | null;
   /** The formula maintenance estimate (kcal); a target at or above it (within 100) is already a maintenance budget. */
   formulaTdee?: number | null;
+  /** The maintenance learned from the user's own logs (kcal), passed only at medium / high confidence; preferred over the formula (wave 22w). */
+  learnedTdee?: number | null;
   /** Biological sex from the profile; only used when the budget carries no floor. */
   sex?: string | null;
   weeklySessions: number | null;
@@ -296,12 +343,6 @@ function fmtDate(day: string, todayKey: string): string {
 /** "Mon, Mar 30" — the day the next plan lands on. */
 export function fmtWeekday(day: string, todayKey: string): string {
   return `${WEEKDAYS[dowOf(day)]}, ${fmtDate(day, todayKey)}`;
-}
-
-/** "Oct", or "Jan 2027" when the year differs: the month a projection lands in. */
-function fmtMonth(day: string, todayKey: string): string {
-  const [y, m] = day.split('-').map(Number);
-  return y === Number(todayKey.slice(0, 4)) ? MONTHS[m - 1] : `${MONTHS[m - 1]} ${y}`;
 }
 
 function isWeekend(day: string): boolean {
@@ -549,12 +590,14 @@ function judgeSpan(
   intake: ReadonlyArray<WeightPlanIntakeDay>,
   anchor: string,
   targetKcal: number | null,
+  spanDays = PLATEAU_SPAN_DAYS,
 ): WeightPlateauCause | null {
-  const logged = loggedInSpan(intake, addDays(anchor, -(PLATEAU_SPAN_DAYS - 1)), anchor);
-  if (logged.length < PLATEAU_MIN_LOGGED_DAYS) return null;
+  const logged = loggedInSpan(intake, addDays(anchor, -(spanDays - 1)), anchor);
+  // A shorter span (the flat fortnight's 14 days) needs its share of the logged days.
+  if (logged.length < Math.ceil((PLATEAU_MIN_LOGGED_DAYS * spanDays) / PLATEAU_SPAN_DAYS)) return null;
   const mean = avg(logged.map(l => l.kcal));
   if (targetKcal != null && mean > targetKcal + PLATEAU_INTAKE_NEAR_KCAL) {
-    return { kind: 'intake', namedAt: anchor, loggedDays: logged.length, avgKcal: Math.round(mean), targetKcal };
+    return { kind: 'intake', namedAt: anchor, spanDays, loggedDays: logged.length, avgKcal: Math.round(mean), targetKcal };
   }
   const wkend = logged.filter(l => isWeekend(l.day)).map(l => l.kcal);
   const wkday = logged.filter(l => !isWeekend(l.day)).map(l => l.kcal);
@@ -563,12 +606,12 @@ function judgeSpan(
     const w = avg(wkday);
     if (e - w >= PLATEAU_WEEKEND_OVER_KCAL) {
       return {
-        kind: 'weekends', namedAt: anchor, loggedDays: logged.length, avgKcal: Math.round(mean), targetKcal,
+        kind: 'weekends', namedAt: anchor, spanDays, loggedDays: logged.length, avgKcal: Math.round(mean), targetKcal,
         weekendAvgKcal: Math.round(e), weekdayAvgKcal: Math.round(w),
       };
     }
   }
-  return { kind: 'water', namedAt: anchor, loggedDays: logged.length, avgKcal: Math.round(mean), targetKcal };
+  return { kind: 'water', namedAt: anchor, spanDays, loggedDays: logged.length, avgKcal: Math.round(mean), targetKcal };
 }
 
 // ── The plan ────────────────────────────────────────────────────────────────
@@ -577,6 +620,8 @@ interface Ctx {
   input: WeightPlanInput;
   days: WeightTrendDay[];
   weekStart: string;
+  /** The last day of weigh-ins the plan reads (set once the plan's events are settled). */
+  asOf: string;
   read: ReadCtx;
 }
 
@@ -621,45 +666,130 @@ function plateauCauseFor(c: Ctx, asOf: string): WeightPlateauCause {
   return { kind: 'water', namedAt: asOf, loggedDays: 0, avgKcal: null, targetKcal: c.input.targetKcal };
 }
 
+/**
+ * A flat fortnight as of day `d` (wave 22w): the two 7-day raw means up to it (3+ weigh-ins each) are within PLATEAU_TOLERANCE_KG, and a
+ * loss pace inside the safe band was confirmed FLAT_FORTNIGHT_DAYS before. Returns the newest week's mean; null when it is not one.
+ */
+function flatFortnightAt(c: Ctx, d: string): { weeklyMeanKg: number; olderMeanKg: number } | null {
+  const known = through(c.days, d);
+  const w2 = meanOver(known, d, 7);
+  const w1 = meanOver(known, addDays(d, -7), 7);
+  if (w1 == null || w2 == null || w1.n < PLATEAU_MIN_WEIGH_INS_PER_WEEK || w2.n < PLATEAU_MIN_WEIGH_INS_PER_WEEK) return null;
+  if (Math.abs(w2.meanKg - w1.meanKg) > PLATEAU_TOLERANCE_KG + 1e-9) return null;
+  const earlier = through(known, addDays(d, -FLAT_FORTNIGHT_DAYS));
+  if (earlier.length === 0) return null;
+  const then = evaluateAt(c.read, earlier, earlier[earlier.length - 1].day, false).read;
+  const pace = then.pace;
+  if (then.state !== 'confirmed' || pace == null || pace.kgPerWeek >= 0 || Math.abs(pace.pctPerWeek) < FAT_LOSS_MIN_PCT) return null;
+  return { weeklyMeanKg: w2.meanKg, olderMeanKg: w1.meanKg };
+}
+
+/**
+ * The weight a plateau (three flat weeks) or a flat fortnight held at as of day `d`, or null when there is none: the mean of its OLDER
+ * weeks, so a plateau whose newest week has started to fall is still measured against where it held, not against the falling week.
+ */
+function plateauHeldKg(c: Ctx, d: string): number | null {
+  const plateau = rawPlateau(through(c.days, d), d, ageAt(c.read.startDay, d));
+  if (plateau != null) return (plateau.meansKg[0] + plateau.meansKg[1]) / 2;
+  return flatFortnightAt(c, d)?.olderMeanKg ?? null;
+}
+
+/** True when the user's food log has at least LOGGING_MIN_DAYS logged days in the 3 weeks up to the plan's Sunday: a kcal trim can be checked. */
+function logsFood(c: Ctx): boolean {
+  return loggedInSpan(c.input.intakeDays, addDays(c.asOf, -(LOGGING_LOOKBACK_DAYS - 1)), c.asOf).length >= LOGGING_MIN_DAYS;
+}
+
+/** The one trim step in kcal a day (TRIM_STEP_KCAL, shrunk near the floor: 0 when the budget has no room under it). */
+function trimStepKcal(c: Ctx): number {
+  const { input } = c;
+  const budget = input.targetKcal != null && input.targetKcal > 0 ? input.targetKcal : null;
+  const floor = calorieFloorKcal(input.floorKcal, input.sex);
+  if (budget == null || budget - TRIM_STEP_KCAL >= floor) return TRIM_STEP_KCAL;
+  return Math.floor(Math.max(0, budget - floor) / TRIM_ROUND_KCAL) * TRIM_ROUND_KCAL;
+}
+
+/** The activity-or-logging step for someone who logs no food: what to do first when a kcal trim is not something they can check. */
+const NO_LOGS_STEP = 'add two 30-minute walks and log a few days so we can see where the calories go';
+
+/** The trim a plateau offers as its second step ("trim ~150 kcal a day"), else (no room under the floor, or no food log to check it against) the walks. */
+function plateauSecondStep(c: Ctx): string {
+  const step = logsFood(c) ? trimStepKcal(c) : 0;
+  return step >= TRIM_ROUND_KCAL ? `trim ~${kcalText(step)} a day` : 'add two 30-minute walks';
+}
+
 function plateauAction(c: Ctx, cause: WeightPlateauCause): WeightPlanAction {
   const { input } = c;
-  const kcal = input.targetKcal;
+  const kcal = input.targetKcal != null && input.targetKcal > 0 ? input.targetKcal : null;
   const sessions = input.weeklySessions;
-  const trim = `trim ~${kcalText(150)} a day`;
+  const second = plateauSecondStep(c);
   if (cause.kind === 'intake' && cause.avgKcal != null && cause.targetKcal != null) {
     return {
       kind: 'plateau_intake',
-      text: `Logged days averaged ~${kcalText(roundTo(cause.avgKcal, 10))} vs your ${kcalText(cause.targetKcal)} target — getting back to target is the first lever; if still flat 2 weeks after that, ${trim}`,
+      text: `Logged days averaged ~${kcalText(roundTo(cause.avgKcal, 10))} vs your ${kcalText(cause.targetKcal)} target — getting back to target is the first lever; if still flat 2 weeks after that, ${second}`,
+      kcalTarget: cause.targetKcal,
     };
   }
   if (cause.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
     const back = cause.targetKcal != null ? `bring the weekends back toward your ${kcalText(cause.targetKcal)} target` : 'bring the weekends back toward your weekdays';
     return {
       kind: 'plateau_weekends',
-      text: `Weekends averaged ~${kcalText(roundTo(cause.weekendAvgKcal, 50))} vs ${fmtKcal(roundTo(cause.weekdayAvgKcal, 50))} on weekdays — ${back} first; if still flat 2 weeks after that, ${trim}`,
+      text: `Weekends averaged ~${kcalText(roundTo(cause.weekendAvgKcal, 50))} vs ${fmtKcal(roundTo(cause.weekdayAvgKcal, 50))} on weekdays — ${back} first; if still flat 2 weeks after that, ${second}`,
+      ...(cause.targetKcal != null ? { kcalTarget: cause.targetKcal } : {}),
     };
   }
   const keep = [
-    kcal != null && kcal > 0 ? kcalText(kcal) : null,
+    kcal != null ? kcalText(kcal) : null,
     sessions != null && sessions > 0 ? `${sessions} ${plural(sessions, 'session')}` : null,
   ].filter((x): x is string => x != null);
+  // Someone who logs no food gets activity and logging first - there is no calorie figure they could check a trim against.
+  const then = logsFood(c) ? `${second}${second.startsWith('trim') ? ' or add two 30-minute walks' : ''}` : NO_LOGS_STEP;
   return {
     kind: 'plateau_water',
-    text: `Common and often water: keep ${keep.length > 0 ? keep.join(' and ') : 'your routine'}; if still flat in 2 weeks, ${trim} or add two 30-minute walks`,
+    text: `Common and often water: keep ${keep.length > 0 ? keep.join(' and ') : 'your routine'}; if still flat in 2 weeks, ${then}`,
+    ...(kcal != null ? { kcalTarget: kcal } : {}),
   };
 }
 
 /**
- * Behind pace: what the target date would take, said once for the week. The trim is
- * a weekly STEP — the gap between the pace needed and the pace now, in kcal, rounded to 50
- * and never more than 200 — and never takes the budget under the calorie floor.
+ * Two flat weeks after a confirmed loss: a calm hold, not "behind". The cause is judged over those two weeks' logs; there is no
+ * date and no trim - one more flat week makes it a plateau (plateauAction), and a week that moves again is "moving again".
+ */
+function fortnightAction(c: Ctx, cause: WeightPlateauCause): WeightPlanAction {
+  const { input } = c;
+  const kcal = input.targetKcal != null && input.targetKcal > 0 ? input.targetKcal : null;
+  if (cause.kind === 'intake' && cause.avgKcal != null && cause.targetKcal != null) {
+    return {
+      kind: 'plateau_intake',
+      text: `Logged days averaged ~${kcalText(roundTo(cause.avgKcal, 10))} vs your ${kcalText(cause.targetKcal)} target — getting back to target is the lever`,
+      kcalTarget: cause.targetKcal,
+    };
+  }
+  if (cause.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
+    const back = cause.targetKcal != null ? `back toward your ${kcalText(cause.targetKcal)} target` : 'back toward your weekdays';
+    return {
+      kind: 'plateau_weekends',
+      text: `Weekends averaged ~${kcalText(roundTo(cause.weekendAvgKcal, 50))} vs ${fmtKcal(roundTo(cause.weekdayAvgKcal, 50))} on weekdays — bring them ${back}`,
+      ...(cause.targetKcal != null ? { kcalTarget: cause.targetKcal } : {}),
+    };
+  }
+  return {
+    kind: 'plateau_water',
+    text: `Keep ${kcal != null ? kcalText(kcal) : 'your routine'}; we'll look again next Monday`,
+    ...(kcal != null ? { kcalTarget: kcal } : {}),
+  };
+}
+
+/**
+ * Behind pace: what the target date would take, said once for the week. The trim is the ONE step (TRIM_STEP_KCAL, never under the
+ * calorie floor), the same as a plateau's. It never names the month the pace projects to - that projection is a guess off a noisy
+ * line - only that the date has to move. A user who logs no food gets activity and logging first, not a trim they cannot check.
  */
 function behindAction(
   c: Ctx,
-  opts: { pace: WeightPace | null; toGoKg: number; bodyKg: number; far: boolean; projected: string | null },
+  opts: { pace: WeightPace | null; toGoKg: number; bodyKg: number; far: boolean },
 ): WeightPlanAction {
   const { input, weekStart } = c;
-  const { pace, toGoKg, bodyKg, far, projected } = opts;
+  const { pace, toGoKg, bodyKg, far } = opts;
   const targetDate = input.targetDate as string;
   const daysLeft = dayNumber(targetDate) - dayNumber(weekStart);
   const nowKgPerWeek = pace != null && pace.kgPerWeek < 0 ? -pace.kgPerWeek : 0;
@@ -667,23 +797,16 @@ function behindAction(
   const floor = calorieFloorKcal(input.floorKcal, input.sex);
   const date = fmtDate(targetDate, input.todayKey);
 
-  // The step: what closing the gap would take, one weekly notch of it.
   const neededKgPerWeek = daysLeft > 0 && toGoKg > 0 ? toGoKg / (daysLeft / 7) : null;
-  const wantedKcal = neededKgPerWeek != null && neededKgPerWeek > nowKgPerWeek
-    ? ((neededKgPerWeek - nowKgPerWeek) * KCAL_PER_KG) / 7
-    : TRIM_MAX_KCAL_PER_STEP;
-  let step = Math.min(TRIM_MAX_KCAL_PER_STEP, Math.max(TRIM_ROUND_KCAL, roundTo(wantedKcal, TRIM_ROUND_KCAL)));
-  // Never below the floor: a smaller step, or none.
-  if (budget != null && budget - step < floor) {
-    step = Math.floor(Math.max(0, budget - floor) / TRIM_ROUND_KCAL) * TRIM_ROUND_KCAL;
-  }
+  const logs = logsFood(c);
+  const step = logs ? trimStepKcal(c) : 0;
   const trimText = step >= TRIM_ROUND_KCAL ? `trim ~${kcalText(step)} a day${budget != null ? ` (to ~${kcalText(budget - step)})` : ''}` : null;
   const kcalTarget = trimText != null && budget != null ? budget - step : undefined;
 
   if (far) {
-    const month = projected != null ? ` to ~${fmtMonth(projected, input.todayKey)}` : '';
-    if (trimText != null) return { kind: 'trim', text: `Move the date${month} or ${trimText}`, kcalTarget };
-    return { kind: 'move_date', text: `Move the date${month} — your calories are already near the ${kcalText(floor)} floor` };
+    if (trimText != null) return { kind: 'trim', text: `Move the date or ${trimText}`, kcalTarget };
+    if (!logs) return { kind: 'move_date', text: `Move the date, or ${NO_LOGS_STEP}` };
+    return { kind: 'move_date', text: `Move the date — your calories are already near the ${kcalText(floor)} floor` };
   }
   if (daysLeft <= 0 || toGoKg <= 0 || neededKgPerWeek == null) {
     return { kind: 'move_date', text: `Your ${date} date has passed — move it to a date this pace can keep` };
@@ -697,6 +820,7 @@ function behindAction(
     return { kind: 'keep_going', text: 'Keep your routine — your pace is close to what the date needs' };
   }
   if (trimText == null) {
+    if (!logs) return { kind: 'move_date', text: `To make ${date} you'd need ${needed} — move the date, or ${NO_LOGS_STEP}` };
     return { kind: 'move_date', text: `To make ${date} you'd need ${needed} — that is more than your calories can safely give; move the date` };
   }
   return { kind: 'trim', text: `To make ${date} you'd need ${needed} — move the date or ${trimText}`, kcalTarget };
@@ -712,11 +836,71 @@ function paceOf(read: WeightLossRead): WeightPlanPace | null {
  * (see the file header). Null without a single weigh-in.
  */
 export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
+  const plan = makeWeekPlan(input);
+  return plan == null ? null : saidBackFromTrim(input, plan);
+}
+
+/**
+ * When this week's plan states a calorie level ABOVE the trim last week's plan asked for, it says so: "Go back to 2,000 kcal - last
+ * week's trim isn't needed". A calorie target never moves back up on the next Monday in silence (wave 22w). Last week's plan is the
+ * one made as of that week's Sunday (the plan the user was left with); it is read once, never recursively.
+ */
+function saidBackFromTrim(input: WeightPlanInput, plan: WeightWeekPlan): WeightWeekPlan {
+  const a = plan.action;
+  // The user's own held intake names the maintenance target after a week that gave the budget-based step: a different figure says it replaces
+  // it ("add ~150-200 kcal (to ~2,150-2,200)" and then, in silence, "make ~2,050 your maintenance target" is whiplash).
+  if (plan.state === 'maintenance' && a.kcalTarget != null && a.kind === 'maintenance_target' && a.text.startsWith("You've held")) {
+    const was = makeWeekPlan({ ...input, todayKey: addDays(plan.weekStart, -1) })?.action;
+    const step = was != null && (was.kind === 'maintenance_target' || was.kind === 'next_target' || was.kind === 'ease_to_maintenance')
+      && was.kcalTarget != null && !was.text.startsWith("You've held");
+    if (step && was.kcalTarget != null && Math.abs(a.kcalTarget - was.kcalTarget) >= 100) {
+      return { ...plan, action: { ...a, text: `${a.text} (it replaces last week's step to ~${kcalText(was.kcalTarget)})` } };
+    }
+    return plan;
+  }
+  if ((plan.state !== 'plateau' && plan.state !== 'pace') || a.kcalTarget == null || a.kind === 'trim') return plan;
+  const previous = makeWeekPlan({ ...input, todayKey: addDays(plan.weekStart, -1), reached: false, reachedAt: null });
+  const was = previous?.action;
+  if (was == null || was.kind !== 'trim' || was.kcalTarget == null || a.kcalTarget <= was.kcalTarget) return plan;
+  return { ...plan, action: { ...a, text: `Go back to ${kcalText(a.kcalTarget)} — last week's trim isn't needed. ${a.text}` } };
+}
+
+/**
+ * The verdict the card had on the last weigh-in day before a gap, when it was a good one (on track, ahead, progressing): a welcome back
+ * keeps its colour instead of downgrading it. Never "behind" or "too fast" - those are not called again until 3 weigh-ins are back.
+ */
+function verdictBeforeGap(input: WeightPlanInput, ret: WeighInReturn | null): GoalVerdict | null {
+  if (ret == null) return null;
+  const v = makeWeekPlan({ ...input, todayKey: ret.lastBeforeDay })?.verdict;
+  return v === 'on_track' || v === 'ahead' || v === 'progressing' ? v : null;
+}
+
+/** Where the plan's core notes the event that re-made it inside its week (see WeightWeekPlan.updated). */
+interface UpdateNote { day: string | null; why: string | null }
+
+function makeWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
+  const note: UpdateNote = { day: null, why: null };
+  const plan = planCore(input, note);
+  if (plan == null || plan.staleSince != null || note.day == null || note.why == null || note.day <= plan.weekStart) return plan;
+  // The goal being reached is its own news; every other event only counts when it changed what the week asks (an event that re-makes the
+  // plan into the same call and action - "too fast" entering on a week that already said "nearly there" - is not an update).
+  if (plan.verdict === 'reached' && note.why !== 'target reached') return plan;
+  // (The Monday's plan is made without a reach that happened after it.)
+  const reachedByMonday = input.reached && input.reachedAt != null && input.reachedAt <= plan.weekStart;
+  const monday = planCore(
+    { ...input, todayKey: plan.weekStart, reached: reachedByMonday, reachedAt: reachedByMonday ? input.reachedAt : null },
+    { day: null, why: null },
+  );
+  if (monday != null && monday.state === plan.state && monday.verdict === plan.verdict && monday.action.text === plan.action.text) return plan;
+  return { ...plan, updated: { day: note.day, why: note.why } };
+}
+
+function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | null {
   const days = [...input.days].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
   if (days.length === 0) return null;
   const { todayKey, startDay, targetKg, targetDate } = input;
   const weekStart = weekStartKeyForDay(todayKey);
-  const c: Ctx = { input, days, weekStart, read: { startDay, targetKg, targetDate } };
+  const c: Ctx = { input, days, weekStart, asOf: addDays(weekStart, -1), read: { startDay, targetKg, targetDate } };
   const settledFrom = startDay != null ? addDays(startDay, PACE_SETTLE_DAYS - 1) : null;
 
   // The data the plan reads: through the Sunday before the week, or — in the first days of a goal — as of the goal start.
@@ -750,15 +934,40 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     const pace = bridgedPace(known, a);
     return pace != null && pace.kgPerWeek < 0 && tooFastLoss(known, a, { settledFrom });
   };
+  // "Moving again" entering (wave 22w): the plan as of `a` is a plateau (or a flat fortnight) and the 7-day mean up to `d` (3+ weigh-ins)
+  // is a full tolerance under where it held. The scale falling inside the week ends the plateau message in the week, not the Monday after.
+  const movedFrom = (a: string, d: string): number | null => {
+    const at = lastDayThrough(a);
+    if (at == null) return null;
+    const held = plateauHeldKg(c, at);
+    if (held == null) return null;
+    const now = meanOver(through(days, d), d, 7);
+    return now != null && now.n >= WEEK_MEAN_MIN_WEIGH_INS && now.meanKg <= held - PLATEAU_TOLERANCE_KG ? held : null;
+  };
   // The plan reads the weigh-ins through the Sunday — and is re-made as of the day one of the week's events happens:
-  // the welcome back ends (3 weigh-ins are back), the first pace becomes possible, "too fast" enters.
+  // the welcome back ends (3 weigh-ins are back), the first pace becomes possible, "too fast" enters, the plateau ends.
   let asOf = base;
   let prevDay = base;
+  let plateauEndedFrom: number | null = null; // the plateau mean the plan as of `asOf` moved away from (set only by that event)
+  const remade = (d: string, why: string): void => {
+    asOf = d;
+    plateauEndedFrom = null;
+    note.day = d;
+    note.why = why;
+  };
   for (const d of scan) {
-    if ((returningAt(prevDay) && !returningAt(d)) || (lacksPace(asOf) && !lacksPace(d)) || (!tooFastAt(asOf) && tooFastAt(d))) asOf = d;
+    const moved = movedFrom(asOf, d);
+    if (returningAt(prevDay) && !returningAt(d)) remade(d, 'your third weigh-in is back');
+    else if (lacksPace(asOf) && !lacksPace(d)) remade(d, 'a first pace can be read');
+    else if (!tooFastAt(asOf) && tooFastAt(d)) remade(d, 'losing over 1%/wk');
+    else if (!input.reached && moved != null && movedFrom(asOf, prevDay) == null) {
+      remade(d, 'the weekly average is falling again');
+      plateauEndedFrom = moved;
+    }
     prevDay = d;
   }
 
+  c.asOf = asOf;
   const known = through(days, asOf);
   const anchor = known.length > 0 ? known[known.length - 1].day : null;
   const progressKg = anchor != null ? progressAt(days, anchor) : null;
@@ -771,20 +980,50 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     weekStart, asOf, state: 'early', call: 'none', verdict: down ? 'progressing' : 'holding',
     etaDate: null, weeksVsTarget: null,
     action: { kind: 'keep_weighing', text: 'Keep weighing in — your pace settles after 3 weeks of weigh-ins' },
-    plateauCause: null, pace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
-    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, heldKg: null, firstPaceWeek: false,
+    plateauCause: null, pace: null, earlierPace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
+    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, updated: null, staleSince: null,
   };
 
   // The target is reached (any day: the crossing is an event): a CTA for the first week, then maintenance.
   if (input.reached && targetKg != null) {
+    if (input.reachedAt != null && input.reachedAt > weekStart && input.reachedAt <= todayKey) {
+      note.day = input.reachedAt;
+      note.why = 'target reached';
+    }
     return reachedPlan(c, blank, asOf);
   }
+  // Stale data (wave 22w): the week began with the newest weigh-in 7+ days old and none since. A plan made now would be made from the same
+  // readings the last plan saw, only older - and its pace, bridged over the gap, can flip "moving again" to "on track" on a day nothing
+  // happened. So the plan is the one the day of that last weigh-in made, call and colour kept, with a neutral action. The first weigh-in
+  // back is the welcome-back event below; three of them make the new pace call.
+  const newest = lastDayThrough(todayKey);
+  if (newest != null && newest < weekStart && dayNumber(weekStart) - dayNumber(newest) >= WEIGH_IN_GAP_DAYS) {
+    const last = makeWeekPlan({ ...input, todayKey: newest });
+    if (last != null) {
+      return {
+        ...last,
+        weekStart,
+        staleSince: newest,
+        action: {
+          kind: 'keep_weighing',
+          text: `No weigh-in since ${fmtDate(newest, todayKey)} — step on the scale when you can; your plan picks up from there`,
+        },
+      };
+    }
+  }
+
   if (anchor == null) return { ...blank, young: (ageAt(startDay, asOf) ?? PACE_SETTLE_DAYS) < PACE_SETTLE_DAYS };
 
   if (returning) {
+    const ret = weighInReturn(through(days, todayKey), startDay);
+    if (ret != null) {
+      note.day = ret.firstBackDay;
+      note.why = `weighed in again after ${ret.gapDays} days`;
+    }
     return {
       ...blank,
       state: 'returning',
+      verdict: verdictBeforeGap(input, ret) ?? blank.verdict,
       action: {
         kind: 'keep_weighing',
         text: 'Keep weighing in so your trend catches up — your pace is read again once 3 weigh-ins are back',
@@ -802,6 +1041,7 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     return {
       ...blank,
       state: 'returning',
+      verdict: verdictBeforeGap(input, read.ret) ?? blank.verdict,
       action: {
         kind: 'keep_weighing',
         text: 'Keep weighing in so your trend catches up — your pace is read again once 3 weigh-ins are back',
@@ -819,23 +1059,35 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
       plateauCause: cause,
       pace: paceOf(read),
       plateauMeanKg: round1(read.plateau.weeklyMeanKg),
+      flatWeeks: 3,
     };
   }
 
   // Moving again: a plateau ended in the last 14 days and the weekly average is falling again. The 21-day line still
   // covers the flat weeks, so it would call this "behind"; it is not read until the plateau is two weeks behind.
+  if (plateauEndedFrom != null) {
+    // It entered inside the week (the event above): the plan is made as of that day, against the mean the plateau held at.
+    return {
+      ...blank,
+      state: 'moving_again',
+      verdict: 'progressing',
+      action: { kind: 'keep_what_worked', text: 'Keep doing what restarted it' },
+      plateauMeanKg: round1(plateauEndedFrom),
+    };
+  }
   for (let back = 1; back <= MOVING_AGAIN_DAYS; back++) {
     const d = addDays(asOf, -back);
-    const was = rawPlateau(through(days, d), d, ageAt(startDay, d));
-    if (was == null) continue;
+    // A plateau, or a flat fortnight (wave 22w): either one ending and the weekly average falling again is "moving again".
+    const heldKg = plateauHeldKg(c, d);
+    if (heldKg == null) continue;
     const now = meanOver(known, asOf, 7);
-    if (now != null && now.n >= WEEK_MEAN_MIN_WEIGH_INS && now.meanKg <= was.weeklyMeanKg - PLATEAU_TOLERANCE_KG) {
+    if (now != null && now.n >= WEEK_MEAN_MIN_WEIGH_INS && now.meanKg <= heldKg - PLATEAU_TOLERANCE_KG) {
       return {
         ...blank,
         state: 'moving_again',
         verdict: 'progressing',
         action: { kind: 'keep_what_worked', text: 'Keep doing what restarted it' },
-        plateauMeanKg: round1(was.weeklyMeanKg),
+        plateauMeanKg: round1(heldKg),
       };
     }
     break; // the most recent plateau day decides; a weekly average that is not falling is an ordinary pace
@@ -845,6 +1097,26 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
     const youngNote = 'Keep weighing in — your pace settles after 3 weeks of weigh-ins';
     const olderNote = 'Keep weighing in — a pace needs 6 weigh-ins spanning at least 2 weeks';
     return { ...blank, state: 'early', young: read.young, action: { kind: 'keep_weighing', text: read.young ? youngNote : olderNote } };
+  }
+
+  // A flat fortnight: the last two weekly means are flat after a loss pace that was confirmed two weeks ago. The 21-day line still
+  // holds the good weeks before the stall, so read alone it says "behind" and "the date won't hold" a week before the third flat week
+  // makes it a plateau. It is a calm hold instead: common, the plan holds, no date, no trim.
+  const fortnight = !read.tooFast && !(pace.kgPerWeek >= 0 && Math.abs(pace.pctPerWeek) > PLATEAU_MAX_PCT_PER_WEEK)
+    ? flatFortnightAt(c, anchor)
+    : null;
+  if (fortnight != null) {
+    const cause = judgeSpan(input.intakeDays, asOf, input.targetKcal, FLAT_FORTNIGHT_DAYS)
+      ?? { kind: 'water' as const, namedAt: asOf, spanDays: FLAT_FORTNIGHT_DAYS, loggedDays: 0, avgKcal: null, targetKcal: input.targetKcal };
+    return {
+      ...blank,
+      state: 'plateau',
+      verdict: 'holding',
+      action: fortnightAction(c, cause),
+      plateauCause: cause,
+      plateauMeanKg: round1(fortnight.weeklyMeanKg),
+      flatWeeks: 2,
+    };
   }
 
   // ── A pace ('unconfirmed' or 'confirmed') ──
@@ -862,7 +1134,21 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
       if (pk != null) closestKg = Math.min(closestKg, Math.abs(targetKg - pk));
     }
   }
-  const nearlyThere = tooFast && closestKg <= HOLDING_NEAR_TARGET_KG;
+  // Decided on the Monday from closeness (within a kilo of the target while losing 0.75%+ a week), not only once "too fast" enters.
+  const losingFast = tooFast || (pace.kgPerWeek < 0 && absPct >= NEARLY_THERE_MIN_PCT_PER_WEEK);
+  const nearlyThere = losingFast && closestKg <= HOLDING_NEAR_TARGET_KG;
+  if (nearlyThere && toGoKg > HOLDING_NEAR_TARGET_KG) {
+    // The weekly average closed in on the target inside the week: an event, noted with the first day it was within a kilo.
+    for (const d of days) {
+      if (d.day <= asOf || d.day > todayKey) continue;
+      const pk = progressAt(days, d.day);
+      if (pk != null && targetKg != null && Math.abs(targetKg - pk) <= HOLDING_NEAR_TARGET_KG) {
+        note.day = d.day;
+        note.why = 'within a kilo of the target';
+        break;
+      }
+    }
+  }
   const wrongWay = pace.kgPerWeek >= 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
   const flat = pace.kgPerWeek >= 0 || absPct <= PLATEAU_MAX_PCT_PER_WEEK;
 
@@ -905,9 +1191,13 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
 
   let action: WeightPlanAction;
   if (nearlyThere) {
+    // The step is a number (wave 22w): "Start easing calories toward maintenance" alone gave no figure to ease to.
+    const step = maintenanceStep(input);
+    const lead = targetKg != null ? `Start easing calories toward maintenance as you close in on ${planWeightText(input, targetKg)}` : 'Start easing calories toward maintenance';
     action = {
       kind: 'ease_to_maintenance',
-      text: targetKg != null ? `Start easing calories toward maintenance as you close in on ${planWeightText(input, targetKg)}` : 'Start easing calories toward maintenance',
+      text: step != null ? `${lead} — ${step.text}` : lead,
+      ...(step?.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
     };
   } else if (tooFast) {
     const t = input.targetKcal;
@@ -922,17 +1212,30 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
       text: `Your projected date shows on ${fmtWeekday(nextMonday, todayKey)} once another week of weigh-ins confirms this pace`,
     };
   } else if (call === 'behind' && targetDate != null && !wrongWay && !flat) {
-    action = behindAction(c, { pace, toGoKg, bodyKg, far: farBehind, projected });
+    action = behindAction(c, { pace, toGoKg, bodyKg, far: farBehind });
   } else if (call === 'ahead' || call === 'on_pace') {
     action = { kind: 'keep_going', text: 'Keep your routine — it is working' };
   } else {
     action = { kind: 'hold', text: 'Keep logging your meals and weigh-ins so the trend reads clearly' };
   }
 
+  // On pace because the pace now and the pace a week ago straddle the date: the single rate shown must not argue with the call (wave 22w).
+  let earlierPace: WeightPlanPace | null = null;
+  if (call === 'on_pace' && !unconfirmed && targetDate != null && targetKg != null) {
+    const projectsOnPace = (p: WeightPace | null): boolean => {
+      if (p == null) return false;
+      const eta = paceEta(p, targetKg, { fromKg: paceCurrentKg(known, p), minPct: PLATEAU_MAX_PCT_PER_WEEK, maxDays: MAX_ETA_DAYS });
+      return eta != null && Math.abs(etaDaysAhead(eta, targetDate)) <= ON_PACE_MARGIN_DAYS;
+    };
+    const earlier = bridgedPace(known, addDays(anchor, -PACE_RECHECK_DAYS));
+    if (earlier != null && !projectsOnPace(pace)) earlierPace = { kgPerWeek: earlier.kgPerWeek, pctPerWeek: earlier.pctPerWeek, windowDays: earlier.windowDays };
+  }
+
   return {
     ...blank,
     state: 'pace',
     call,
+    earlierPace,
     verdict,
     etaDate,
     weeksVsTarget: read.state === 'confirmed' && etaDate != null ? weeks : null,
@@ -950,13 +1253,47 @@ export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
   };
 }
 
+/** The maintenance estimate the step may land on: the learned one when the caller has it, else the formula's; null when neither is known. */
+function tdeeEstimate(input: WeightPlanInput): number | null {
+  return input.learnedTdee ?? input.formulaTdee ?? null;
+}
+
+/** A calorie target that already is (within 100 kcal of, or above) the maintenance estimate has nothing to step toward. */
+function budgetIsMaintenance(input: WeightPlanInput): boolean {
+  const tdee = tdeeEstimate(input);
+  return input.targetKcal != null && tdee != null && input.targetKcal >= tdee - MAINTENANCE_BUDGET_MARGIN_KCAL;
+}
+
+/**
+ * The concrete step toward maintenance (wave 22w): "add ~150-200 kcal a day (to ~2,150-2,200 kcal) and watch the weekly average for 2
+ * weeks". From the budget, capped at the maintenance estimate when there is one; with no budget only the amounts are named.
+ * `kcalTarget` is the first notch (budget + 150). Null when the budget already is at or past the estimate.
+ */
+function maintenanceStep(input: WeightPlanInput): { text: string; kcalTarget: number | null } | null {
+  const watch = 'and watch the weekly average for 2 weeks';
+  const budget = input.targetKcal != null && input.targetKcal > 0 ? input.targetKcal : null;
+  if (budget == null) return { text: `add ~${fmtKcal(MAINTENANCE_STEP_LO_KCAL)}–${kcalText(MAINTENANCE_STEP_HI_KCAL)} a day ${watch}`, kcalTarget: null };
+  const tdee = tdeeEstimate(input);
+  let hi = budget + MAINTENANCE_STEP_HI_KCAL;
+  let lo = budget + MAINTENANCE_STEP_LO_KCAL;
+  if (tdee != null) {
+    hi = Math.min(hi, roundTo(tdee, TRIM_ROUND_KCAL));
+    lo = Math.min(lo, hi);
+  }
+  if (hi <= budget) return null;
+  const amount = lo === hi ? kcalText(hi - budget) : `${fmtKcal(lo - budget)}–${kcalText(hi - budget)}`;
+  const landing = lo === hi ? kcalText(hi) : `${fmtKcal(lo)}–${kcalText(hi)}`;
+  return { text: `add ~${amount} a day (to ~${landing}) ${watch}`, kcalTarget: lo };
+}
+
 /** The plan for a week in which the target is reached: the CTA for its first days, then maintenance. */
 function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPlan {
   const { input, days } = c;
   const targetKg = input.targetKg as number;
   const since = input.reachedAt ?? input.startDay;
-  const daysSince = since != null ? dayNumber(input.todayKey) - dayNumber(since) : null;
-  const asking = daysSince == null || daysSince <= REACHED_ASK_DAYS;
+  // The question runs to the end of a calendar week: every week whose Monday is under REACHED_ASK_DAYS after the reach asks it (wave 22w).
+  const mondaysAfter = since != null ? dayNumber(c.weekStart) - dayNumber(since) : null;
+  const asking = mondaysAfter == null || mondaysAfter < REACHED_ASK_DAYS;
 
   // Still losing past the ceiling after the target: the card's one safety watch (only while the "too fast" call is on).
   // Reaching the target is an event that re-makes the plan, so that call reads the newest weigh-ins, not last Sunday's.
@@ -971,15 +1308,24 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
   const base: WeightWeekPlan = { ...blank, call: 'none', verdict: 'reached', pace, tooFast };
   if (asking) {
     // A calorie target that already is maintenance has nothing to "switch" to: keep it there (the review says the same).
-    const atMaintenance = input.targetKcal != null && input.formulaTdee != null && input.targetKcal >= input.formulaTdee - MAINTENANCE_BUDGET_MARGIN_KCAL;
-    if (atMaintenance) {
+    if (budgetIsMaintenance(input)) {
       return {
         ...base,
         state: 'reached',
         action: { kind: 'hold', text: 'Your calorie target is already at maintenance — keep it there and the weight should hold.', kcalTarget: input.targetKcal as number },
       };
     }
-    return { ...base, state: 'reached', action: { kind: 'next_target', text: 'Set a new target or switch to maintenance' } };
+    // Switching to maintenance is a number: the step from the budget (the TDEE estimate caps it) and how long to watch.
+    const step = maintenanceStep(input);
+    return {
+      ...base,
+      state: 'reached',
+      action: {
+        kind: 'next_target',
+        text: step != null ? `Set a new target or switch to maintenance — ${step.text}` : 'Set a new target or switch to maintenance',
+        ...(step?.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
+      },
+    };
   }
 
   // Maintenance: the weekly average has held within a kilo for 2+ weeks, on logged intake — make that the target.
@@ -996,8 +1342,9 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
     }
   }
   if (held != null) {
-    // "Held 84 kg": whole units — the card's own line carries the weekly average to a decimal, this is the level it held at.
-    const heldText = withUnit(Math.round(isImperial(input) ? held.kg * KG_TO_LB : held.kg), isImperial(input) ? 'lb' : 'kg');
+    // "Held about 84 kg": whole units, said as approximate - the card's own lines carry the weekly average to a decimal ("Holding at 83.7 kg"),
+    // and a bare "84 kg" next to it read as a second, different number.
+    const heldText = `about ${withUnit(Math.round(isImperial(input) ? held.kg * KG_TO_LB : held.kg), isImperial(input) ? 'lb' : 'kg')}`;
     const already = input.targetKcal != null && Math.abs(input.targetKcal - held.kcal) <= MAINTENANCE_ALREADY_KCAL;
     return {
       ...base,
@@ -1008,12 +1355,39 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
         : { kind: 'maintenance_target', text: `You've held ${heldText} on ~${kcalText(held.kcal)} — make that your maintenance target`, kcalTarget: held.kcal },
     };
   }
+  // No held intake to name yet. The watch is two-sided: a weekly average 1 kg above OR below the target is the cue.
+  const cue = `${planWeightText(input, HOLDING_NEAR_TARGET_KG)} above or below your target`;
+  if (budgetIsMaintenance(input)) {
+    return {
+      ...base,
+      state: 'maintenance',
+      action: {
+        kind: 'hold',
+        text: `Your calorie target is already at maintenance — keep it there and watch the weekly average; a drift of ${cue} is your cue to act.`,
+        kcalTarget: input.targetKcal as number,
+      },
+    };
+  }
+  // Still on the deficit budget for the first weeks of maintenance (counted on the week's Monday, so the plan is one thing all week).
+  const sinceMonday = since != null ? dayNumber(c.weekStart) - dayNumber(since) : null;
+  const step = sinceMonday != null && sinceMonday > MAINTENANCE_STEP_DAYS ? null : maintenanceStep(input);
+  if (step != null) {
+    return {
+      ...base,
+      state: 'maintenance',
+      action: {
+        kind: 'maintenance_target',
+        text: `Target reached — ${step.text}; a drift of ${cue} is your cue to act`,
+        ...(step.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
+      },
+    };
+  }
   return {
     ...base,
     state: 'maintenance',
     action: {
       kind: 'hold',
-      text: `Keep weighing in a few mornings a week; if your average drifts ${planWeightText(input, HOLDING_NEAR_TARGET_KG)} above your target, that is your cue to act.`,
+      text: `Keep weighing in a few mornings a week; if your average drifts ${cue}, that is your cue to act.`,
     },
   };
 }

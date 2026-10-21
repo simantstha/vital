@@ -507,7 +507,8 @@ invariant(WEIGHT, 'trim advice is at most 200 kcal a day in one step and never g
     const target = snap.card?.weightRead?.plan?.action.kcalTarget;
     if (target != null && target < floor) out.push({ snap, detail: `plan action kcalTarget ${target} is under the ${floor} kcal floor: "${visible(snap.card?.weightRead?.plan?.action.text ?? '')}"` });
   }
-  assert.ok(trims > 0, `${name}: no trim advice appeared, so this invariant checked nothing`);
+  // Wave 22w: a user who logs no food is never told to trim (see the wave 22w block), so only the logged scenario has trim advice to check.
+  if (name === 'weight_loss_logged') assert.ok(trims > 0, `${name}: no trim advice appeared, so this invariant checked nothing`);
   return out;
 });
 
@@ -594,6 +595,473 @@ const WEIGHT_AS_TREND = /weight trend|trend weight|trend change|smoothed trend/i
 
 invariant(WEIGHT, 'no card or review string calls the progress weight a "trend" (weight trend, trend weight, trend change)', snaps =>
   textMatches(snaps, s => [...cardTexts(s), ...reviewTexts(s)], WEIGHT_AS_TREND));
+
+// ── weight loss, wave 22w (round-4 dietitian + "Sam" findings) ──────────────────────────────────────────────────────────────────────
+// Everything between this banner and the "one target per week" banner below is weight-loss only (wave 22w).
+
+const WL_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WL_MEAN_MIN_WEIGH_INS = 3;
+const WL_FLAT_KG = 0.2;
+const WL_FAR_BEHIND_DAYS = 56;
+
+/** Mean of the scenario's raw weigh-ins in the 7 days ending `end`; null under 3 weigh-ins. */
+function wlWeekMean(weighIns: ReadonlyArray<{ day: string; kg: number }>, end: string): number | null {
+  const from = addDays(end, -6);
+  const inWeek = weighIns.filter(w => w.day >= from && w.day <= end);
+  return inWeek.length >= WL_MEAN_MIN_WEIGH_INS ? inWeek.reduce((s, w) => s + w.kg, 0) / inWeek.length : null;
+}
+
+/** The flat fortnight (P1-1): the last two 7-day means up to the plan's Sunday are within 0.2 kg, after a confirmed loss pace 14+ days earlier. */
+function wlFlatFortnightDays(snaps: DaySnapshot[], name: ScenarioName): DaySnapshot[] {
+  const weighIns = buildScenario(name).weighIns;
+  return snaps.filter(snap => {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null) return false;
+    const w2 = wlWeekMean(weighIns, plan.asOf);
+    const w1 = wlWeekMean(weighIns, addDays(plan.asOf, -7));
+    if (w1 == null || w2 == null || Math.abs(w2 - w1) > WL_FLAT_KG) return false;
+    // A confirmed loss pace in a plan made 14+ days before this plan's Sunday.
+    return snaps.some(s => {
+      const earlier = s.card?.weightRead?.plan;
+      return earlier != null && earlier.asOf <= addDays(plan.asOf, -14) && earlier.state === 'pace' && earlier.confirmed
+        && earlier.pace != null && earlier.pace.kgPerWeek < 0;
+    });
+  });
+}
+
+const WONT_HOLD_OR_BEHIND = /won't hold|behind pace|move the date/i;
+
+invariant(WEIGHT, 'a flat fortnight after a confirmed loss pace is a calm hold: never "behind", "won\'t hold" or "move the date" (P1-1)', (snaps, name) => {
+  const out: Violation[] = [];
+  const days = wlFlatFortnightDays(snaps, name);
+  assert.ok(days.length > 0, `${name}: no flat fortnight after a confirmed loss appeared, so this invariant checked nothing`);
+  for (const snap of days) {
+    const verdict = snap.card?.verdict;
+    if (verdict === 'behind' || verdict === 'stalled') {
+      out.push({ snap, detail: `flat fortnight after a confirmed loss reads verdict ${verdict}: "${visible(snap.card?.headline ?? '')}"` });
+    }
+    const plan = snap.card?.weightRead?.plan;
+    if (plan?.farBehind || plan?.call === 'behind') out.push({ snap, detail: `flat fortnight plan call ${plan.call}, farBehind ${plan.farBehind}` });
+    for (const t of allTexts(snap)) {
+      if (WONT_HOLD_OR_BEHIND.test(plain(t.text)) && !/do not quote a projected date/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  return out;
+});
+
+/** A month quoted without a day ("Jan 2027", "~Aug"): the first day of that month. Dates with a day ("Jul 6") are not month quotes. */
+const MONTH_QUOTE = new RegExp(`\\b(${WL_MONTHS.join('|')})\\b(?! \\d{1,2}\\b)(?: (\\d{4}))?`, 'g');
+
+invariant(WEIGHT, 'no user-facing string quotes a projected month more than 8 weeks past the target date (P1-1)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.targetDate as string;
+  const year = Number(target.slice(0, 4));
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const t of allTexts(snap)) {
+      for (const m of plain(t.text).matchAll(MONTH_QUOTE)) {
+        const monthStart = `${m[2] ?? year}-${String(WL_MONTHS.indexOf(m[1]) + 1).padStart(2, '0')}-01`;
+        if (dayDiff(monthStart, target) > WL_FAR_BEHIND_DAYS) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" quotes ${m[0]}, ${dayDiff(monthStart, target)} days past the ${target} target date` });
+      }
+    }
+  }
+  return out;
+});
+
+/** The kcal level a plan action states: its `kcalTarget`, else the first "(to ~1,800 kcal)" / "keep 2,000 kcal" / "your 2,000 kcal target" in its text. */
+function wlStatedKcal(action: { text: string; kcalTarget?: number }): number | null {
+  if (action.kcalTarget != null) return action.kcalTarget;
+  const m = /(?:\(to ~|keep |your |toward |full )([\d,]{4,})\s*kcal/i.exec(plain(action.text));
+  return m ? Number(m[1].replace(/,/g, '')) : null;
+}
+
+const WL_KCAL_REVERSAL_SENTENCE = /go back to [\d,]+ kcal|last week's trim/i;
+
+invariant(WEIGHT, 'a stated calorie target never moves back up on the next Monday without a sentence saying so (P1-2)', snaps => {
+  const out: Violation[] = [];
+  let prev: { snap: DaySnapshot; kcal: number } | null = null;
+  for (const snap of snaps) {
+    if (snap.weekday !== 'Mon') continue;
+    const plan = snap.card?.weightRead?.plan;
+    const kcal = plan != null && plan.state !== 'reached' && plan.state !== 'maintenance' ? wlStatedKcal(plan.action) : null;
+    if (prev != null && kcal != null && kcal > prev.kcal && plan != null && !WL_KCAL_REVERSAL_SENTENCE.test(plain(plan.action.text))) {
+      out.push({ snap, detail: `Mon ${prev.snap.date} stated ${prev.kcal} kcal, Mon ${snap.date} states ${kcal} kcal without saying so: "${visible(plan.action.text)}"` });
+    }
+    prev = kcal != null ? { snap, kcal } : null;
+  }
+  return out;
+});
+
+// A user who logs no food gets no calorie trim they cannot check: the first step is activity or logging (P1-2).
+invariant(['weight_loss'], 'a user with no food logs is never told to trim calories (P1-2)', snaps =>
+  textMatches(snaps, allTexts, /trim ~[\d,]+ kcal/i));
+
+// P2-1: a plan is never remade from stale data. On a day with nothing new (no weigh-in, food log or workout) the verdict cannot change,
+// unless a calendar week began AND the newest weigh-in is under 7 days old. (The 14-day "last weigh-in N days ago" nudge, verdict
+// insufficient_data, is the one honest exception: it is the data going stale, not a re-made plan.)
+invariant(WEIGHT, 'the verdict never changes on a day with no new data, unless a calendar week began and the newest weigh-in is under 7 days old (P2-1)', snaps_ => {
+  const out: Violation[] = [];
+  const scn = buildScenario(snaps_[0].scenario as ScenarioName);
+  const logged = new Set<string>([
+    ...scn.weighIns.map(w => w.day), ...scn.intake.map(i => i.day), ...scn.workouts.map(w => w.day), ...scn.sets.map(x => x.day),
+  ]);
+  for (let i = 1; i < snaps_.length; i++) {
+    const prev = snaps_[i - 1];
+    const cur = snaps_[i];
+    if (logged.has(cur.date) || prev.card == null || cur.card == null) continue;
+    const before = prev.card.verdict;
+    const after = cur.card.verdict;
+    if (before === after || before === 'insufficient_data' || after === 'insufficient_data') continue;
+    const fresh = cur.card.lastWeighInDaysAgo != null && cur.card.lastWeighInDaysAgo < 7;
+    if (cur.weekday === 'Mon' && fresh) continue;
+    out.push({
+      snap: cur,
+      detail: `verdict ${before} -> ${after} with nothing new logged (${cur.weekday}, newest weigh-in ${cur.card.lastWeighInDaysAgo} days old): "${visible(prev.card.headline)}" -> "${visible(cur.card.headline)}"`,
+    });
+  }
+  return out;
+});
+
+// P2-7: on a Monday, every "Holding at X" - the card, the coach lines, the opener, the review's headline / win and the push - is one
+// number. (Mondays on which the user already weighed in are left out: the card's weekly average then includes that reading and the review,
+// which is for last week, cannot.)
+const HOLDING_AT = /Holding at ([\d.]+)/g;
+
+invariant(WEIGHT, 'on a Monday every "Holding at X" across card, opener, review and push is one X (P2-7)', (snaps, name) => {
+  const weighInDays = new Set(buildScenario(name).weighIns.map(w => w.day));
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    if (snap.review == null || snap.card == null || weighInDays.has(snap.date)) continue;
+    const texts: Text[] = [...allTexts(snap), { where: 'push.title', text: snap.review.alert.title }, { where: 'push.body', text: snap.review.alert.body }];
+    const said = new Map<string, string>();
+    for (const t of texts) for (const m of plain(t.text).matchAll(HOLDING_AT)) said.set(m[1], said.has(m[1]) ? `${said.get(m[1])}, ${t.where}` : t.where);
+    if (said.size > 0) compared++;
+    if (said.size > 1) out.push({ snap, detail: `"Holding at" says ${[...said].map(([x, where]) => `${x} (${where})`).join(' vs ')}` });
+  }
+  if (name === 'weight_loss_logged') assert.ok(compared > 0, `${name}: no Monday said "Holding at", so this invariant checked nothing`);
+  return out;
+});
+
+// P2-6: easing toward maintenance is a number, not a direction. "Start easing calories toward maintenance" always carries the step
+// ("add ~150-200 kcal a day (to ~2,150-2,200 kcal)"), and for the first 3 weeks after the target is reached the plan's action states a
+// calorie figure (the step, the user's own held intake, or a budget that already is maintenance). The maintenance watch is two-sided.
+const KCAL_FIGURE = /~[\d,]+(?:\s?[-–]\s?[\d,]+)?\s?kcal/;
+const MAINTENANCE_STEP_WINDOW_DAYS = 21;
+
+invariant(WEIGHT, 'easing toward maintenance and a reached goal\'s first 3 weeks state a calorie figure; the maintenance watch is two-sided (P2-6)', (snaps, name) => {
+  const out: Violation[] = [];
+  let easing = 0;
+  let reachedChecked = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null) continue;
+    for (const t of allTexts(snap)) {
+      if (/easing calories toward maintenance/i.test(plain(t.text)) && /^(?:card\.reasons|review\.nextWeek|coach)/.test(t.where)) {
+        easing++;
+        if (!KCAL_FIGURE.test(plain(t.text)) && !/This week's plan|Nearly there/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" names no calorie figure` });
+      }
+    }
+    if (plan.action.kind === 'ease_to_maintenance' && !KCAL_FIGURE.test(plain(plan.action.text))) out.push({ snap, detail: `plan action [ease_to_maintenance] "${visible(plan.action.text)}" names no calorie figure` });
+    const reachedDaysAgo = snap.card?.weightRead?.reachedDaysAgo;
+    if (snap.card?.verdict === 'reached' && reachedDaysAgo != null && reachedDaysAgo <= MAINTENANCE_STEP_WINDOW_DAYS) {
+      reachedChecked++;
+      if (!KCAL_FIGURE.test(plain(plan.action.text))) out.push({ snap, detail: `reached ${reachedDaysAgo} days ago, plan action [${plan.action.kind}] "${visible(plan.action.text)}" names no calorie figure` });
+    }
+    if (plan.state === 'maintenance' && /drifts?\b/.test(plain(plan.action.text)) && !/above or below/.test(plain(plan.action.text))) {
+      out.push({ snap, detail: `maintenance watch is one-sided: "${visible(plan.action.text)}"` });
+    }
+  }
+  assert.ok(easing > 0 && reachedChecked > 0, `${name}: nothing easing toward maintenance or reached appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// P2-2: a plateau message does not hold while the scale falls. "Moving again" is an event that can enter inside the week: once the week's
+// average (3+ weigh-ins) is a full tolerance (0.2 kg) under the plateau's, the plateau is over. (A smaller gap is inside the tolerance that
+// defines "flat", so it is still a flat week.)
+invariant(WEIGHT, "a plateau is not announced once this week's average is a tolerance under the plateau's (P2-2)", (snaps, name) => {
+  const out: Violation[] = [];
+  let underTolerance = 0;
+  for (const snap of snaps) {
+    const read = snap.card?.weightRead;
+    const plan = read?.plan;
+    if (plan == null || plan.plateauMeanKg == null || read?.weekMeanKg == null || (read.state !== 'plateau' && read.state !== 'moving_again')) continue;
+    const gap = Math.round((plan.plateauMeanKg - read.weekMeanKg) * 10) / 10;
+    if (gap < 0.2 - 1e-9) continue;
+    underTolerance++;
+    if (read.state === 'plateau') {
+      out.push({ snap, detail: `plan state plateau (mean ${plan.plateauMeanKg}) while the weekly average is ${read.weekMeanKg}, ${gap} kg lower: "${visible(snap.card?.headline ?? '')}" / "${visible(snap.opener?.required ?? '')}"` });
+    }
+  }
+  assert.ok(underTolerance > 0, `${name}: the weekly average never fell a tolerance under a plateau, so this invariant checked nothing`);
+  return out;
+});
+
+// P2-3: "the same all week" is true or not said. A plan that changed inside its calendar week says so in the coach lines
+// ("set Jun 8, updated Tue Jun 9: ..."), never "the same all week"; "nearly there" is decided on the Monday from closeness (within a kilo of the
+// target while losing 0.75% a week or more), not on the day the loss tips over 1%; and the reached question runs to the end of a calendar week,
+// so the card, the coach lines and the opener never drop it on a Saturday.
+const PLAN_LINE = /This week's plan \(set ([^,)]+)(?:, ([^)]*))?\)/;
+
+invariant(WEIGHT, "a coach line says the week's plan is \"the same all week\" only when it is, and labels a mid-week update (P2-3)", (snaps, name) => {
+  const out: Violation[] = [];
+  const firstOfWeek = new Map<string, string>();
+  let updatedDays = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null) continue;
+    const week = mondayOfDate(snap.date);
+    if (!firstOfWeek.has(week)) firstOfWeek.set(week, plan.action.text);
+    const line = (snap.coach ?? []).map(plain).find(t => PLAN_LINE.test(t));
+    if (line == null) continue;
+    const label = PLAN_LINE.exec(line)?.[2] ?? '';
+    const changed = plan.action.text !== firstOfWeek.get(week);
+    if (changed) updatedDays++;
+    if (changed && (/the same all week/.test(label) || !/updated/.test(label))) {
+      out.push({ snap, detail: `the plan changed inside the week ("${visible(firstOfWeek.get(week) ?? '')}" -> "${visible(plan.action.text)}") but the coach line says: "${visible(line.slice(0, 120))}"` });
+    }
+    if (!changed && /updated/.test(label)) out.push({ snap, detail: `the coach line says the plan was updated but its action is the week's first: "${visible(line.slice(0, 120))}"` });
+  }
+  assert.ok(updatedDays > 0 || name !== 'weight_loss', `${name}: no plan changed inside a week, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, '"nearly there" is decided on the Monday: within a kilo of the target and losing 0.75%+ a week is the easing step from day one (P2-3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const read = snap.card?.weightRead;
+    if (snap.weekday !== 'Mon' || plan == null || read?.state !== 'pace' || snap.card?.verdict === 'reached') continue;
+    const target = snap.card?.target.weightKg;
+    const pct = plan.pace?.pctPerWeek;
+    if (target == null || read.weekMeanKg == null || pct == null || pct > -0.75) continue;
+    if (read.weekMeanKg - target > 1 || read.weekMeanKg - target < 0) continue;
+    checked++;
+    if (plan.action.kind !== 'ease_to_maintenance') {
+      out.push({ snap, detail: `${(read.weekMeanKg - target).toFixed(1)} kg to go at ${pct}%/wk but the Monday plan is [${plan.action.kind}] "${visible(plan.action.text)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no Monday was within a kilo of the target while losing 0.75%+ a week, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'the reached question never ends in the middle of a calendar week (P2-3)', snaps => {
+  const out: Violation[] = [];
+  const asks = new Map<string, boolean>();
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (snap.card?.verdict !== 'reached' || plan == null) continue;
+    const week = mondayOfDate(snap.date);
+    const asking = plan.action.kind === 'next_target';
+    const before = asks.get(week);
+    if (before === true && !asking) out.push({ snap, detail: `the "set a new target or switch to maintenance" question was asked earlier this week and is gone on ${snap.weekday}: "${visible(plan.action.text)}"` });
+    if (before === undefined) asks.set(week, asking);
+  }
+  return out;
+});
+
+// P2-4: when the plan's call is ahead / too fast / nearly there, or there is a kilo or less to go, the review's "Next week" never pushes
+// restriction (a weekend tip, "decide the meal ahead"): it is the plan's own instruction, else "Keep your routine - no need to tighten anything".
+const NO_NEED_TO_TIGHTEN = 'Keep your routine — no need to tighten anything';
+
+invariant(WEIGHT, "the review's next week does not tighten anything while the plan says ahead, too fast, nearly there or a kilo to go (P2-4)", (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const read = snap.card?.weightRead;
+    if (snap.review == null || plan == null || snap.card?.verdict === 'reached' || plan.state === 'reached' || plan.state === 'maintenance') continue;
+    const target = snap.card?.target.weightKg;
+    const toGo = target != null && read?.weekMeanKg != null ? read.weekMeanKg - target : null;
+    const easy = plan.call === 'ahead' || plan.call === 'too_fast' || plan.nearlyThere || (toGo != null && toGo >= 0 && toGo <= 1);
+    if (!easy) continue;
+    checked++;
+    const next = snap.review.review.nextWeek;
+    if (next !== plan.action.text && plain(next) !== NO_NEED_TO_TIGHTEN) {
+      out.push({ snap, detail: `plan call ${plan.call}${plan.nearlyThere ? ' (nearly there)' : ''}, ${toGo?.toFixed(1)} kg to go, action [${plan.action.kind}] but the review's next week is "${visible(next)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no Monday review had an easy plan, so this invariant checked nothing`);
+  return out;
+});
+
+// P2-5: the rate must not contradict the call. "On track for Jul 6" over "Down 0.37 kg/wk" (6.5 kg to go at 0.37 kg/wk lands weeks after Jul 6) is a
+// card arguing with itself: when an on-pace call rests on two paces that straddle the date, the card shows the range ("0.37-0.58 kg/wk"), and the
+// coach never calls the target date an "ETA" (it is the date to hold, not a projection).
+const RATE_RANGE = /\d+(?:\.\d+)?\s?[-–]\s?\d+(?:\.\d+)?\s?(?:kg|lb)\/wk/;
+
+invariant(WEIGHT, "an on-pace call whose single rate would land more than a week off the date shows the rate as a range (P2-5)", (snaps, name) => {
+  const weighIns = buildScenario(name).weighIns;
+  const out: Violation[] = [];
+  let straddling = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const card = snap.card;
+    if (card?.verdict !== 'on_track' || plan?.call !== 'on_pace' || plan.pace == null || card.target.date == null || card.target.weightKg == null) continue;
+    // The plan's own projection: from the 7-day mean at the last weigh-in through its Sunday (the pace is anchored to that day).
+    const anchor = [...weighIns].filter(w => w.day <= plan.asOf).sort((a, b) => (a.day < b.day ? 1 : -1))[0];
+    const kg = wlWeekMean(weighIns, anchor.day) ?? anchor.kg;
+    if (plan.pace.kgPerWeek >= 0) continue;
+    const finish = addDays(anchor.day, Math.ceil(((kg - card.target.weightKg) / -plan.pace.kgPerWeek) * 7));
+    if (Math.abs(dayDiff(finish, card.target.date)) <= 7) continue;
+    straddling++;
+    const rate = card.reasons.find(r => r.kind === 'rate');
+    if (rate == null || !RATE_RANGE.test(plain(rate.text))) {
+      out.push({ snap, detail: `"${visible(card.headline)}" over a single rate that lands on ${finish}, ${dayDiff(finish, card.target.date)} days from ${card.target.date}: "${visible(rate?.text ?? '(no rate reason)')}"` });
+    }
+  }
+  assert.ok(straddling > 0, `${name}: no on-pace card had a rate off the date, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'the coach lines never call the target date an "ETA" (P2-5)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const date = snap.card?.target.date;
+    if (date == null) continue;
+    for (const [i, line] of (snap.coach ?? []).entries()) {
+      if (new RegExp(`ETA ${date}`).test(line)) out.push({ snap, detail: `coach[${i}]: "${visible(line.slice(0, 260))}"` });
+    }
+  }
+  return out;
+});
+
+// P2-8: one formatted rate. The headline's "losing about 0.58 kg a week" and the opener's "losing about 0.6 kg a week" are the same rate rounded
+// twice, to different places; every surface quotes the one the card printed.
+const LOSING_ABOUT = /losing about ([\d.]+) (?:kg|lb) a week/;
+
+invariant(WEIGHT, 'the opener quotes the rate the headline printed, not the same rate rounded again (P2-8)', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const head = LOSING_ABOUT.exec(plain(snap.card?.headline ?? ''));
+    const open = LOSING_ABOUT.exec(plain(snap.opener?.required ?? ''));
+    if (head == null || open == null) continue;
+    compared++;
+    if (head[1] !== open[1]) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" vs opener "${visible(snap.opener?.required ?? '')}"` });
+  }
+  assert.ok(compared > 0, `${name}: no day quoted a rate in both headline and opener, so this invariant checked nothing`);
+  return out;
+});
+
+// ── wave 22w, P3: wording ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+invariant(WEIGHT, 'the early read says where the weekly average is against the start, not "X of Y kg down on your weekly average" (P3)', (snaps, name) => {
+  const out = textMatches(snaps, s => [...coachTexts(s), ...cardTexts(s)], /of [\d.]+ kg down on your weekly average/);
+  assert.ok(snaps.some(s => /weekly average is [\d.]+ kg below your start/.test(plain(s.opener?.required ?? ''))), `${name}: the early read never used the new wording, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss_logged'], 'the calorie adherence line counts "in the last 7 days" (it is a rolling week) and its tone does not flip day to day (P3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'calorie_adherence') continue;
+      seen++;
+      if (/this week/.test(r.text) || !/in the last 7 days/.test(plain(r.text)) || r.tone !== 'neutral') out.push({ snap, detail: `[${r.tone}] "${visible(r.text)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no adherence line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'a reached card does not print "weekly average 84.2 kg" as the reach; it says how close the average is to the target (P3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const target = snap.card?.target.weightKg;
+    const lead = snap.card?.verdict === 'reached' ? snap.card.reasons.find(r => r.kind === 'reached') : undefined;
+    const avg = snap.card?.weightRead?.weekMeanKg;
+    if (lead == null || target == null || avg == null || Math.abs(avg - target) < 0.05) continue;
+    seen++;
+    if (!/weekly average within [\d.]+ kg of your target/.test(plain(lead.text))) out.push({ snap, detail: `weekly average ${avg} vs target ${target}: "${visible(lead.text)}"` });
+  }
+  assert.ok(seen > 0, `${name}: no reached card had an average off the target, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, '"Holding at 84.0 kg, within 1 kg of 84 kg" is never said when the average is exactly on the target (P3)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const all: Text[] = [...allTexts(snap), ...(snap.review ? [{ where: 'push.body', text: snap.review.alert.body }] : [])];
+    for (const t of all) {
+      const m = /Holding at ([\d.]+) kg, within 1 kg of ([\d.]+) kg/.exec(plain(t.text));
+      if (m && Math.abs(Number(m[1]) - Number(m[2])) < 0.05) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  return out;
+});
+
+invariant(WEIGHT, 'the opener that asks about a new target celebrates the reach (P3)', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const line = snap.opener?.required ?? '';
+    if (!/set a new target or switch to maintenance/i.test(line) || snap.card?.verdict !== 'reached') continue;
+    seen++;
+    if (!/Congratulations/.test(line)) out.push({ snap, detail: `"${visible(line)}"` });
+  }
+  assert.ok(seen > 0, `${name}: the reached opener never asked, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'a rate "over the last 3 weeks" is never quoted when the newest weigh-in is a week old or more (P3)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const age = snap.card?.lastWeighInDaysAgo;
+    if (age == null || age < 7) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      if (/over the last \d+ weeks/.test(plain(t.text))) out.push({ snap, detail: `newest weigh-in ${age} days old, ${t.where}: "${visible(t.text.slice(0, 200))}"` });
+    }
+  }
+  return out;
+});
+
+invariant(WEIGHT, 'a weight-loss review never labels its weight change "smoothed" (the card does not quote the smoothed trend) (P3)', (snaps, name) => {
+  const out = textMatches(snaps, reviewTexts, /smoothed/i);
+  assert.ok(snaps.filter(s => s.review != null).length > 0, `${name}: no review, so this invariant checked nothing`);
+  return out;
+});
+
+// P2-6 (follow-up): inside the reached / maintenance weeks a calorie figure that changes by 100+ kcal from one Monday to the next says so
+// ("it replaces last week's ~2,150 kcal step"): "add to ~2,150-2,200" and then "make ~2,050 your maintenance target" in silence is whiplash.
+invariant(WEIGHT, "a calorie figure that moves 100+ kcal between two reached / maintenance Mondays says it replaces last week's (P2-6)", snaps => {
+  const out: Violation[] = [];
+  let prev: { snap: DaySnapshot; kcal: number } | null = null;
+  for (const snap of snaps) {
+    if (snap.weekday !== 'Mon') continue;
+    const plan = snap.card?.weightRead?.plan;
+    const kcal = plan != null && (plan.state === 'reached' || plan.state === 'maintenance') ? plan.action.kcalTarget ?? null : null;
+    if (prev != null && kcal != null && plan != null && Math.abs(kcal - prev.kcal) >= 100 && !/replaces|instead of|last week/i.test(plain(plan.action.text))) {
+      out.push({ snap, detail: `Mon ${prev.snap.date} ${prev.kcal} kcal -> Mon ${snap.date} ${kcal} kcal without saying so: "${visible(plan.action.text)}"` });
+    }
+    prev = kcal != null ? { snap, kcal } : null;
+  }
+  return out;
+});
+
+// P2-1: coming back after a gap carries the colour from before it: a welcome back never downgrades on_track / ahead to progressing.
+// Compared on each return day with the verdict of the last day before the gap.
+invariant(WEIGHT, 'a welcome back keeps the verdict the card had before the gap (P2-1)', snaps_ => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (let i = 1; i < snaps_.length; i++) {
+    const read = snaps_[i].card?.weightRead;
+    if (read?.state !== 'returning' || read.returned == null) continue;
+    const before = snaps_.find(s => s.date === read.returned?.sinceDay);
+    if (before?.card == null) continue;
+    checked++;
+    const was = before.card.verdict;
+    const now = snaps_[i].card?.verdict;
+    if (['on_track', 'ahead', 'progressing'].includes(was) && now !== was) {
+      out.push({ snap: snaps_[i], detail: `before the gap (${before.date}) the card was ${was} ("${visible(before.card.headline)}"), the welcome back is ${now} ("${visible(snaps_[i].card?.headline ?? '')}")` });
+    }
+  }
+  assert.ok(checked > 0, 'no welcome back with a known pre-gap day appeared, so this invariant checked nothing');
+  return out;
+});
 
 // ── one target per week (wave 21b) ──────────────────────────────────────────
 

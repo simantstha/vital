@@ -138,21 +138,21 @@ test('far behind: the date is not quoted — "the Jul 6 date won\'t hold" — an
   assert.equal(card.onPaceForTargetDate, false);
   assert.equal(card.headline, "Behind pace — at this rate the Jul 6 date won't hold");
   assert.equal(card.weightRead?.weeksVsTarget, null);
-  assert.match(plainSpaces(actionText(card) ?? ''), /^Move the date to ~[A-Z][a-z]{2}( \d{4})? or trim ~200 kcal a day \(to ~1,800 kcal\)$/);
+  assert.equal(plainSpaces(actionText(card) ?? ''), 'Move the date or trim ~150 kcal a day (to ~1,850 kcal)');
   assert.equal(review.nextWeek, plan?.action.text);
   const opener = goalOpenerLine(card, 'metric') ?? '';
   assert.match(opener, /, but at this rate your Jul 6 date won't hold\.$/);
   assert.doesNotMatch(opener, /weeks? behind/);
   const coach = formatGoalProgressLines(card, 'metric').join('\n');
   assert.match(coach, /more than 8 weeks past the target date: do not quote a projected date/);
-  assert.match(coach, /This week's plan.*Move the date to/);
+  assert.match(coach, /This week's plan.*Move the date or trim/);
 });
 
 test('the opener says "weekly average" for the 7-day mean and "on the scale" only for a single reading', () => {
   const early = cardAt(readings(range(0, 7), n => 92 - 0.1 * n), [], 7);
   assert.equal(early.weightRead?.state, 'early');
   assert.match(plainSpaces(early.headline), /^Early read — weekly average down \d(\.\d)? kg in 7 days$/);
-  assert.match(goalOpenerLine(early, 'metric') ?? '', /down on your weekly average; your pace settles after 3 weeks\.$/);
+  assert.match(goalOpenerLine(early, 'metric') ?? '', /^Your weekly average is \d(\.\d)? kg below your start; your pace settles after 3 weeks\.$/);
   // Two weigh-ins in the week: no weekly average yet, so the latest reading is the number and the words say so.
   const sparse = cardAt(readings([0, 1, 3, 8], n => 92 - 0.1 * n), [], 8);
   assert.equal(sparse.weightRead?.weekMeanKg, null);
@@ -193,13 +193,16 @@ test('the pace tone: "above the ceiling" and the watch colour belong to the too-
 
 test('reached: "Set a new target or switch to maintenance" for 7 days after the target, then not every day', () => {
   const reached = readings(range(0, 130), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
-  const shows = (n: number) => cardAt(reached, [], n).reasons.some(r => r.text === 'Set a new target or switch to maintenance');
+  const shows = (n: number) => cardAt(reached, [], n).reasons.some(r => r.text.startsWith('Set a new target or switch to maintenance'));
   const first = cardAt(reached, [], 80);
   assert.equal(first.verdict, 'reached');
   assert.ok(first.reachedAt != null);
   const reachedDay = range(40, 80).find(n => D(n) === first.reachedAt) as number;
-  for (const n of range(reachedDay, reachedDay + 7)) assert.equal(shows(n), true, `day +${n - reachedDay}`);
-  for (const n of range(reachedDay + 8, reachedDay + 30)) assert.equal(shows(n), false, `day +${n - reachedDay}`);
+  // Wave 22w: the question runs to the END of a calendar week - every week whose Monday is under 7 days after the reach asks it - so it
+  // is never dropped on a Saturday (it used to expire on a 7-day timer, mid-week).
+  const lastAskingMonday = Math.floor((reachedDay + 6) / 7) * 7; // days are numbered from a Monday: multiples of 7 are Mondays
+  for (const n of range(reachedDay, lastAskingMonday + 6)) assert.equal(shows(n), true, `day +${n - reachedDay}`);
+  for (const n of range(lastAskingMonday + 7, reachedDay + 30)) assert.equal(shows(n), false, `day +${n - reachedDay}`);
 });
 
 test('held for two weeks on logged intake: the maintenance target is that intake — card and review', () => {
@@ -208,10 +211,10 @@ test('held for two weeks on logged intake: the maintenance target is that intake
   const { card, review } = reviewOn(reached, meals, 84);
   assert.equal(card.verdict, 'reached');
   assert.equal(card.weightRead?.plan?.state, 'maintenance');
-  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), "You've held 84 kg on ~2,050 kcal — make that your maintenance target");
+  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target");
   assert.equal(review.nextWeek, card.weightRead?.plan?.action.text);
   assert.doesNotMatch(review.nextWeek, /Switch to maintenance in Goals/);
-  assert.equal(plainSpaces(goalOpenerLine(card, 'metric') ?? ''), "You've held 84 kg on ~2,050 kcal — make that your maintenance target.");
+  assert.equal(plainSpaces(goalOpenerLine(card, 'metric') ?? ''), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target.");
   assert.equal(requiredOpenerLine(card, 'weight_loss', 'metric'), goalOpenerLine(card, 'metric'));
   assert.equal(goalFallbackOpener(card, 'weight_loss', 'metric')?.startsWith("You've held"), true);
   // NBSP between the number and its unit, in the card's own copy.
@@ -220,8 +223,13 @@ test('held for two weeks on logged intake: the maintenance target is that intake
 
 test('after the first week a reached goal is told to hold, not to "switch to maintenance"', () => {
   const reached = readings(range(0, 130), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
+  // Monday 77 is still inside the first 3 weeks of maintenance (wave 22w): the step toward maintenance, as a number.
   const { review } = reviewOn(reached, [], 77);
-  assert.match(plainSpaces(review.nextWeek), /^Keep weighing in a few mornings a week; if your average drifts 1 kg above your target, that is your cue to act\.$/);
+  assert.match(plainSpaces(review.nextWeek), /^Target reached — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\) and watch the weekly average for 2 weeks; a drift of 1 kg above or below your target is your cue to act$/);
+  assert.doesNotMatch(review.nextWeek, /switch to maintenance/i);
+  // Later it is the two-sided watch alone.
+  const later = reviewOn(reached, [], 98).review;
+  assert.match(plainSpaces(later.nextWeek), /^Keep weighing in a few mornings a week; if your average drifts 1 kg above or below your target, that is your cue to act\.$/);
 });
 
 test('the coach signals follow the plan: "plateau" only in a plateau week, "too fast" only while the call is on', () => {
@@ -235,7 +243,9 @@ test('the coach signals follow the plan: "plateau" only in a plateau week, "too 
   };
   // Day 52: the scale has been flat 3 weeks as of today, but the week's plan (made from Sunday 48) has not named a plateau.
   const early = at(52);
-  assert.equal(early.card.weightRead?.state, 'pace');
+  // (Wave 22w: day 52 is a flat fortnight - two flat weeks after a confirmed loss - which the card calls a calm hold, not a plateau.)
+  assert.equal(early.card.weightRead?.state, 'plateau');
+  assert.equal(early.card.weightRead?.plan?.flatWeeks, 2);
   assert.ok(early.daily.includes('plateau'), 'read from today\'s scale the plateau is already there');
   assert.ok(!early.planned.includes('plateau'), 'the coach says what the card says');
   // Day 57: the plan names it.
@@ -268,5 +278,56 @@ test('a reached goal whose calorie target already is maintenance is told to keep
   }
   // On a deficit budget the same week says to set a new target or switch.
   const deficit = cardAt(reached, [], reachedDay + 1, { budget: { ...BUDGET, formulaTdee: 2350 } });
-  assert.equal(deficit.reasons.find(r => r.kind === 'next_step')?.text, 'Set a new target or switch to maintenance');
+  assert.match(plainSpaces(deficit.reasons.find(r => r.kind === 'next_step')?.text ?? ''), /^Set a new target or switch to maintenance — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\)/);
+});
+
+test('P2-4: while the plan is ahead (or a kilo from the target) the review does not tell a heavy-weekend user to tighten anything', () => {
+  // 0.7 kg/wk against a date 18 weeks out is well ahead; MEALS run 330 kcal over on weekends, which the review would otherwise coach.
+  const ahead = readings(range(0, 130), n => 92 - 0.1 * n + wobble(n));
+  const { card, review } = reviewOn(ahead, MEALS, 56);
+  assert.equal(card.weightRead?.plan?.call, 'ahead');
+  assert.equal(card.weightRead?.plan?.action.kind, 'keep_going');
+  assert.equal(review.nextWeek, 'Keep your routine — no need to tighten anything');
+  assert.doesNotMatch(review.nextWeek, /weekend|dinner|trim/i);
+  // A plan that does ask something (behind: move the date or trim) keeps saying that, word for word.
+  const slow = readings(range(0, 130), n => 92 - 0.035 * n + wobble(n));
+  const behind = reviewOn(slow, MEALS, 49);
+  assert.equal(behind.review.nextWeek, behind.card.weightRead?.plan?.action.text);
+});
+
+test('P2-5: an on-pace call that rests on two paces either side of the date shows the range, and the coach never calls the target date an ETA', () => {
+  // A loss that slowed (0.65 kg/wk, then 0.4) against a date the slower pace misses: on pace because the two straddle it.
+  const slowing = readings(range(0, 130), n => (n < 14 ? 92 - 0.093 * n : 92 - 0.093 * 14 - 0.055 * (n - 14)) + wobble(n));
+  const card = cardAt(slowing, [], 35, { target: { weightKg: 84, date: D(126), weeklySessions: 3 } });
+  const plan = card.weightRead?.plan;
+  assert.equal(card.verdict, 'on_track');
+  assert.equal(plan?.call, 'on_pace');
+  assert.ok(plan?.earlierPace != null, 'the pace a week earlier is carried');
+  const rate = card.reasons.find(r => r.kind === 'rate')?.text ?? '';
+  assert.match(plainSpaces(rate), /^Down \d\.\d\d–\d\.\d\d kg\/wk \(\d\.\d+–\d\.\d+% of bodyweight\) over the last 3 weeks/);
+  const coach = formatGoalProgressLines(card, 'metric').join('\n');
+  assert.doesNotMatch(coach, /ETA/);
+  assert.match(coach, /rate -\d\.\d\d to -\d\.\d\d kg\/wk over the last 3 weeks of weigh-ins \(two weekly reads either side of the target date\)/);
+  assert.match(coach, /on pace for target date/);
+  // A pace that supports the call on its own stays a single number.
+  const steady = cardAt(readings(range(0, 130), n => 92 - 0.08 * n + wobble(n)), [], 35, { target: { weightKg: 84, date: D(126), weeklySessions: 3 } });
+  assert.equal(steady.weightRead?.plan?.earlierPace ?? null, null);
+  assert.doesNotMatch(steady.reasons.find(r => r.kind === 'rate')?.text ?? '', /–\d\.\d\d/);
+});
+
+test('P3: with the newest weigh-in a week old the rate names the window it was read over, and the coach says so', () => {
+  const pre = readings(range(0, 59), n => 92 - 0.08 * n + wobble(n)); // last weigh-in Thu Apr 30 (day 59)
+  const card = cardAt(pre, [], 70); // Monday 70: 11 days without a weigh-in
+  assert.equal(card.lastWeighInDaysAgo, 11);
+  assert.ok(card.weightRead?.plan?.staleSince != null);
+  const rate = card.reasons.find(r => r.kind === 'rate')?.text ?? '';
+  assert.match(plainSpaces(rate), /over the 3 weeks to Apr 30\b/);
+  assert.doesNotMatch(rate, /over the last 3 weeks/);
+  const coach = formatGoalProgressLines(card, 'metric').join('\n');
+  assert.match(coach, /over the 3 weeks of weigh-ins up to Apr 30/);
+  assert.doesNotMatch(coach, /over the last 3 weeks of weigh-ins/);
+  assert.match(coach, /No weigh-in since Apr 30: say so and ask for a weigh-in/);
+  // A fresh weigh-in is "the last 3 weeks" again.
+  const fresh = cardAt(pre, [], 62);
+  assert.match(plainSpaces(fresh.reasons.find(r => r.kind === 'rate')?.text ?? ''), /over the last 3 weeks/);
 });

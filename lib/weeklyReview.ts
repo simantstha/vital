@@ -22,8 +22,8 @@ import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget,
 import { KG_TO_LB, isRunningWorkoutType, mixedReturnLead, raceLabel } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
-import { dayNumber, rawPlateau } from './weightPace';
-import { isInstruction, type WeightWeekPlan } from './weightWeekPlan';
+import { dayNumber, meanOver, rawPlateau } from './weightPace';
+import { isInstruction, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
@@ -444,7 +444,10 @@ function weightChange(input: WeeklyReviewInput, week: Week, prevWeek: Week): Wei
   const trend = computeWeightTrend(input.weightReadings).days;
   const cur = trend.filter(d => week.set.has(d.day));
   const prev = trend.filter(d => prevWeek.set.has(d.day));
-  if (cur.length >= MIN_WEIGH_INS_FOR_MEAN && prev.length >= MIN_WEIGH_INS_FOR_MEAN) {
+  // A weight-loss goal has one weight, the weekly average (the card never quotes the smoothed trend): a week after a thin one (a single
+  // weigh-in, as after a gap) is still compared with it, not with the smoothed line (wave 22w).
+  const prevNeeded = input.goal === 'weight_loss' ? 1 : MIN_WEIGH_INS_FOR_MEAN;
+  if (cur.length >= MIN_WEIGH_INS_FOR_MEAN && prev.length >= prevNeeded) {
     const curMean = mean(cur.map(d => d.rawKg)) as number;
     const prevMean = mean(prev.map(d => d.rawKg)) as number;
     return { deltaKg: curMean - prevMean, endKg: curMean, basis: 'mean' };
@@ -475,12 +478,21 @@ interface ReachedWeek {
 function reachedWeek(input: WeeklyReviewInput, week: Week): ReachedWeek | null {
   if (input.goal !== 'weight_loss' || input.verdict !== 'reached') return null;
   const cur = weekWeighIns(input, week);
+  // The goal card's own weekly average (lib/goalProgress.ts buildWeightBlock): the raw mean of the 7 days up to the newest weigh-in
+  // (3+ weigh-ins), else that newest reading - rounded once to the 0.1 kg it prints, so "Holding at 83.8 kg" is the same number on the
+  // Monday card, the opener, the review and the push (the reviewed Mon-Sun mean differed when the week's last weigh-in was not Sunday).
+  const newest = cur.length > 0 ? cur[cur.length - 1] : null;
+  const week7 = newest != null ? meanOver(computeWeightTrend(input.weightReadings).days.filter(d => d.day <= newest.day), newest.day, 7) : null;
   return {
     targetKg: input.targetWeightKg ?? null,
     thisWeek: input.reachedAt != null && week.set.has(input.reachedAt),
-    // Rounded once to the 0.1 kg the card prints its weekly average at, so "Holding at 84.1 kg" is the same number on both.
-    meanKg: cur.length > 0 ? round1(mean(cur.map(d => d.rawKg)) as number) : null,
+    meanKg: newest == null ? null : round1(week7 != null && week7.n >= WEEK_MEAN_MIN_WEIGH_INS ? week7.meanKg : newest.rawKg),
   };
+}
+
+/** The reviewed week's average is exactly the target at the 0.1 kg it prints: "Holding at your 84 kg target". */
+function onTarget(r: ReachedWeek): boolean {
+  return r.targetKg != null && r.meanKg != null && Math.round(r.meanKg * 10) === Math.round(r.targetKg * 10);
 }
 
 /** Holding more than HOLDING_RANGE_KG under the target: the goal is met, the loss should stop. */
@@ -1533,11 +1545,16 @@ function reachedWin(input: WeeklyReviewInput, week: Week): string | null {
   const r = reachedWeek(input, week);
   if (r == null || r.meanKg == null) return null;
   if (r.thisWeek) {
+    // The average, as the card says it: its distance from the target when it is not on it ("weekly average within 0.3 kg of it").
+    const off = r.targetKg != null ? round1(Math.abs(r.meanKg - r.targetKg)) : 0;
+    const avg = off >= 0.1 ? `weekly average within ${weightText(input, off)} of it` : `weekly average ${weightTextFixed(input, r.meanKg)}`;
     return r.targetKg != null
-      ? `You reached your ${weightText(input, r.targetKg)} target — weekly average ${weightTextFixed(input, r.meanKg)}.`
+      ? `You reached your ${weightText(input, r.targetKg)} target — ${avg}.`
       : `You reached your target — weekly average ${weightTextFixed(input, r.meanKg)}.`;
   }
   if (isUnderTarget(r)) return null;
+  // Exactly on the target "Holding at 84.0 kg, within 1 kg of 84 kg" says it twice.
+  if (onTarget(r)) return `Holding at your ${weightText(input, r.targetKg as number)} target.`;
   return r.targetKg != null
     ? `Holding at ${weightTextFixed(input, r.meanKg)}, within ${weightText(input, HOLDING_RANGE_KG)} of ${weightText(input, r.targetKg)}.`
     : `Holding at ${weightTextFixed(input, r.meanKg)}.`;
@@ -1700,7 +1717,9 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     if (reached.thisWeek) {
       return clipHeadline(`You reached ${reached.targetKg != null ? weightText(input, reached.targetKg) : 'your target'} this week`);
     }
-    const holding = reached.meanKg != null ? `Holding at ${weightTextFixed(input, reached.meanKg)}` : 'Holding your target weight';
+    const holding = reached.meanKg != null
+      ? (onTarget(reached) ? `Holding at your ${weightText(input, reached.targetKg as number)} target` : `Holding at ${weightTextFixed(input, reached.meanKg)}`)
+      : 'Holding your target weight';
     return clipHeadline(sessions ? `${holding}, ${sessionCount(sessions)}` : holding);
   }
 
@@ -2035,7 +2054,7 @@ function reachedTips(input: WeeklyReviewInput): string[] {
     maintenance
       ? 'Your calorie target is already at maintenance — keep it there and the weight should hold.'
       : 'Switch to maintenance in Goals so your calorie target stops pushing you lower.',
-    `Keep weighing in a few mornings a week; if your average drifts ${weightText(input, HOLDING_RANGE_KG)} above your target, that is your cue to act.`,
+    `Keep weighing in a few mornings a week; if your average drifts ${weightText(input, HOLDING_RANGE_KG)} above or below your target, that is your cue to act.`,
     maintenance
       ? 'Ready for more? Set a new target in Goals, or stay on maintenance and enjoy holding here.'
       : 'Ready for more? Set a new target in Goals, or switch to maintenance and enjoy holding here.',
@@ -2052,7 +2071,26 @@ function weightPlanNextWeek(input: WeeklyReviewInput): string | null {
   const plan = input.weightPlan;
   if (input.goal !== 'weight_loss' || plan == null) return null;
   if (isInstruction(plan.action) || ((plan.state === 'maintenance' || plan.state === 'reached') && plan.action.kind === 'hold')) return plan.action.text;
+  // Ahead, nearly there or a kilo from the target (wave 22w): the plan asks for nothing, so the review's own food tips (a weekend to plan,
+  // a meal to decide ahead) would be restriction the plan does not want. Nothing to tighten.
+  if (plan.state !== 'reached' && plan.state !== 'maintenance' && (plan.call === 'ahead' || plan.nearlyThere || plan.call === 'too_fast' || withinAKiloOfTarget(input))) {
+    return NO_NEED_TO_TIGHTEN_NEXT_WEEK;
+  }
   return null;
+}
+
+export const NO_NEED_TO_TIGHTEN_NEXT_WEEK = 'Keep your routine — no need to tighten anything';
+
+/** The goal's weekly average (the card's own: 7 days up to the newest weigh-in, 3+ weigh-ins, else the newest reading) is above the target by at most a kilo. */
+function withinAKiloOfTarget(input: WeeklyReviewInput): boolean {
+  if (input.targetWeightKg == null) return false;
+  const days = computeWeightTrend(input.weightReadings).days;
+  if (days.length === 0) return false;
+  const newest = days[days.length - 1];
+  const week = meanOver(days, newest.day, 7);
+  const kg = week != null && week.n >= WEEK_MEAN_MIN_WEIGH_INS ? week.meanKg : newest.rawKg;
+  const toGo = kg - input.targetWeightKg;
+  return toGo >= 0 && toGo <= HOLDING_RANGE_KG;
 }
 
 /** Weight loss with nothing else to fix: a tip built from what was actually logged, never asking for what is already done. */

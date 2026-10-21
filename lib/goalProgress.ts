@@ -909,6 +909,8 @@ function buildWeightBlock(input: GoalProgressInput): WeightBlock {
       targetKcal: input.budget?.targetKcal ?? null,
       floorKcal: input.budget?.floorKcal ?? null,
       formulaTdee: input.budget?.formulaTdee ?? null,
+      // The learned maintenance, only when the logs are confident enough to quote it (the same gate as the tdee reason).
+      learnedTdee: input.budget?.tdeeConfidence === 'medium' || input.budget?.tdeeConfidence === 'high' ? input.budget.learnedTdee : null,
       weeklySessions: input.target.weeklySessions,
     });
     if (plan != null) {
@@ -992,11 +994,13 @@ function calorieAdherenceStats(input: GoalProgressInput): { target: number; hit:
 function calorieAdherenceReason(input: GoalProgressInput): GoalProgressReason | null {
   const stats = calorieAdherenceStats(input);
   if (stats == null) return null;
-  const { target, hit, logged, frac } = stats;
+  const { target, hit, logged } = stats;
+  // The count is a rolling 7 days (not the calendar week), so it says so; and it is a fact, not a verdict: a rolling count that moves a day at
+  // a time would flip a good / neutral / watch tone daily, so the tone stays neutral (the week's verdict is the plan's).
   return {
     kind: 'calorie_adherence',
-    text: `Stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged ${plural(logged, 'day')} this week`,
-    tone: frac >= 0.7 ? 'good' : frac < 0.5 ? 'watch' : 'neutral',
+    text: `Stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged ${plural(logged, 'day')} in the last 7 days`,
+    tone: 'neutral',
   };
 }
 
@@ -1428,8 +1432,11 @@ function fmtWeightFixed(input: GoalProgressInput, kg: number): string {
 /** The reach itself, first in the reasons: the weekly average (the scale's honest average), never "trend ... is at or past". */
 function reachedLeadReason(input: GoalProgressInput, w: WeightBlock, targetKg: number): GoalProgressReason {
   const since = w.reachedAt ? `, first reached ${fmtDate(w.reachedAt, input.todayKey)}` : '';
+  // A weekly average that is not exactly the target is not printed as if it were the reach ("You hit 84 kg - weekly average 84.2 kg"):
+  // it says how close the average is.
+  const offBy = input.goal === 'weight_loss' && w.weekMeanKg != null ? round1(Math.abs(w.weekMeanKg - targetKg)) : 0;
   const avg = w.weekMeanKg != null
-    ? `weekly average ${fmtWeightFixed(input, w.weekMeanKg)}`
+    ? (offBy >= 0.1 ? `weekly average within ${fmtWeight(input, offBy)} of your target` : `weekly average ${fmtWeightFixed(input, w.weekMeanKg)}`)
     : w.scaleKg != null
       ? `latest weigh-in ${fmtWeightFixed(input, w.scaleKg)}`
       : `trend ${fmtWeightFixed(input, w.currentKg as number)}`;
@@ -1445,6 +1452,8 @@ function targetPositionReason(input: GoalProgressInput, w: WeightBlock, targetKg
   const holdKg = w.progressKg ?? (w.currentKg as number);
   const diff = holdKg - targetKg;
   if (Math.abs(diff) <= HOLDING_NEAR_TARGET_KG) {
+    // Exactly on the target, "Holding at 84.0 kg, within 1 kg of 84 kg" says it twice: "Holding at your 84 kg target".
+    if (input.goal === 'weight_loss' && round1(holdKg) === round1(targetKg)) return { kind: 'position', text: `Holding at your ${fmtWeight(input, targetKg)} target`, tone: 'neutral' };
     return {
       kind: 'position',
       text: `Holding at ${fmtWeightFixed(input, holdKg)}, within ${fmtWeight(input, HOLDING_NEAR_TARGET_KG)} of ${fmtWeight(input, targetKg)}`,
@@ -1481,18 +1490,21 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
  * a pace wobbling around 1% never flips the tone from one day to the next; with the call on, a pace between 0.9% and the ceiling
  * keeps the watch ("close to the ceiling", hysteresis) and is not called "safe".
  * `easeToMaintenance`: the target is reached and the loss is still past the ceiling, so the warning says what to do.
+ * `other` (wave 22w): the pace a week earlier, when "on pace" rests on two paces that straddle the date - the rate is then the honest
+ * range ("Down 0.37-0.58 kg/wk"), not one number that lands weeks off the date it is called on track for.
  */
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
+  if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
   // The shown figure decides the band: a rate printed as "1%" is never called "above the 1% ceiling".
   const abs = round2(Math.abs(pace.pctPerWeek));
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
-  let text = `${dir} ${fmtWeight(input, Math.abs(pace.kgPerWeek), 2)}/wk (${abs}% of bodyweight) over the last ${weeks} weeks`;
+  let text = `${dir} ${fmtWeight(input, Math.abs(pace.kgPerWeek), 2)}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pace.kgPerWeek < 0) {
     if (opts.tooFast && abs > band.maxPct) {
@@ -1513,6 +1525,31 @@ function paceReason(
   } else {
     tone = 'watch';
     text += ', the opposite way from your goal';
+  }
+  return { kind: 'rate', text, tone };
+}
+
+/** "over the last 3 weeks", or - when the newest weigh-in is a week old or more - "over the 3 weeks to May 10": the window is the one that really ends then. */
+function paceWindowText(input: GoalProgressInput, weeks: number, endedOn?: string | null): string {
+  return endedOn != null ? `over the ${weeks} weeks to ${fmtDate(endedOn, input.todayKey)}` : `over the last ${weeks} weeks`;
+}
+
+/** "Down 0.37–0.58 kg/wk (0.41–0.64% of bodyweight) over the last 3 weeks": the two paces an on-pace call rests on. */
+function paceRangeReason(
+  input: GoalProgressInput,
+  pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
+  other: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'>,
+  endedOn?: string | null,
+): GoalProgressReason {
+  const band = FAT_LOSS_BAND;
+  const kgs = [Math.abs(pace.kgPerWeek), Math.abs(other.kgPerWeek)].sort((a, b) => a - b);
+  const pcts = [round2(Math.abs(pace.pctPerWeek)), round2(Math.abs(other.pctPerWeek))].sort((a, b) => a - b);
+  const weeks = Math.round(pace.windowDays / 7);
+  let text = `Down ${weightNum(input, kgs[0], 2)}–${fmtWeight(input, kgs[1], 2)}/wk (${pcts[0]}–${pcts[1]}% of bodyweight) ${paceWindowText(input, weeks, endedOn)}`;
+  let tone: ReasonTone = 'neutral';
+  if (pcts[0] >= band.minPct && pcts[1] <= band.maxPct) {
+    tone = 'good';
+    text += `, inside the ${band.minPct}–${band.maxPct}% safe band`;
   }
   return { kind: 'rate', text, tone };
 }
@@ -1636,17 +1673,26 @@ function returningOutcome(input: GoalProgressInput, w: WeightBlock, plan: Weight
     ? `Keep weighing in so your trend catches up — ${left} more ${plural(left, 'weigh-in')} before your pace is read again`
     : `Keep weighing in — your pace is read again on ${fmtWeekday(addDays(plan.weekStart, 7), input.todayKey)}`;
   return {
-    verdict: down != null && down >= EARLY_DOWN_MIN_KG ? 'progressing' : 'holding',
+    // The colour the card had before the gap is kept (the plan carries it): a welcome back never downgrades on track / ahead.
+    // Otherwise it is progressing while the scale is down on the start, else holding.
+    verdict: plan.verdict === 'on_track' || plan.verdict === 'ahead'
+      ? plan.verdict
+      : (down != null && down >= EARLY_DOWN_MIN_KG ? 'progressing' : 'holding'),
     headline: clip(`Welcome back — ${change}`),
     reasons: build({ kind: 'pace_note', text, tone: 'neutral' }),
   };
 }
 
-/** Three flat weeks of raw weekly means: named as a plateau, with the week's one action and the cause it named. */
+/**
+ * Three flat weeks of raw weekly means: named as a plateau, with the week's one action and the cause it named. Two flat weeks after a
+ * confirmed loss (`plan.flatWeeks` 2, wave 22w) are not yet a plateau: a calm "common, your plan holds", never "behind".
+ */
 function plateauOutcome(input: GoalProgressInput, plan: WeightWeekPlan, build: ReasonBuilder): Outcome {
   return {
     verdict: 'holding',
-    headline: clip(`Plateau — weekly average ~${fmtWeightFixed(input, plan.plateauMeanKg as number)} for 3 weeks`),
+    headline: plan.flatWeeks === 2
+      ? 'Two flat weeks — common; your plan holds'
+      : clip(`Plateau — weekly average ~${fmtWeightFixed(input, plan.plateauMeanKg as number)} for 3 weeks`),
     reasons: build({ kind: 'plateau', text: plan.action.text, tone: 'neutral' }),
   };
 }
@@ -1748,7 +1794,7 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  const rate = paceReason(input, p, { tooFast: plan.tooFast });
+  const rate = paceReason(input, p, { tooFast: plan.tooFast, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null });
   const action = planActionReason(plan);
 
   if (plan.tooFast && !plan.nearlyThere) {
@@ -3358,7 +3404,7 @@ function weightReadOf(input: GoalProgressInput, w: WeightBlock, verdict: GoalVer
 function loggedOverBudgetDays(input: GoalProgressInput, cause: NonNullable<WeightWeekPlan['plateauCause']>): number {
   const target = cause.targetKcal;
   if (target == null) return 0;
-  const from = addDays(cause.namedAt, -(PLATEAU_SPAN_DAYS - 1));
+  const from = addDays(cause.namedAt, -((cause.spanDays ?? PLATEAU_SPAN_DAYS) - 1));
   return (input.intakeHistoryDays ?? input.intakeDays).filter(d =>
     d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD && d.day >= from && d.day <= cause.namedAt
     && d.kcal > target * CALORIE_ADHERENCE_TOLERANCE).length;

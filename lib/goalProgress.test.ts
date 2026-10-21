@@ -1845,9 +1845,15 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   const p = computeGoalProgress(justReachedInput());
   assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
   assert.equal(p.reasons[0].tone, 'good');
-  assert.match(p.reasons[0].text, /^You hit 85\.6 kg — weekly average 8\d\.\d kg, first reached \w{3} \d{1,2}$/);
+  // Wave 22w: an average that is not exactly the target is not printed as the reach - it says how close it is.
+  assert.match(p.reasons[0].text, /^You hit 85\.6 kg — weekly average within 0\.\d kg of your target, first reached \w{3} \d{1,2}$/);
   assert.doesNotMatch(p.reasons[0].text, /at or past/);
-  assert.deepEqual(p.reasons[2], { kind: 'next_step', text: 'Set a new target or switch to maintenance', tone: 'neutral' });
+  // Wave 22w: switching to maintenance is a number - the step from the budget (no budget here: only the amounts).
+  assert.deepEqual(p.reasons[2], {
+    kind: 'next_step',
+    text: 'Set a new target or switch to maintenance — add ~150–200 kcal a day and watch the weekly average for 2 weeks',
+    tone: 'neutral',
+  });
   // Continued loss is not "inside the safe band" any more.
   assert.ok(!p.reasons.some(r => r.kind === 'rate' || /safe band/.test(r.text)));
   // Weekly average ~85.5 kg vs 86 kg: within 1 kg.
@@ -1855,9 +1861,15 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   assert.match(p.reasons[1].text, /^Holding at 85\.\d kg, within 1 kg of 85\.6 kg$/);
   assert.equal(p.reasons[1].tone, 'neutral');
   assertWellFormed(p);
-  // Past that first week the question is not asked again every day (it was shown daily for 25 days).
+  // Past that first week the question is not asked again every day (it was shown daily for 25 days) - wave 22w: for the first 3 weeks of
+  // maintenance the step toward it is the next step instead (about 16 days after the reach here)...
   const later = computeGoalProgress(reachedLossInput());
-  assert.deepEqual(later.reasons.map(r => r.kind), ['reached', 'position']);
+  assert.deepEqual(later.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
+  assert.doesNotMatch(later.reasons[2].text, /Set a new target/);
+  // ...and after that the card has no next step at all.
+  const muchLater = computeGoalProgress(reachedLossInput({ weightReadings: ramp(60, 88, -0.07) }));
+  assert.equal(muchLater.verdict, 'reached');
+  assert.ok(!muchLater.reasons.some(r => r.kind === 'next_step'), JSON.stringify(muchLater.reasons));
 });
 
 test('reached (weight loss): well past the target reads "Below target by X kg"; imperial reads lb', () => {
@@ -2694,9 +2706,17 @@ test('C. coming back after a gap: "Welcome back" with the change since the last 
   assert.match(up.headline, /^Welcome back — the scale is up 0\.8 kg since/);
 });
 
+/**
+ * Eight logged days around the 2,000 kcal target, 8-15 days before TODAY (so before any week's Sunday the plan reads): a user who logs food,
+ * for whom a calorie trim can be checked. Without logs the plan's first step is activity or logging (wave 22w).
+ */
+const LOGGING_USER: GoalProgressInput['intakeDays'] = Array.from({ length: 8 }, (_, i) => ({
+  day: addDays(TODAY, -8 - i), kcal: 1950 + (i % 3) * 40, proteinG: 140, source: 'logged' as const,
+}));
+
 test('D. plateau: three flat weeks of raw weekly means are named, hold the verdict and hide the ETA', () => {
   const flat = onDays(span(-49, 0), o => (o < -21 ? 92 - (o + 49) * 0.09 : 89.5 + (o % 2 === 0 ? 0.1 : -0.1)));
-  const input = youngGoal(50, { weightReadings: flat });
+  const input = youngGoal(50, { weightReadings: flat, intakeDays: LOGGING_USER });
   const p = computeGoalProgress(input);
   assert.equal(p.verdict, 'holding');
   assert.equal(p.eta, null);
@@ -2712,6 +2732,13 @@ test('D. plateau: three flat weeks of raw weekly means are named, hold the verdi
   assert.equal(unknown.reasons[0].text, 'Common and often water: keep your routine; if still flat in 2 weeks, trim ~150 kcal a day or add two 30-minute walks');
   const kcalOnly = computeGoalProgress({ ...input, target: { ...input.target, weeklySessions: null } });
   assert.match(kcalOnly.reasons[0].text, /^Common and often water: keep 2,000 kcal; if still flat/);
+  // Someone who logs no food gets activity and logging first, not a kcal trim there is nothing to check against (wave 22w).
+  const noLogs = computeGoalProgress({ ...input, intakeDays: [], intakeHistoryDays: undefined });
+  assert.equal(
+    noLogs.reasons[0].text,
+    'Common and often water: keep 2,000 kcal and 3 sessions; if still flat in 2 weeks, add two 30-minute walks and log a few days so we can see where the calories go',
+  );
+  assert.doesNotMatch(noLogs.reasons[0].text, /trim/);
   // The call is made on the raw weekly means, not the smoothed trend.
   assert.equal(p.weightRead?.weekMeanKg !== null, true);
 });
@@ -2739,16 +2766,19 @@ test('F. reached: the weekly average reaches the target before the lagging trend
   assert.doesNotMatch(p.reasons.map(r => r.text).join(' '), /at or past/);
   assert.equal(p.weightRead?.state, 'reached');
   assert.ok(p.weightRead!.reachedDaysAgo! >= 0);
-  assert.equal(p.reasons[1].text, 'Holding at 84.0 kg, within 1 kg of 84 kg');
-  // Wave 21w: reached 12 days ago — past the first week, "Set a new target or switch to maintenance" is not asked again.
-  assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position']);
+  assert.equal(p.reasons[1].text, 'Holding at your 84 kg target');
+  // Wave 21w: reached 12 days ago — past the first week, "Set a new target or switch to maintenance" is not asked again; wave 22w: the
+  // first 3 weeks of maintenance carry the step toward it as a number instead.
+  assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
+  assert.doesNotMatch(p.reasons[2].text, /Set a new target/);
+  assert.match(p.reasons[2].text, /^Target reached — add ~150–200 kcal a day/);
 });
 
 test('F. reached copy is unit-aware: lb for imperial users', () => {
   const readings = onDays(span(-40, 0), o => (o < -12 ? 90 + (o + 40) * -0.2 : 84 + (o % 2 === 0 ? 0.05 : -0.05)));
   const p = computeGoalProgressRaw(youngGoal(80, { unitSystem: 'imperial', weightReadings: readings }));
   assert.ok(p.reasons[0].text.startsWith(`You hit 185.2${NBSP}lb — weekly average 185.2${NBSP}lb`), p.reasons[0].text);
-  assert.equal(p.reasons[1].text, `Holding at 185.2${NBSP}lb, within 2.2${NBSP}lb of 185.2${NBSP}lb`);
+  assert.equal(p.reasons[1].text, `Holding at your 185.2${NBSP}lb target`);
 });
 
 test('F. reached is sticky: one 84.5 reading does not flip it back, and the trend must leave the range to end it', () => {
@@ -3231,7 +3261,7 @@ test('B3. behind pace projects the date whenever the scale is falling, and says 
   // 0.28 kg/wk (0.31%): the date is 90 days out with 5.3 kg to go (the 7-day average is 89.3 kg) — about 6 weeks out of reach.
   // (Wave 21w: more than 8 weeks past the date no projection is quoted — see the next test — so this date is 90 days out, not 60.)
   const readings = onDays(span(-70, 0), o => 92 - 0.04 * (o + 70));
-  const input = youngGoal(80, { target: { weightKg: 84, date: addDays(TODAY, 90), weeklySessions: 3 }, weightReadings: readings });
+  const input = youngGoal(80, { target: { weightKg: 84, date: addDays(TODAY, 90), weeklySessions: 3 }, weightReadings: readings, intakeDays: LOGGING_USER });
   const p = computeGoalProgress(input);
   assert.equal(p.verdict, 'behind');
   assert.match(p.headline, /^Behind pace — about 5\.3 kg to go, around \w{3} \d{1,2}, \d{4}$/);
@@ -3239,8 +3269,12 @@ test('B3. behind pace projects the date whenever the scale is falling, and says 
   assert.ok(p.eta, 'the projected date is stated');
   assert.equal(p.onPaceForTargetDate, false);
   const action = p.reasons.find(r => r.kind === 'action')!;
-  // The trim is one weekly step: the gap to the pace the date needs, in kcal, rounded to 50 and never more than 200.
+  // The trim is the ONE step (TRIM_STEP_KCAL, 150 kcal) a plateau uses too.
   assert.match(action.text, /^To make Jan 4, 2027 you'd need ~0\.4\d kg\/wk — move the date or trim ~150 kcal a day \(to ~1,850 kcal\)$/);
+  // No food log: activity and logging first, not a trim there is nothing to check against.
+  const noLogs = computeGoalProgress({ ...input, intakeDays: [], intakeHistoryDays: undefined }).reasons.find(r => r.kind === 'action')!;
+  assert.match(noLogs.text, /^To make Jan 4, 2027 you'd need ~0\.4\d kg\/wk — move the date, or add two 30-minute walks and log a few days so we can see where the calories go$/);
+  assert.doesNotMatch(noLogs.text, /trim/);
   // Unknown parts are omitted: no budget, no "(to ~... kcal)".
   const noBudget = computeGoalProgress({ ...input, budget: null }).reasons.find(r => r.kind === 'action')!;
   assert.match(noBudget.text, /move the date or trim ~150 kcal a day$/);
@@ -3261,10 +3295,10 @@ test('B3. behind pace projects the date whenever the scale is falling, and says 
   assertWellFormed(p);
 });
 
-test('B3. far behind (a projection more than 8 weeks past the date) quotes no date: the date won\'t hold, move it or trim one step', () => {
+test('B3. far behind (a projection more than 8 weeks past the date) quotes no date or month: the date won\'t hold, move it or trim one step', () => {
   // The same 0.28 kg/wk with the date only 60 days out: the projection lands about 16 weeks past it.
   const readings = onDays(span(-70, 0), o => 92 - 0.04 * (o + 70));
-  const input = youngGoal(80, { target: { weightKg: 84, date: addDays(TODAY, 60), weeklySessions: 3 }, weightReadings: readings });
+  const input = youngGoal(80, { target: { weightKg: 84, date: addDays(TODAY, 60), weeklySessions: 3 }, weightReadings: readings, intakeDays: LOGGING_USER });
   const p = computeGoalProgress(input);
   assert.equal(p.verdict, 'behind');
   assert.equal(p.headline, "Behind pace — at this rate the Dec 5 date won't hold");
@@ -3272,11 +3306,15 @@ test('B3. far behind (a projection more than 8 weeks past the date) quotes no da
   assert.equal(p.onPaceForTargetDate, false);
   assert.equal(p.weightRead?.weeksVsTarget, null);
   assert.equal(p.weightRead?.plan?.farBehind, true);
-  assert.equal(p.reasons.find(r => r.kind === 'action')?.text, 'Move the date to ~Feb 2027 or trim ~200 kcal a day (to ~1,800 kcal)');
-  assert.equal(p.weightRead?.plan?.action.kcalTarget, 1800);
+  // The action never names the month the pace projects to (it is a guess off a noisy line), only that the date moves.
+  assert.equal(p.reasons.find(r => r.kind === 'action')?.text, 'Move the date or trim ~150 kcal a day (to ~1,850 kcal)');
+  assert.equal(p.weightRead?.plan?.action.kcalTarget, 1850);
   // A budget already on the floor cannot be trimmed: only the date moves.
   const onFloor = computeGoalProgress({ ...input, budget: { ...BUDGET_2000, floorKcal: 2000 } }).reasons.find(r => r.kind === 'action')!;
-  assert.match(onFloor.text, /^Move the date to ~Feb 2027 — your calories are already near the 2,000 kcal floor$/);
+  assert.match(onFloor.text, /^Move the date — your calories are already near the 2,000 kcal floor$/);
+  // No food log: activity and logging first.
+  const noLogs = computeGoalProgress({ ...input, intakeDays: [], intakeHistoryDays: undefined }).reasons.find(r => r.kind === 'action')!;
+  assert.equal(noLogs.text, 'Move the date, or add two 30-minute walks and log a few days so we can see where the calories go');
   // No calorie floor on the budget: 1,400 kcal (unknown sex) stands in.
   const noFloor = computeGoalProgress({ ...input, budget: { ...BUDGET_2000, targetKcal: 1500, floorKcal: 0 } }).reasons.find(r => r.kind === 'action')!;
   assert.match(noFloor.text, /trim ~100 kcal a day \(to ~1,400 kcal\)$/);

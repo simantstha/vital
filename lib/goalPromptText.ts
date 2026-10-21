@@ -166,6 +166,8 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
   }
 }
 
+const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
 /**
  * Compact (<= ~12 lines) "Goal progress" lines for the coach context.
  * Always includes the verdict + headline so the coach quotes the same call
@@ -216,10 +218,23 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const pct = gp.ratePerWeek.pctBodyweight != null ? ` (${gp.ratePerWeek.pctBodyweight}% bw)` : '';
     // The pace is a line through the raw weigh-ins of the last 3 weeks (lib/weightPace.ts) for a weight-loss goal.
     const weeks = Math.round((read?.paceWindowDays ?? 21) / 7);
-    nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${gp.goal === 'weight_loss' ? ` over the last ${weeks} weeks of weigh-ins` : ''}`);
+    // "On pace" resting on two paces that straddle the date (wave 22w): the range, so the rate does not argue with the call.
+    const earlierKg = plan?.earlierPace != null && plan.earlierPace.kgPerWeek < 0 && gp.ratePerWeek.kg < 0 ? plan.earlierPace.kgPerWeek : null;
+    // With the newest weigh-in a week old or more the window ended then (wave 22w): "over the 3 weeks of weigh-ins up to May 10".
+    const upTo = gp.goal === 'weight_loss' && (gp.lastWeighInDaysAgo ?? 0) >= 7 ? shortDate(read?.scaleDay) : null;
+    const overWeeks = gp.goal === 'weight_loss'
+      ? (upTo != null ? ` over the ${weeks} weeks of weigh-ins up to ${upTo}` : ` over the last ${weeks} weeks of weigh-ins`)
+      : '';
+    if (earlierKg != null) {
+      const slow = signedWt(Math.max(gp.ratePerWeek.kg, earlierKg), units, 2).replace(/ (kg|lb)$/, '');
+      nowBits.push(`rate ${slow} to ${signedWt(Math.min(gp.ratePerWeek.kg, earlierKg), units, 2)}/wk${overWeeks} (two weekly reads either side of the target date)`);
+    } else {
+      nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${overWeeks}`);
+    }
   }
   if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));
-  if (gp.eta) nowBits.push(`ETA ${gp.eta}`);
+  // An "on pace" ETA IS the target date (the date to hold, not a projection): it is not called an ETA (wave 22w).
+  if (gp.eta && !(gp.goal === 'weight_loss' && gp.eta === gp.target.date)) nowBits.push(`ETA ${gp.eta}`);
   if (gp.onPaceForTargetDate != null) nowBits.push(gp.onPaceForTargetDate ? 'on pace for target date' : 'not on pace for target date');
   if (gp.race) {
     const daysSince = gp.race.daysSince ?? 0;
@@ -254,7 +269,15 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const rule = isInstruction(plan.action)
       ? 'give this one instruction; do not suggest a different calorie change before next Monday'
       : 'no calorie change is asked this week';
-    lines.push(`- This week's plan (set ${shortDate(plan.weekStart) ?? plan.weekStart}, the same all week): ${plainSpaces(plan.action.text)} — ${rule}`);
+    // A plan an event re-made inside its week says so (wave 22w); only a plan decided on its Monday is "the same all week".
+    const set = plan.updated
+      ? `set ${shortDate(plan.weekStart) ?? plan.weekStart}, updated ${WEEKDAY_ABBR[new Date(`${plan.updated.day}T00:00:00Z`).getUTCDay()]} ${shortDate(plan.updated.day) ?? plan.updated.day}: ${plan.updated.why}`
+      : `set ${shortDate(plan.weekStart) ?? plan.weekStart}, the same all week`;
+    lines.push(`- This week's plan (${set}): ${plainSpaces(plan.action.text)} — ${rule}`);
+    if (plan.staleSince) {
+      // The week began with no weigh-in for 7+ days (wave 22w): the numbers above are from that last weigh-in.
+      lines.push(`- No weigh-in since ${shortDate(plan.staleSince) ?? plan.staleSince}: say so and ask for a weigh-in; do not read a new pace, date or trend into the old readings.`);
+    }
   }
 
   // Returning from a break: the lifts are rebuilding, never a stall or a reason to deload. While ANY main lift is
@@ -289,7 +312,10 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (read?.state === 'returning') {
     lines.push('- The user is back after a gap in weigh-ins: welcome them back and keep weighing in; do not call the pace too fast or behind until 3 weigh-ins are back.');
   }
-  if (read?.state === 'plateau') {
+  if (read?.state === 'plateau' && plan?.flatWeeks === 2) {
+    // Two flat weeks after a confirmed loss (wave 22w): a calm hold. The 21-day line still holds the good weeks, so it must not be called behind.
+    lines.push('- Two flat weeks on the raw weekly averages after weeks of steady loss: common, not a failure and not "behind" — the plan holds. No projected date, no calorie cut; give the week\'s one action. If the third week is flat too it becomes a plateau.');
+  } else if (read?.state === 'plateau') {
     const cause = plan?.plateauCause ?? null;
     if (cause?.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
       // The logs of the plateau's own weeks name the weekends, and the cause is kept for the whole plateau.

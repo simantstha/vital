@@ -142,7 +142,7 @@ export interface AssessWeightSignalsInput {
    * a plateau week, `too_fast_loss` only while the plan's "too fast" call is on, so the coach never says "plateau" or
    * "losing fast" on a day the card says otherwise. Absent (no card): the signals read the scale as before.
    */
-  weekPlan?: { state: string; tooFast: boolean } | null;
+  weekPlan?: { state: string; tooFast: boolean; flatWeeks?: number | null } | null;
 }
 
 function round1(n: number): number {
@@ -357,7 +357,8 @@ export function assessWeightSignals(input: AssessWeightSignalsInput): WeightSign
   const tooFastLoss = weekPlan != null && !weekPlan.tooFast ? null : assessTooFastLoss(trend, todayKey, goalStartDay);
   if (tooFastLoss) signals.push(tooFastLoss);
 
-  const plateau = weekPlan != null && weekPlan.state !== 'plateau' ? null : assessPlateau(trend, goal, todayKey, goalStartDay);
+  // A flat fortnight (the plan's state is 'plateau' with flatWeeks 2, wave 22w) is a calm hold, not yet a plateau: the card says "two flat weeks".
+  const plateau = weekPlan != null && (weekPlan.state !== 'plateau' || weekPlan.flatWeeks === 2) ? null : assessPlateau(trend, goal, todayKey, goalStartDay);
   if (plateau) signals.push(plateau);
 
   const underEating = assessUnderEating(dailyIntakeKcal, floorKcal);

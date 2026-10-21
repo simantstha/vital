@@ -36,6 +36,11 @@ function weightAmount(kg: number, units: UnitSystem): string {
   return trimmed(Math.abs(units === 'imperial' ? kg * LB_PER_KG : kg));
 }
 
+/** A weekly rate to two decimals, trailing zeros dropped ("0.58", "0.6") - the very figure the card's headline prints, so it is never rounded twice. */
+function rateAmount(kgPerWeek: number, units: UnitSystem): string {
+  return String(Math.round(Math.abs(units === 'imperial' ? kgPerWeek * LB_PER_KG : kgPerWeek) * 100) / 100);
+}
+
 /** One fixed decimal ("84.0"), for the weight a reached goal holds at. */
 function weightFixed(kg: number, units: UnitSystem): string {
   return Math.abs(units === 'imperial' ? kg * LB_PER_KG : kg).toFixed(1);
@@ -89,11 +94,26 @@ function progressKg(gp: GoalProgress): number | null {
 }
 
 /**
- * What the amount "down" is measured on, in words: the 7-day average once it exists (3+ weigh-ins in the week), else
- * the single latest reading. "On the scale" is only ever a single reading; the average is the average.
+ * Where the progress weight sits against the start, in one clause: "Your weekly average is 0.9 kg below your start" once there is a weekly average,
+ * and "You're 0.9 of 8 kg down on the scale" for a single reading - never "0.9 of 8 kg down on your weekly average" (an average of a week is not
+ * "down" a share of the goal). `base` is "You're X of Y kg down".
  */
-function downBasis(gp: GoalProgress): string {
-  return gp.weightRead?.weekMeanKg != null ? 'on your weekly average' : 'on the scale';
+function averageAgainstStart(gp: GoalProgress, done: number, base: string, units: UnitSystem): string {
+  if (gp.weightRead?.weekMeanKg == null) return `${base} on the scale`;
+  return `Your weekly average is ${weightAmount(done, units)} ${units === 'imperial' ? 'lb' : 'kg'} below your start`;
+}
+
+/** The reach, in a few words, for the opener that congratulates: how much is down and how far ahead of the target date it came. */
+function reachCelebration(gp: GoalProgress, target: number, units: UnitSystem): string {
+  const parts: string[] = [];
+  const start = gp.current.startWeightKg;
+  if (start != null && start - target > 0) parts.push(`${weightAmount(start - target, units)} ${units === 'imperial' ? 'lb' : 'kg'} down`);
+  const reached = ymdToUtc(gp.reachedAt);
+  const dated = ymdToUtc(gp.target.date);
+  const early = reached != null && dated != null ? Math.round((dated - reached) / DAY_MS / 7) : 0;
+  const date = shortDate(gp.target.date);
+  if (early >= 1 && date) parts.push(`${early} ${early === 1 ? 'week' : 'weeks'} ahead of your ${date} date`);
+  return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
 
 /** What comes next while the pace is not read: a young goal's pace settles after 3 weeks, an older one is a few weigh-ins away. */
@@ -166,6 +186,10 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
   // Goal reached: congratulate and move on — never "0 of 0 down" or a pace clause.
   if (gp.verdict === 'reached' && target != null) {
     if (reachedAsks(gp)) {
+      // A fat-loss reach is celebrated, with how far it came (wave 22w); other goals' weight targets keep the plain ask.
+      if (gp.goal === 'weight_loss') {
+        return `Congratulations — you've reached ${weightAmount(target, units)} ${unit}${reachCelebration(gp, target, units)}. Want to set a new target or switch to maintenance?`;
+      }
       return `You've reached ${weightAmount(target, units)} ${unit} — want to set a new target or switch to maintenance?`;
     }
     // The plan has a calorie instruction for a reached goal (a held weight on real intake made the maintenance target, or the
@@ -178,6 +202,8 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (holdKg != null) {
       const diff = holdKg - target;
       if (Math.abs(diff) <= HOLDING_RANGE_KG) {
+        // Exactly on the target "within 1 kg of 84 kg" says it twice (wave 22w).
+        if (Math.round(holdKg * 10) === Math.round(target * 10)) return `Holding at your ${weightAmount(target, units)} ${unit} target.`;
         return `Holding at ${weightFixed(holdKg, units)} ${unit}, within ${weightAmount(HOLDING_RANGE_KG, units)} ${unit} of ${weightAmount(target, units)} ${unit}.`;
       }
       return `At ${weightFixed(holdKg, units)} ${unit}, ${weightAmount(Math.abs(diff), units)} ${unit} ${diff < 0 ? 'under' : 'over'} your ${weightAmount(target, units)} ${unit} target.`;
@@ -204,8 +230,16 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     if (total > 0 && done > 0) {
       const base = `You're ${weightAmount(done, units)} of ${weightAmount(total, units)} ${unit} ${losing ? 'down' : 'up'}`;
       if (gp.goal === 'weight_loss') {
-        if (read?.state === 'early' || read?.state === 'returning') return `${base} ${downBasis(gp)}; ${paceWaitClause(gp)}.`;
-        if (read?.state === 'plateau') return `${base}, though the scale has been flat for 3 weeks.`;
+        // The week began with no weigh-in for 7+ days (wave 22w): say so, whatever the plan carried from before.
+        const staleSince = shortDate(read?.plan?.staleSince);
+        if (staleSince) return `${averageAgainstStart(gp, done, base, units)} as of ${staleSince}; step on the scale when you can.`;
+        if (read?.state === 'early' || read?.state === 'returning') return `${averageAgainstStart(gp, done, base, units)}; ${paceWaitClause(gp)}.`;
+        if (read?.state === 'plateau') {
+          // Two flat weeks after a confirmed loss (wave 22w) are common and not yet a plateau.
+          return read.plan?.flatWeeks === 2
+            ? `${base}; the scale has been flat for 2 weeks, which is common.`
+            : `${base}, though the scale has been flat for 3 weeks.`;
+        }
         // The week's plan (lib/weightWeekPlan.ts) says what the scale is doing; the opener only repeats it.
         if (read?.state === 'moving_again') return `${base}, and your weekly average is moving down again.`;
         if (read?.plan?.farBehind && target != null) {
@@ -215,7 +249,7 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
         if (gp.verdict === 'too_fast') return `${base}, but losing faster than is easy to keep.`;
         if (gp.verdict === 'stalled') return `${base}, but your weight has been flat lately.`;
         if (gp.verdict === 'progressing' && gp.ratePerWeek.kg != null && gp.ratePerWeek.kg < 0) {
-          return `${base} and losing about ${weightAmount(gp.ratePerWeek.kg, units)} ${unit} a week.`;
+          return `${base} and losing about ${rateAmount(gp.ratePerWeek.kg, units)} ${unit} a week.`;
         }
       }
       const pace = paceClause(gp);
