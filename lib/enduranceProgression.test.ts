@@ -1043,6 +1043,20 @@ test('cap note cadence: the goal\'s first week, then every 4th build week; never
   assert.equal(rebuild.longRun.capNoteDue, false);
 });
 
+test('cap note (wave 22e): not in a comeback, restart or light week, and only when the raised goal is reachable at +10% a week before the taper', () => {
+  const race = { date: addDayKey(MON, 7 * 20), distanceKm: 21.1 }; // a half: the 18 km peak needs a 36 km goal; the taper starts in week 19
+  const steady = (kms: number) => runsFor(new Array<number>(16).fill(kms));
+  // A runner at 30 km in week 9 (due: the goal's first week, then every 4th) can raise the goal: 30 x 1.1^10 is far past 36 km.
+  assert.equal(planFor(steady(30).filter(r => r.day < weekOf(9)), 9, { race, goalStartDay: MON }).longRun.capNoteDue, true);
+  // The same due week at 20 km with 2 build weeks left (week 17): 20 x 1.1^2 = 24 km cannot reach 36 km, so the note stays quiet.
+  assert.equal(planFor(steady(20).filter(r => r.day < weekOf(17)), 17, { race, goalStartDay: MON }).longRun.capNoteDue, false);
+  // A comeback week after a break never carries it, even in its due week (week 13).
+  const afterBreak = planFor(runsFor([30, 30, 30, 30, 30, 30, 30, 30, 0, 0, 12, 15]), 13, { race, goalStartDay: MON });
+  assert.notEqual(afterBreak.comeback, null);
+  assert.equal(afterBreak.longRun.capNoteDue, false);
+  assert.equal(planFor(steady(30).filter(r => r.day < weekOf(13)), 13, { race, goalStartDay: MON }).longRun.capNoteDue, true);
+});
+
 test('a long run that was most of its week: one note for the most recent such week, and its peak is never a good peak', () => {
   const week = (n: number, longKm: number, total: number): PlanRun[] => {
     const w = weekOf(n);
@@ -1055,6 +1069,11 @@ test('a long run that was most of its week: one note for the most recent such we
   const next = planFor(runs, 6, { race });
   assert.deepEqual(next.longRun.share, { weekStart: weekOf(5), longKm: 18, weekKm: 30, sharePct: 60 });
   assert.equal(next.longRun.peakOversized, true);
+  // The watch note is said once (wave 22e): on the Monday after the oversized week, not on the days after it.
+  assert.equal(next.longRun.shareDue, true);
+  const wednesday = enduranceWeekPlan({ runs, weekStart: weekOf(6), goalKm: 30, today: addDayKey(weekOf(6), 2), race });
+  assert.equal(wednesday.longRun.share?.weekStart, weekOf(5)); // still known (the peak is not praised) ...
+  assert.equal(wednesday.longRun.shareDue, false); // ... but not said again
   // Read on the Sunday of the week itself the same week is named (the long run is done).
   const sunday = enduranceWeekPlan({ runs, weekStart: weekOf(5), goalKm: 30, today: addDayKey(weekOf(5), 6), race });
   assert.equal(sunday.longRun.share?.weekStart, weekOf(5));

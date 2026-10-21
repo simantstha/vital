@@ -3001,7 +3001,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   const planLine: GoalProgressReason = { kind: 'plan', text: plan.purpose, tone: 'neutral' };
   // A long run that was most of its week (over 55%): one watch note for the most recent such week, in the build weeks.
   const buildLike = plan.kind === 'build' || plan.kind === 'maintain' || plan.kind === 'hold';
-  const shareNote = buildLike && plan.longRun.share != null ? longRunShareReason(input, plan.longRun.share) : null;
+  const shareNote = buildLike && plan.longRun.share != null && plan.longRun.shareDue ? longRunShareReason(input, plan.longRun.share) : null;
   const withRace = (reasons: GoalProgressReason[]): GoalProgressReason[] => (raceLine ? [raceLine, ...reasons] : reasons).slice(0, 3);
   const body = (lead: GoalProgressReason | null, extra: Array<GoalProgressReason | null> = []): GoalProgressReason[] =>
     withRace(enduranceReasons(lead, [...extra, shareNote, lrReason, sessions, ...vitals]));

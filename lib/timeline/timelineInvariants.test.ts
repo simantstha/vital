@@ -1247,3 +1247,56 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', '
   assert.ok(days > 0, `${name}: no race day was stepped, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P2.5: the cap note and the watch note are said once, in the right weeks ─────────────────
+
+const SHARE_NOTE = /was \d+% of your week/;
+const CAP_RAISE_NOTE = /raise the goal to ~/;
+
+invariant(RUNNERS, 'the "N km was 60% of your week" watch note is said once per week (the Monday it applies), not on every day', (snaps, name) => {
+  const out: Violation[] = [];
+  const byWeek = new Map<string, DaySnapshot[]>();
+  let notes = 0;
+  for (const snap of snaps) {
+    if (!cardTexts(snap).some(t => t.where.startsWith('card.reasons') && SHARE_NOTE.test(plain(t.text)))) continue;
+    notes++;
+    const monday = mondayOfDate(snap.date);
+    byWeek.set(monday, [...(byWeek.get(monday) ?? []), snap]);
+  }
+  for (const [monday, days] of byWeek) {
+    if (days.length > 1 || days.some(s => weekdayOf(s.date) !== 'Mon')) {
+      out.push({ snap: days[0], detail: `the watch note was shown on ${days.length} day(s) of the week of ${monday} (${days.map(s => weekdayOf(s.date)).join(', ')}): "${visible(days[0].card?.reasons.find(r => SHARE_NOTE.test(plain(r.text)))?.text ?? '')}"` });
+    }
+  }
+  if (name === 'runner_on_plan') assert.ok(notes > 0, `${name}: the watch note never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, 'the "raise the goal to ~36 km" cap note is never shown in a light, restart, comeback or rebuild week, nor when the raised goal cannot be reached by +10% a week before the taper', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let shown = 0;
+  for (const snap of snaps) {
+    const hit = [...cardTexts(snap), ...coachTexts(snap)].filter(t => CAP_RAISE_NOTE.test(plain(t.text)));
+    if (hit.length === 0) continue;
+    shown++;
+    const plan = snap.card?.distance?.plan;
+    const why: string[] = [];
+    if (plan?.lightWeek) why.push('light week');
+    if (plan?.kind === 'restart' || plan?.kind === 'rebuild') why.push(`${plan.kind} week`);
+    if (plan?.comebackKm != null && plan.kind === 'build') why.push('comeback week');
+    // Reachable: last week's km grown 10% a week for the build weeks left before the taper must reach the raised goal (twice the peak long run).
+    const d = snap.card?.distance;
+    const raceDate = scn.user.raceDate;
+    if (d && raceDate) {
+      const taperStart = addDays(raceDate, -(scn.user.raceDistanceKm != null && scn.user.raceDistanceKm <= 21.15 ? 14 : 21));
+      const stepsLeft = Math.max(0, Math.ceil(dayDiff(taperStart, d.weekStart) / 7));
+      const lastKm = snaps.find(s => s.date === addDays(d.weekStart, -1))?.card?.distance?.thisWeekKm ?? null;
+      const raised = (snap.card?.longRun?.raceTargetKm ?? 18) * 2;
+      if (lastKm != null && lastKm * 1.1 ** stepsLeft < raised - 0.5) why.push(`${lastKm} km grown 10% for ${stepsLeft} weeks (${Math.round(lastKm * 1.1 ** stepsLeft)} km) cannot reach the raised ${raised} km goal`);
+    }
+    for (const w of why) out.push({ snap, detail: `${hit[0].where}: "${visible(hit[0].text)}" in a ${w}` });
+  }
+  assert.ok(shown > 0 || name === 'runner_no_race' || name === 'runner_comeback_spike' || name === 'runner_on_plan_imperial', `${name}: the cap note never appeared, so this invariant checked nothing`);
+  return out;
+});

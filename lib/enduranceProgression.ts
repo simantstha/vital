@@ -671,6 +671,8 @@ export interface PlanLongRun {
   held: boolean;
   /** The most recent week whose long run was over 55% of its week (build weeks only): one watch note, not one per day. */
   share: LongRunShare | null;
+  /** The watch note for `share` is said today: on the Monday after the oversized week only (wave 22e), never on the other days. */
+  shareDue: boolean;
   /** The 28-day peak long run was over 55% of its own week: never praised as a good peak. */
   peakOversized: boolean;
 }
@@ -1734,6 +1736,15 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     const anchor = ctx.capNoteAnchor;
     const idx = anchor == null ? 0 : Math.round((dayIndex(w) - dayIndex(anchor)) / 7);
     capNoteDue = idx <= 0 || idx % CAP_NOTE_EVERY_WEEKS === 0;
+    // Wave 22e: never in a light, restart or comeback week (the runner is coming back, not raising a goal) ...
+    if (lightWeek != null || easingOff != null || restart != null || comeback != null) capNoteDue = false;
+    // ... and only when the raised goal (twice the race peak long run) can be reached at +10% a week before the taper starts.
+    if (capNoteDue && hasPrior && ctx.raceDate != null) {
+      const taperStart = dayIndex(ctx.raceDate) - raceRules(ctx.raceKm).taperStartDays;
+      const stepsLeft = Math.max(0, Math.ceil((taperStart - dayIndex(w)) / 7));
+      const raisedGoalKm = raceTargetKm / LONG_RUN_MAX_WEEK_SHARE;
+      if (prev.km * (1 + WEEKLY_DISTANCE_GROWTH) ** stepsLeft < raisedGoalKm - 0.5) capNoteDue = false;
+    }
   }
 
   // A long run that was most of its week: one watch note (the most recent such week) and no praise for the peak.
@@ -1766,6 +1777,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     capNoteDue,
     held: buildLike && (cutback != null || longRunJump != null || (nextKm != null && lr0.lastKm != null && nextKm <= lr0.lastKm + 1e-9)),
     share,
+    shareDue: share != null && share.weekStart === prevStart && ctx.today === w,
     peakOversized,
   };
   const windInfo: EnduranceWeekPlan['wind'] = wind ? { phase: wind.phase as 'taper' | 'race_week' | 'recovery', info: wind, peakKm: ctx.peakKm ?? ctx.goalKm } : null;

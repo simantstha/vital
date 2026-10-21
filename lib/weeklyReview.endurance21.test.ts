@@ -131,7 +131,8 @@ test('the taper plan copy joins "3×1 km" / "3×0.5 mi" with U+00A0 in the card-
 
 test('the cap note in "Next week" follows the plan\'s cadence, not every Monday', () => {
   // At the 15 km peak a 30 km goal can carry (the half's own peak is 18): the cap note is part of "Next week" only in the weeks it is due.
-  const race = { raceDate: '2026-12-20', raceDistanceKm: 21.1 };
+  // (A race far enough out that the raised 36 km goal is reachable at +10% a week: wave 22e keeps the note quiet when it is not.)
+  const race = { raceDate: '2027-01-31', raceDistanceKm: 21.1 };
   const lr = { lastKm: 15, peakKm: 15, targetPeakKm: 15, raceTargetKm: 18 };
   const texts: boolean[] = [];
   for (const weekStart of ['2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26', '2026-11-02']) {
