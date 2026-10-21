@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TAPER_GOOD_MIN_FRACTION } from '../enduranceProgression';
+import { TAPER_GOOD_MIN_FRACTION, racePhaseInfo } from '../enduranceProgression';
 import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
@@ -812,5 +812,107 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', '
     }
   }
   assert.ok(weekendDays > 0, `${name}: no taper weekend was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// wave 22e: endurance round 4 (running coach + 4 runner personas). Every invariant here was written BEFORE the rule it locks in.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+/** Running km per local day from a scenario's own rows (the race run is not training volume, as the plan counts it). */
+function scenarioRunKm(name: ScenarioName): Map<string, number> {
+  const scn = buildScenario(name);
+  const out = new Map<string, number>();
+  for (const w of scn.workouts) {
+    if (w.type !== 'Running' || !w.distanceM || w.day === scn.user.raceDate) continue;
+    out.set(w.day, (out.get(w.day) ?? 0) + w.distanceM / 1000);
+  }
+  return out;
+}
+
+/** Running km of the Mon-Sun week at `monday` from its Monday through `through` (inclusive). */
+function kmThrough(runKm: Map<string, number>, monday: string, through: string): number {
+  let km = 0;
+  for (let d = monday; d <= through; d = addDays(d, 1)) km += runKm.get(d) ?? 0;
+  return km;
+}
+
+const isLightWeekRead = (s: DaySnapshot): boolean => s.card?.distance?.plan?.lightWeek === true || /^Light week\b/.test(plain(s.card?.headline ?? ''));
+
+// P1-B. "Light week — 6.7 of ~17 km so far" on a Friday of a runner who was exactly on pace (the long run is Sunday).
+invariant(RUNNERS, 'no light-week read on a day where the week so far is at least last week\'s km through the same weekday', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isLightWeekRead(snap)) continue;
+    const monday = mondayOfDate(snap.date);
+    const prevMonday = addDays(monday, -7);
+    const prevSame = kmThrough(runKm, prevMonday, addDays(prevMonday, dayDiff(snap.date, monday)));
+    const prevTotal = kmThrough(runKm, prevMonday, addDays(prevMonday, 6));
+    const done = kmThrough(runKm, monday, snap.date);
+    if (prevTotal > 0 && done >= prevSame - 1e-9) out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}": ${Math.round(done * 10) / 10} km so far, last week had ${Math.round(prevSame * 10) / 10} km by the same weekday` });
+  }
+  return out;
+});
+
+invariant(RUNNERS, 'a light-week read appears only in a week that really came in under 90% of its target (counted from the rows)', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isLightWeekRead(snap)) continue;
+    const monday = mondayOfDate(snap.date);
+    const total = kmThrough(runKm, monday, addDays(monday, 6));
+    const target = snap.card?.distance?.stepTargetKm ?? 0;
+    if (total >= target * 0.9 - 1e-9) out.push({ snap, detail: `"${visible(snap.card?.headline ?? '')}" but the week then ran ${Math.round(total * 10) / 10} km of ~${target} km` });
+  }
+  return out;
+});
+
+const nextMondayPhase = (name: ScenarioName, snap: DaySnapshot): string | null => {
+  const scn = buildScenario(name);
+  return racePhaseInfo(scn.user.raceDate, addDays(mondayOfDate(snap.date), 7), scn.user.raceDistanceKm)?.phase ?? null;
+};
+const isPreTaperWeek = (name: ScenarioName, snap: DaySnapshot): boolean => {
+  const next = nextMondayPhase(name, snap);
+  const thisPhase = buildScenario(name).user.raceDate == null ? null : racePhaseInfo(buildScenario(name).user.raceDate, mondayOfDate(snap.date), buildScenario(name).user.raceDistanceKm)?.phase;
+  return thisPhase === 'build' && (next === 'taper' || next === 'race_week');
+};
+
+invariant(RUNNERS, 'no light-week read in a pre-taper week (the week before the taper or race week): easing off there is fine', (snaps, name) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isPreTaperWeek(name, snap)) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      if (/\blight week\b/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+    if (snap.card?.distance?.plan?.lightWeek === true) out.push({ snap, detail: 'distance.plan.lightWeek is set in a pre-taper week' });
+  }
+  return out;
+});
+
+// A "long run ≤ N" cap in the days before a taper must never sit under the taper's own planned long run (the next Monday's card).
+const LONG_RUN_CAP = /\b(?:long|longest) run ≤ ~?(\d+(?:\.\d+)?)/i;
+
+invariant(RUNNERS.filter(n => n !== 'runner_no_race'), 'a "long run ≤ N" cap is never below the planned taper long run', (snaps, name) => {
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    if (!isPreTaperWeek(name, snap)) continue;
+    const taperLong = byDate.get(addDays(mondayOfDate(snap.date), 7))?.card?.distance?.plan?.longRunKm;
+    if (taperLong == null) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const m = LONG_RUN_CAP.exec(plain(t.text));
+      if (m && Number(m[1]) < taperLong - 0.5 - 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" is under the taper's planned long run of ${taperLong} km` });
+    }
+  }
+  return out;
+});
+
+// The residual: an ill runner (one 6 km run on Tuesday, then nothing) is a light week from Thursday, when the remaining km cannot fit.
+invariant(['runner_messy', 'runner_comeback_spike'], 'the week of an illness reads as a light week from the Thursday (6 km run, the rest cannot fit)', (snaps, name) => {
+  const thursday = snaps.find(s => s.idx === 59);
+  assert.ok(thursday != null && weekdayOf(thursday.date) === 'Thu', `${name}: day 59 is not a stepped Thursday`);
+  const out: Violation[] = [];
+  if (!isLightWeekRead(thursday)) out.push({ snap: thursday, detail: `Thursday after one 6 km run reads "${visible(thursday.card?.headline ?? '')}" (verdict ${thursday.card?.verdict})` });
   return out;
 });

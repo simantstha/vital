@@ -310,8 +310,16 @@ export interface GoalWeekPlan {
   goalReachedBefore?: boolean;
   /** Additive: a cutback week (every 4th plain build / maintain week): `targetKm` is ~80% of the week it replaces, the long run is held. */
   cutback?: boolean;
-  /** Additive: a light week - 4+ days without a run, or well behind the week's pace from Friday: don't make it up (`longRunKm` is the cap). */
+  /** Additive: a light week - 4+ days without a run, or well behind the week's pace from Thursday with the rest of the target out of reach: don't make it up (`longRunKm` is the cap). */
   lightWeek?: boolean;
+  /**
+   * Additive (wave 22e): the week BEFORE a taper (or race week) whose target is out of reach or that has days off: easing off is fine,
+   * never "light". `longRunKm` is the week's planned long run, `taperLongRunKm` the taper's own (the lower end of "~11.5-15 km").
+   */
+  easingOff?: boolean;
+  taperLongRunKm?: number | null;
+  /** Additive (wave 22e): the next Monday starts a taper / race week (this is the last build week); absent otherwise. */
+  preTaper?: 'taper' | 'race_week';
   /** Additive: one of the last 2 build weeks before the taper: the plan copy asks for a few strides after one easy run. */
   strides?: boolean;
   /** Additive: the week's long run is held (not grown) - a cutback week, or after last week's long-run jump. */
@@ -2453,6 +2461,8 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             goalReachedBefore: plan.goalReachedBefore,
             ...(plan.cutback != null ? { cutback: true } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
+            ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
+            ...(plan.preTaper != null ? { preTaper: plan.preTaper.nextPhase } : {}),
             ...(plan.strides ? { strides: true } : {}),
             ...(plan.longRun.held ? { longRunHeld: true } : {}),
             ...(plan.upTo ? { upTo: true } : {}),
@@ -3015,6 +3025,16 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   if (plan.lightWeek != null) {
     const stepped = target < plan.goalKm - 1e-9;
     return finish('holding', `Light week — ${done} of ${stepped ? '~' : ''}${fmt(target)} so far`, withRace(enduranceReasons(planLine, [sessions, ...vitals])));
+  }
+
+  // The last day of the week before a taper: the headline judges THIS week - short of its target, "Eased off early" - and it is fine.
+  if (plan.preTaper != null && weekdayOf(input.todayKey) === 0 && doneKm > 0 && (plan.easingOff != null || current?.gap === 'short')) {
+    const tomorrow = plan.preTaper.nextPhase === 'race_week' ? 'race week starts tomorrow' : 'taper starts tomorrow';
+    return finish('on_track', `Eased off early — ${done} of ${target < plan.goalKm - 1e-9 ? '~' : ''}${fmt(target)}; ${tomorrow}`, withRace(enduranceReasons(planLine, [shareNote, lrReason, sessions, ...vitals])));
+  }
+  // The week before a taper whose target is out of reach: easing off is the plan's next step, fine - never "light", never "behind".
+  if (plan.easingOff != null) {
+    return finish('on_track', `Easing off before ${plan.preTaper?.nextPhase === 'race_week' ? 'race week' : 'your taper'} — ${done} of ${target < plan.goalKm - 1e-9 ? '~' : ''}${fmt(target)} so far`, withRace(enduranceReasons(planLine, [sessions, ...vitals])));
   }
 
   // The week's step (or goal) is already run: say so while there is still a day left to go over it. A watch

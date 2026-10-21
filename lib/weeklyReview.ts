@@ -65,7 +65,6 @@ import {
   overCapPhrase,
   overUpToCap,
   planWeekKm,
-  raceClass,
   racePaceReps,
   racePhaseInfo,
   racePhaseTargetKm,
@@ -1320,21 +1319,17 @@ function windDownRunningKm(input: WeeklyReviewInput, week: Week, plan: WindDownP
   return vals.length === 0 ? null : vals.reduce((a, b) => a + b, 0);
 }
 
-/** A half marathon is tapered from 14 days out; runners often start a week early. */
-const EARLY_TAPER_DAYS = 21;
 /** Early tapering is only "fine" when the week still held at least this share of its target. */
 const EARLY_TAPER_MIN_SHARE = 0.5;
 
 /**
- * True for a short build / maintain week inside the 21 days before a half marathon, before the formal taper: the
- * runner started easing off early — fine, not a miss. Needs the week to have run at least half its target.
+ * True for a short build / maintain week right before the taper (or race week) - the plan's `preTaper` week, whatever the
+ * race distance: the runner started easing off early - fine, not a miss. Needs the week to have run at least half its target.
  */
 function startedTaperingEarly(input: WeeklyReviewInput, rp: ReviewPlans): boolean {
   const plan = rp.plan;
-  if (plan == null || input.raceDate == null || raceClass(input.raceDistanceKm) !== 'half') return false;
+  if (plan == null || plan.preTaper == null) return false;
   if (plan.kind !== 'build' && plan.kind !== 'maintain') return false;
-  const toRace = Math.round((Date.parse(`${input.raceDate}T00:00:00Z`) - Date.parse(`${input.weekStart}T00:00:00Z`)) / 86_400_000);
-  if (!(toRace > 14 && toRace <= EARLY_TAPER_DAYS)) return false;
   const target = plan.targetKm as number;
   const grade = gradeEnduranceWeek(plan, rp.week.km, { runDays: rp.week.days, unitsPerKm: unitsPerKmOf(input) });
   return grade.gap === 'short' && rp.week.km >= target * EARLY_TAPER_MIN_SHARE;
@@ -1606,7 +1601,7 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
   }
   if (assessment.rating !== 'good' || isWindDownKind(plan.kind)) return null;
   // Easing off early before a half is fine, and said as a win (a neutral note), never as a slip.
-  if (startedTaperingEarly(input, rp)) return 'Started tapering early — fine.';
+  if (startedTaperingEarly(input, rp)) return plan.preTaper?.nextPhase === 'race_week' ? 'Eased off before race week — fine.' : 'Started tapering early — fine.';
   const km = distanceText(input, rp.week.km);
   const u = unitsPerKmOf(input);
   const compareMin = u < 1 ? MIN_COMPARE_MI / u : MIN_COMPARE_KM;

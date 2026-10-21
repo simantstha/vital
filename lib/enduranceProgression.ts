@@ -748,10 +748,22 @@ export interface EnduranceWeekPlan {
   /** One of the last 2 build weeks before a taper: the plan copy adds `STRIDES_COPY` so race-pace work is not new in the taper. */
   strides: boolean;
   /**
-   * A week read DURING the week with 4+ days without a run (or, from Friday, under half its target): don't make it
-   * up. `longRunCapKm` is the most the week's long run should be (~40% of a realistic week, or the last long run).
+   * A week read DURING the week with 4+ days without a run (or, from Thursday, well behind the runner's own pace with the
+   * rest of the target out of reach of the runs still to come): don't make it up. `longRunCapKm` is the most the week's long
+   * run should be (~40% of a realistic week, or the last long run). Never in the week before a taper (`preTaper`).
    */
   lightWeek: { reason: 'days_off' | 'late_week'; daysOff: number; longRunCapKm: number | null } | null;
+  /**
+   * The week BEFORE a taper (or race week): the next Monday's phase is taper / race week. Easing off is fine there, so the
+   * light-week rule does not apply; `nextPhase` says what starts tomorrow-ish.
+   */
+  preTaper: { nextPhase: 'taper' | 'race_week' } | null;
+  /**
+   * A pre-taper week whose target no longer fits in the runs the runner usually has left (or with 4+ days off): "Easing off
+   * before your taper - fine". `longRunKm` is the week's planned long run, `taperLongRunKm` the taper's (what a long run
+   * eased to would be); the card keeps the planned one as the upper end.
+   */
+  easingOff: { reason: 'days_off' | 'late_week'; daysOff: number; longRunKm: number | null; taperLongRunKm: number | null } | null;
   /** A comeback target lifted above the plain 10% step is a ceiling: say "up to ~18 km". */
   upTo: boolean;
   unitsPerKm: number;
@@ -825,9 +837,15 @@ export const STRIDES_COPY = 'plus 4–6 strides after one easy run';
 export const STRIDES_WEEKS_BEFORE_TAPER = 2;
 /** A comeback rung never asks for more than this multiple of the week just run (and still at least the normal 10% step). */
 export const COMEBACK_MAX_GROWTH = 1.25;
-/** Light week: this many days without a run in the current week, or Friday and later with under half the target. */
+/** Light week: this many days without a run in the current week, or Thursday and later with under half the target and no way to fit the rest. */
 export const LIGHT_WEEK_DAYS_OFF = 4;
 export const LIGHT_WEEK_LATE_SHARE = 0.5;
+/** ... the late-week read starts on Thursday (0 = Monday). */
+export const LIGHT_WEEK_LATE_FROM_DOW = 3;
+/** ... and needs the week to be under this share of what the runner's last weeks had run by the same weekday. */
+export const LIGHT_WEEK_PACE_FRACTION = 0.75;
+/** ... and the rest of the target not to fit in the runs the runner usually still has left (with this much room for a slightly bigger run). */
+export const LIGHT_WEEK_FIT_SLACK = 1.2;
 /** A week that lost that many days is realistically ~70% of its target at best; its long run is ~40% of that. */
 export const LIGHT_WEEK_REALISTIC_FRACTION = 0.7;
 export const LIGHT_WEEK_LONG_RUN_SHARE = 0.4;
@@ -1171,6 +1189,33 @@ export function lightWeekLine(lightWeek: NonNullable<EnduranceWeekPlan['lightWee
     : "Light week — don't make it up; keep the runs short and easy, or skip them if you were ill";
 }
 
+/** "11.5" / "15": a long-run distance as a bare number in the display unit (the unit goes once, after a range). */
+function longRunNumber(km: number, unitsPerKm: number): number {
+  return Math.round(km * unitsPerKm * 2) / 2;
+}
+
+/**
+ * The pre-taper week's line when the target is out of reach: "Easing off before your taper — fine; keep Sunday's long run
+ * ~11.5–15 km easy" (the taper's own long run to this week's planned one; one number when they meet). A runner with days off
+ * is also told they may skip it if they were ill.
+ */
+export function easingOffLine(
+  easing: NonNullable<EnduranceWeekPlan['easingOff']>,
+  nextPhase: 'taper' | 'race_week' = 'taper',
+  unitsPerKm = 1,
+): string {
+  const lead = `Easing off before ${nextPhase === 'taper' ? 'your taper' : 'race week'} — fine`;
+  const hi = easing.longRunKm;
+  if (hi == null) return `${lead}; keep the runs short and easy`;
+  const lo = easing.taperLongRunKm;
+  const unit = distanceUnit(unitsPerKm);
+  const range = lo != null && longRunNumber(lo, unitsPerKm) < longRunNumber(hi, unitsPerKm)
+    ? withUnit(`${longRunNumber(lo, unitsPerKm)}–${longRunNumber(hi, unitsPerKm)}`, unit)
+    : formatTargetLongRun(hi, unitsPerKm);
+  const ill = easing.reason === 'days_off' ? ', or skip it if you were ill' : '';
+  return `${lead}; keep Sunday's ${longRunWord(hi, unitsPerKm)} ~${range} easy${ill}`;
+}
+
 /** One line of "what this week is for" (units-aware, U+00A0 between a number and its unit). */
 function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const u = plan.unitsPerKm;
@@ -1181,6 +1226,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const lrPart = lr != null ? `${lrWord} ${formatTargetLongRun(lr, u)}${held}` : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
   if (plan.lightWeek != null) return lightWeekLine(plan.lightWeek, u);
+  if (plan.easingOff != null) return easingOffLine(plan.easingOff, plan.preTaper?.nextPhase ?? 'taper', u);
   switch (plan.kind) {
     case 'baseline':
       return "Baseline week: run as you normally would; next week's step is built from this week";
@@ -1327,16 +1373,26 @@ function typicalOffStreak(ctx: PlanCtx, w: string): number {
   return median(streaks) ?? 0;
 }
 
-/** Running km of the Mon-Sun week at `wk` up to and including weekday `dow` (0 = Monday); the race itself left out. */
-function weekKmThrough(ctx: PlanCtx, wk: string, dow: number): number {
-  const end = addDayKey(wk, dow);
-  let km = 0;
-  for (const r of ctx.runs) {
-    if (r.day < wk || r.day > end) continue;
-    if (ctx.raceDate != null && r.day === ctx.raceDate) continue;
-    km += r.km;
+/**
+ * Running km per weekday (Monday = index 0) of up to 4 TRAINING weeks before `w` (wind-down weeks left out), from the first
+ * week with a run on, newest first; the race itself is not training. The runner's own week shape: what they usually have run
+ * by a weekday and what they usually still have left after it.
+ */
+function priorWeekProfiles(ctx: PlanCtx, w: string): number[][] {
+  const out: number[][] = [];
+  for (let k = 1; k <= MEDIAN_WEEKS; k++) {
+    const wk = addDayKey(w, -7 * k);
+    if (ctx.firstRunWeek == null || wk < ctx.firstRunWeek) break;
+    if (isWindWeek(ctx, wk)) continue;
+    const profile = [0, 0, 0, 0, 0, 0, 0];
+    for (const r of ctx.runs) {
+      const i = dayIndex(r.day) - dayIndex(wk);
+      if (i < 0 || i > 6 || (ctx.raceDate != null && r.day === ctx.raceDate)) continue;
+      profile[i] += r.km;
+    }
+    out.push(profile);
   }
-  return km;
+  return out;
 }
 
 function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekPlan {
@@ -1560,29 +1616,49 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   const strides = buildLike && comeback == null && info != null && info.phase === 'build' && raceClass(ctx.raceKm) !== 'short'
     && [7, 14].some(d => isWindDownPhase(phaseAt(ctx, addDayKey(w, d))?.phase));
 
-  // Light week: read DURING the week, with days off (or, from Friday, well short of the week's pace): don't make it up.
+  // The long run the week would plan without a light-week cap (the light-week read and the easing-off read both quote it).
+  const heldLongRun = longRunJump?.heldKm ?? null;
+  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null);
+
+  // The week before a taper (or race week): the next Monday's phase is wind-down. Easing off is the plan's own next step.
+  const nextWindPhase = buildLike && info != null && info.phase === 'build' ? phaseAt(ctx, addDayKey(w, 7))?.phase : undefined;
+  const preTaper: EnduranceWeekPlan['preTaper'] = nextWindPhase === 'taper' || nextWindPhase === 'race_week' ? { nextPhase: nextWindPhase } : null;
+
+  // Light week: read DURING the week, with days off (or, from Thursday, behind the runner's own pace with the rest of the
+  // target out of reach): don't make it up. In a pre-taper week the same reads are "easing off" instead - fine, not light.
+  // (The card is read at any hour: a runner whose Thursday run is still to come is judged on the Thursday run they have not
+  // logged yet, like the Friday read before it.)
   let lightWeek: EnduranceWeekPlan['lightWeek'] = null;
+  let easingOff: EnduranceWeekPlan['easingOff'] = null;
   if (depth === 0 && ctx.today >= w && ctx.today <= weekEnd && wind == null && buildLike && targetKm != null && daysSinceRun != null) {
     const dow = dayIndex(ctx.today) - dayIndex(w); // 0 = Monday
     const daysOff = Math.min(daysSinceRun, dow + 1);
     const offThreshold = Math.max(LIGHT_WEEK_DAYS_OFF, typicalOffStreak(ctx, w) + 2);
     const doneKm = weekRuns(ctx, w).km;
+    // Does the rest of the target fit in the runs the runner usually still has left after today (their own weekday shape, with
+    // room for a slightly bigger run)? The long run still to come is the Sunday run they usually have: a runner whose long run is
+    // Sunday sits under half of the week on a Friday, on pace.
+    const profiles = priorWeekProfiles(ctx, w);
+    const longestSoFar = Math.max(0, ...ctx.runs.filter(r => r.day >= w && r.day <= ctx.today && r.day !== ctx.raceDate).map(r => r.km));
+    const longRunAhead = plannedNextKm != null && longestSoFar < plannedNextKm * 0.6;
     let reason: 'days_off' | 'late_week' | null = null;
     if (daysOff >= offThreshold) reason = 'days_off';
-    else if (dow >= 4 && doneKm < targetKm * LIGHT_WEEK_LATE_SHARE) {
-      // Under half the target from Friday on - and well behind the runner's own pace to date (a plan-perfect runner whose
-      // long run is still to come sits under half on a Friday too). Without 2 finished weeks to compare with: under half is enough.
-      const usual: number[] = [];
-      for (let k = 1; k <= MEDIAN_WEEKS; k++) {
-        const wk = addDayKey(w, -7 * k);
-        if (ctx.firstRunWeek == null || wk < ctx.firstRunWeek) break;
-        if (isWindWeek(ctx, wk)) continue;
-        usual.push(weekKmThrough(ctx, wk, dow));
-      }
-      const usualKm = usual.length >= 2 ? median(usual) : null;
-      if (usualKm == null || doneKm < usualKm * 0.75) reason = 'late_week';
+    else if (dow >= LIGHT_WEEK_LATE_FROM_DOW && doneKm < targetKm * LIGHT_WEEK_LATE_SHARE && profiles.length > 0) {
+      // Behind the runner's own weeks by the same weekday, behind the target without the long run still to come, AND the rest of
+      // the target out of reach of the runs they usually have left.
+      const usualKm = median(profiles.map(p => p.slice(0, dow + 1).reduce((a, b) => a + b, 0))) as number;
+      const usualLeft = profiles.reduce((a, p) => a + p.slice(dow + 1).reduce((x, y) => x + y, 0), 0) / profiles.length;
+      const behindUsual = doneKm < usualKm * LIGHT_WEEK_PACE_FRACTION;
+      const behindTarget = doneKm < LIGHT_WEEK_LATE_SHARE * (targetKm - (longRunAhead && plannedNextKm != null ? plannedNextKm : 0));
+      const fits = targetKm - doneKm <= usualLeft * LIGHT_WEEK_FIT_SLACK + 1e-9;
+      if (behindUsual && behindTarget && !fits) reason = 'late_week';
     }
-    if (reason != null) {
+    if (reason != null && preTaper != null) {
+      const taperLong = plannedNextKm != null || lr0.peakKm != null
+        ? roundLongRunKm(Math.max(lr0.peakKm ?? 0, plannedNextKm ?? 0) * TAPER_LONG_RUN_SHARE, ctx.units)
+        : null;
+      easingOff = { reason, daysOff, longRunKm: plannedNextKm, taperLongRunKm: taperLong };
+    } else if (reason != null) {
       const realistic = targetKm * LIGHT_WEEK_REALISTIC_FRACTION;
       let cap = floorLongRunKm(realistic * LIGHT_WEEK_LONG_RUN_SHARE, ctx.units);
       if (lr0.lastKm != null) cap = Math.min(cap, roundLongRunKm(lr0.lastKm, ctx.units));
@@ -1590,10 +1666,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     }
   }
 
-  const heldLongRun = longRunJump?.heldKm ?? null;
-  const nextKm = lightWeek != null && lightWeek.longRunCapKm != null
-    ? lightWeek.longRunCapKm
-    : nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null);
+  const nextKm = lightWeek != null && lightWeek.longRunCapKm != null ? lightWeek.longRunCapKm : plannedNextKm;
   const raceTargetKm = lr0.targetPeakKm != null && peakInfo != null && lr0.targetPeakKm === peakInfo.peakKm ? peakInfo.raceTargetKm : null;
   // The cap note: the goal's first week, then at most every 4th, in build weeks only.
   let capNoteDue = false;
@@ -1667,6 +1740,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     buildWeeks,
     strides,
     lightWeek,
+    preTaper,
+    easingOff,
     upTo,
     unitsPerKm: ctx.units,
   };

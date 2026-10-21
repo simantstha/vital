@@ -869,12 +869,14 @@ test('strides: the last 2 build weeks before a taper carry "plus 4–6 strides a
   assert.equal(planFor(runs.filter(r => r.day < weekOf(7)), 7).strides, false);
 });
 
-test('light week: 4+ days without a run in the week (or, from Friday, well behind the runner\'s own pace) says "don\'t make it up", with a capped long run', () => {
+test('light week: 4+ days without a run in the week (or, from Thursday, well behind the runner\'s own pace with the rest out of reach) says "don\'t make it up", with a capped long run', () => {
   const runs = runsFor([15, 17, 19, 21, 23, 25, 28, 30], 1);
   // Week 9 (Mon weekOf(9)): one 6 km run on Tuesday, then nothing.
   const week9 = [...runs, { day: addDayKey(weekOf(9), 1), km: 6 }];
   const at = (offset: number) => enduranceWeekPlan({ runs: week9.filter(r => r.day <= addDayKey(weekOf(9), offset)), weekStart: weekOf(9), goalKm: 30, today: addDayKey(weekOf(9), offset) });
-  assert.equal(at(3).lightWeek, null); // Thursday: Wed / Thu are two days off
+  assert.equal(at(2).lightWeek, null); // Wednesday: too early to say
+  // Thursday (wave 22e): 6 km against ~10.8 km by this weekday in the weeks before, and the ~24 km left cannot fit in Saturday and Sunday.
+  assert.equal(at(3).lightWeek?.reason, 'late_week');
   const fri = at(4);
   assert.equal(fri.lightWeek?.reason, 'late_week'); // Friday, 6 km of ~33... well behind the usual pace
   const sat = at(5);
@@ -915,6 +917,41 @@ test('light week: a plan-perfect runner is never "light" on a Friday (the long r
   assert.equal(taperDays.kind, 'taper');
   assert.equal(taperDays.lightWeek, null);
   assert.equal(planFor(runs, 9).lightWeek, null);
+});
+
+test('light week (wave 22e): with one finished week the pace is that week by the same weekday; the long run still to come is not "behind"', () => {
+  // Week 1: 15 km, Tue 3 / Thu 3 / Sat 3 / Sun 6. Week 2 by Friday: Tue 3.4 + Thu 3.3 = 6.7 km of ~17 - exactly on pace, the long run is Sunday.
+  const week1 = runsFor([15]);
+  const week2 = [{ day: addDayKey(weekOf(2), 1), km: 3.4 }, { day: addDayKey(weekOf(2), 3), km: 3.3 }];
+  const fri = enduranceWeekPlan({ runs: [...week1, ...week2], weekStart: weekOf(2), goalKm: 30, today: addDayKey(weekOf(2), 4) });
+  assert.equal(fri.kind, 'build');
+  assert.equal(fri.lightWeek, null);
+  assert.equal(fri.easingOff, null);
+  // The same runner who only ran 2 km in week 2 by Friday IS behind: under 75% of week 1's 6 km by then, and 15 km cannot fit in Sat + Sun.
+  const slow = enduranceWeekPlan({ runs: [...week1, { day: addDayKey(weekOf(2), 1), km: 2 }], weekStart: weekOf(2), goalKm: 30, today: addDayKey(weekOf(2), 4) });
+  assert.equal(slow.lightWeek?.reason, 'late_week');
+});
+
+test('pre-taper week (wave 22e): the light-week rule does not apply - it reads "easing off before your taper", with the long run range', () => {
+  // A half on weekOf(10)'s Sunday: week 8 is the last build week (week 9 is the taper). Weeks 1-7 plan-perfect, week 8 Tue 3 + Thu 3 only.
+  const race = { date: addDayKey(weekOf(10), 6), distanceKm: 21.1 };
+  const runs = [...runsFor([15, 17, 19, 21, 23, 25, 28]), { day: addDayKey(weekOf(8), 1), km: 3 }, { day: addDayKey(weekOf(8), 3), km: 3 }];
+  const sat = enduranceWeekPlan({ runs: runs.filter(r => r.day <= addDayKey(weekOf(8), 5)), weekStart: weekOf(8), goalKm: 30, today: addDayKey(weekOf(8), 5), race, racePeakWeekKm: 28 });
+  assert.deepEqual(sat.preTaper, { nextPhase: 'taper' });
+  assert.equal(sat.lightWeek, null);
+  assert.equal(sat.easingOff?.reason, 'late_week');
+  assert.ok(sat.easingOff?.longRunKm != null && sat.easingOff.taperLongRunKm != null && sat.easingOff.taperLongRunKm < sat.easingOff.longRunKm);
+  assert.match(nbsp(sat.purpose), /^Easing off before your taper — fine; keep Sunday's long run ~\d+(\.5)?–\d+(\.5)?~km easy$/);
+  // The cap is never lower than the taper's own long run: the planned long run is kept as the upper end.
+  assert.equal(sat.longRunKm, sat.easingOff?.longRunKm);
+  // A week before race week of a 10K says so; the week before that is plain building.
+  const tenK = { date: addDayKey(weekOf(10), 6), distanceKm: 10 };
+  const full = runsFor([15, 17, 19, 21, 23, 25, 28, 30]);
+  const tenKWeek = enduranceWeekPlan({ runs: full, weekStart: weekOf(9), goalKm: 30, today: addDayKey(weekOf(9), 3), race: tenK });
+  assert.deepEqual(tenKWeek.preTaper, { nextPhase: 'race_week' });
+  assert.equal(enduranceWeekPlan({ runs: full.filter(r => r.day < weekOf(8)), weekStart: weekOf(8), goalKm: 30, today: addDayKey(weekOf(8), 2), race: tenK }).preTaper, null);
+  // Not in the taper itself.
+  assert.equal(planFor(runs, 9, { race }).preTaper, null);
 });
 
 test('the week\'s plan does not change from day to day, nor as the oldest weeks of the 77-day history window slide away', () => {
