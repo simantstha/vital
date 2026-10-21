@@ -1041,3 +1041,57 @@ invariant(['runner_comeback_spike'], 'a "Stay at ~N next week" headline is the t
   assert.ok(compared > 0, `${name}: no "Stay at ~N next week" headline met a following Monday, so this invariant checked nothing`);
   return out;
 });
+
+// ── wave 22e / P1-C: a skipped cutback is not "30 of 30 km" ─────────────────
+
+const ANY_OF_FIGURE = /(\d+(?:\.\d+)?)(?:\s?(?:km|mi))?\s+of\s+(?:up to\s+)?~?(\d+(?:\.\d+)?)\s?(km|mi)\b/g;
+
+/** Mondays of the weeks whose Sunday card says "cutback", with that week's lowered target (km) and the km run. */
+function cutbackWeeks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> {
+  const out: Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> = [];
+  for (const s of snaps) {
+    const d = s.card?.distance;
+    if (weekdayOf(s.date) !== 'Sun' || !d?.plan?.cutback || d.thisWeekKm == null) continue;
+    out.push({ monday: mondayOfDate(s.date), targetKm: d.stepTargetKm, ranKm: d.thisWeekKm, sunday: s });
+  }
+  return out;
+}
+
+invariant(RUNNERS, 'in a cutback week every card, coach and review distance figure of the week uses the cutback target (never "30 of 30 km")', (snaps, name) => {
+  const out: Violation[] = [];
+  let weeks = 0;
+  for (const w of cutbackWeeks(snaps)) {
+    weeks++;
+    const unit = /\bmi\b/.test(plain(w.sunday.card?.distance?.text ?? '')) ? 'mi' : 'km';
+    const expected = inDisplayUnit(w.targetKm, unit);
+    const check = (snap: DaySnapshot, texts: Text[]): void => {
+      for (const t of texts) {
+        for (const m of plain(t.text).matchAll(ANY_OF_FIGURE)) {
+          // "long run 14 of 15 km" is the long-run build, not the week's distance.
+          if (/\brun\s*$/i.test(plain(t.text).slice(Math.max(0, (m.index ?? 0) - 12), m.index))) continue;
+          if (Math.abs(Number(m[2]) - expected) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" says "${m[0]}" in a cutback week of ~${expected} ${unit}` });
+        }
+      }
+    };
+    for (let i = 0; i < 7; i++) {
+      const snap = snaps.find(s => s.date === addDays(w.monday, i));
+      if (snap) check(snap, [...cardTexts(snap), ...coachTexts(snap)]);
+    }
+    const review = snaps.find(s => s.date === addDays(w.monday, 7));
+    if (review?.review?.weekStart === w.monday) check(review, reviewTexts(review).filter(t => t.where === 'review.headline'));
+  }
+  assert.ok(weeks > 0 || name === 'runner_messy' || name === 'runner_comeback_spike' || name === 'runner_no_race' || name === 'runner_on_plan_imperial', `${name}: no cutback week was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, 'a cutback week that ran more than 15% over its lowered target says "above the cutback" on the Sunday card and in the review headline', (snaps) => {
+  const out: Violation[] = [];
+  for (const w of cutbackWeeks(snaps)) {
+    if (!(w.ranKm > w.targetKm * 1.15 + 1e-9) || /Over the safe step/i.test(plain(w.sunday.card?.headline ?? ''))) continue;
+    if (!/cutback/i.test(plain(w.sunday.card?.headline ?? ''))) out.push({ snap: w.sunday, detail: `Sunday card headline "${visible(w.sunday.card?.headline ?? '')}" after ${w.ranKm} of ~${w.targetKm} km does not name the cutback` });
+    const review = snaps.find(s => s.date === addDays(w.monday, 7));
+    const headline = review?.review?.weekStart === w.monday ? review.review.review.headline : null;
+    if (review && headline != null && !/above the cutback/i.test(plain(headline))) out.push({ snap: review, detail: `review headline "${visible(headline)}" after ${w.ranKm} of ~${w.targetKm} km does not say it was above the cutback` });
+  }
+  return out;
+});

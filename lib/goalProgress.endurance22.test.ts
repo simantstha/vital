@@ -107,3 +107,26 @@ test('pre-taper week (22e): on the last day the headline judges the week - "Ease
   const full = computeGoalProgress(input(weeks(sun, [wk(30), wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race: HALF, racePeakWeekKm: 30 }));
   assert.doesNotMatch(full.headline, /Eased off|Easing off/);
 });
+
+// ── P1-C: the skipped cutback on the card ──────────────────────────────────
+
+test('a cutback week that ran far past its lowered number says so on the card, in the on-track race headline too (22e)', () => {
+  // Build weeks 15..25, then the calendar's cutback week of 2026-10-19 (~20 km), ended with 25 km: above it, under the spike line.
+  const sun = '2026-10-25';
+  const build = computeGoalProgress(input(weeks(sun, [wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sun }));
+  assert.equal(build.distance!.plan?.cutback, true);
+  assert.equal(build.distance!.stepTargetKm, 20);
+  assert.equal(build.headline, 'Cutback week — 25 of ~20 km, above the cutback');
+  // A cutback week of a runner at the goal (race build): 30 km of a ~24 km cutback week is "on track ... above the ~24 km cutback".
+  const sun2 = '2026-11-22';
+  const race = { date: '2027-01-31', distanceKm: 21.1 };
+  const history = [wk(30), wk(30), wk(30), wk(30), wk(24), wk(28), wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];
+  const atGoal = computeGoalProgress(input(weeks(sun2, history), { todayKey: sun2, race, racePeakWeekKm: 30 }));
+  assert.equal(atGoal.distance!.plan?.cutback, true);
+  assert.equal(atGoal.distance!.stepTargetKm, 24);
+  assert.equal(atGoal.headline, 'On track for the half — 30 km, above the ~24 km cutback');
+  assert.equal(atGoal.distance!.text, '30 of ~24 km running this week · goal 30 km');
+  // Kept (24 km): no talk of the cutback in the headline.
+  const kept = computeGoalProgress(input(weeks(sun2, [wk(24), ...history.slice(1)]), { todayKey: sun2, race, racePeakWeekKm: 30 }));
+  assert.doesNotMatch(kept.headline, /above the/);
+});

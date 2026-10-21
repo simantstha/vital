@@ -1490,6 +1490,11 @@ function distanceHeadline(
   if (opts.spike) {
     return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the safe step · goal ${distanceText(input, targetKm)}`;
   }
+  // A cutback week is graded against its own lowered number, so a week that ran far past it says so before the weekly goal is looked at
+  // ("30 of ~24 km — above the cutback", never "30 of 30 km" that hides the skipped cutback).
+  if (opts.cutback && km > stepKm * ABOVE_STEP_FRACTION) {
+    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — above the cutback · goal ${distanceText(input, targetKm)}`;
+  }
   if (stepKm >= targetKm || km >= targetKm) return `${distanceNumber(input, km)} of ${distanceText(input, targetKm)}`;
   // A comeback's target is a ceiling ("up to ~18 km"), worded so on the goal card too.
   const target = `${opts.upTo ? 'up to ' : ''}~${distanceText(input, stepKm)}`;
