@@ -131,6 +131,7 @@ import {
   liftReturnDisplay,
   liftReturnStates,
   liftShortName,
+  liftTrainedAtWorkingWeight,
   pickHeadlineLift,
   pickWeekOverWeek,
   rankLifts,
@@ -1272,7 +1273,19 @@ function muscleWeekSessionsReason(input: GoalProgressInput): GoalProgressReason 
   const daysLeft = 7 - (dayNumber(input.todayKey) - dayNumber(start));
   if (weekFitsSessionTarget(done, target, daysLeft, days.includes(input.todayKey))) return reason;
   const last = lastSessionDay(input);
-  return { ...reason, text: `${reason.text}${last ? ` (last: ${fmtDate(last, input.todayKey)})` : ''}`, tone: 'watch' };
+  return { ...reason, text: `${reason.text}${last ? ` (last: ${dayWord(last, input.todayKey)})` : ''}`, tone: 'watch' };
+}
+
+/** Where a "(last: …)" points: "today", "yesterday", else the date ("Apr 16") - never the date of the very day it is read on. */
+function dayWord(day: string, todayKey: string): string {
+  const age = dayNumber(todayKey) - dayNumber(day);
+  return age === 0 ? 'today' : age === 1 ? 'yesterday' : fmtDate(day, todayKey);
+}
+
+/** Distinct session days this calendar week (Mon-today). */
+function sessionsDoneThisWeek(input: GoalProgressInput): number {
+  const start = weekStart(input.todayKey);
+  return new Set(sessionDays(input).filter(d => d >= start && d <= input.todayKey)).size;
 }
 
 function proteinReason(input: GoalProgressInput): GoalProgressReason | null {
@@ -1350,6 +1363,18 @@ function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason
     // Good = up 1%+ (the verdict's bar); a drop is only amber when it is a real stall, not a deload or a return from a break.
     tone: l.up ? 'good' : d.change < 0 && l.stalled ? 'watch' : 'neutral',
   };
+}
+
+/**
+ * A slack week (half the planned sessions or fewer, the week out of reach) colours no lift line the week did not produce: a lift that was
+ * not trained at working weight this week (lib/liftChange.ts liftTrainedAtWorkingWeight) shows where it stands, dated and neutral -
+ * "Squat est. 1RM 136 kg (wk of Apr 6)" - not "+10 kg vs 4 weeks ago" in green. A lift that was trained keeps its line.
+ */
+function unproducedLiftReason(l: LiftChange, reason: GoalProgressReason, input: GoalProgressInput): GoalProgressReason {
+  if (reason.tone !== 'good' || liftTrainedAtWorkingWeight(input.progression[l.exercise] ?? [], weekStart(input.todayKey))) return reason;
+  const best = liftLastBest(input.progression[l.exercise] ?? [], weekStartKeyForDay(input.todayKey));
+  if (!best) return { ...reason, tone: 'neutral' };
+  return { kind: 'lift', text: `${l.name} est. 1RM ${fmtLiftKg(input, best.kg)} (wk of ${fmtDate(best.weekStart, input.todayKey)})`, tone: 'neutral' };
 }
 
 interface LiftDisplay { baseline: number; recent: number; change: number; unit: string }
@@ -2081,7 +2106,7 @@ function liftReturnOutcome(rets: GoalLiftReturn[], input: GoalProgressInput): { 
  *    lagging lift was 3+ points under the headline lift, so it came and went with one session (days 71-78: hidden, shown, hidden);
  *  - every lift back: the first two.
  */
-function liftReturnReasons(rets: GoalLiftReturn[], input: GoalProgressInput): GoalProgressReason[] {
+function liftReturnReasons(rets: GoalLiftReturn[], input: GoalProgressInput, unproduced?: (exercise: string) => boolean): GoalProgressReason[] {
   const behind = furthestBehindReturn(rets);
   const back = rets.find(r => r.regained);
   if (behind != null && back == null && rets.length > 1) {
@@ -2093,10 +2118,11 @@ function liftReturnReasons(rets: GoalLiftReturn[], input: GoalProgressInput): Go
   if (behind != null && back != null) picked = [behind, back];
   else if (behind != null) picked = [rets[0]];
   else picked = rets.slice(0, 2);
-  return picked.map(r => liftReturnReason(r, input));
+  return picked.map(r => liftReturnReason(r, input, unproduced?.(r.exercise) === true));
 }
 
-function liftReturnReason(r: GoalLiftReturn, input: GoalProgressInput): GoalProgressReason {
+/** `unproduced`: a slack week that did not train this lift at working weight - its "back above pre-break" is a fact, not a green win. */
+function liftReturnReason(r: GoalLiftReturn, input: GoalProgressInput, unproduced = false): GoalProgressReason {
   const { pre, recent, pct, unit } = returnNumbers(r, input);
   if (!r.regained) {
     return { kind: 'lift', text: `${r.name} est. 1RM ${withUnit(recent, unit)}, ${pct}% of your ${withUnit(pre, unit)} pre-break best`, tone: 'neutral' };
@@ -2106,7 +2132,7 @@ function liftReturnReason(r: GoalLiftReturn, input: GoalProgressInput): GoalProg
     text: recent > pre
       ? `${r.name} est. 1RM ${withUnit(recent, unit)}, back above your pre-break ${withUnit(pre, unit)}`
       : `${r.name} est. 1RM ${withUnit(recent, unit)}, back at your pre-break best`,
-    tone: 'good',
+    tone: unproduced ? 'neutral' : 'good',
   };
 }
 
@@ -2227,6 +2253,12 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   const weekSessions = young ? null : muscleWeekSessionsReason(input);
   // The week can no longer reach its target: a watch line, and no "Progressing" headline over it.
   const weekShort = weekSessions?.tone === 'watch';
+  // ... and when it holds at most half the planned sessions (1 of 4, 2 of 4) it is a SLACK week: the card leads with the week, and colours
+  // no lift or weight line green that the week did not produce (wave 23s).
+  const sessionsThisWeek = sessionsDoneThisWeek(input);
+  const weeklyTarget = input.target.weeklySessions;
+  const slackWeek = weekShort && weeklyTarget != null && sessionsThisWeek > 0 && sessionsThisWeek * 2 <= weeklyTarget;
+  const trainedThisWeek = (exercise: string): boolean => liftTrainedAtWorkingWeight(input.progression[exercise] ?? [], weekStart(input.todayKey));
   const adherenceDemoted = adherence && adherence.tone === 'watch' ? { ...adherence, tone: 'neutral' as const } : adherence;
   const protein = proteinReason(input);
   // A week or more without a session: the lifts are dated, never praised ("+9 kg vs 4 weeks ago" is about a window
@@ -2235,15 +2267,19 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // The threshold scales to the weekly target (4 days for 4 a week, 7 for 2 or none): lib/liftChange.ts liftLapseMinDays.
   const lapseLift = daysOff != null && daysOff >= liftLapseMinDays(input.target.weeklySessions) ? lapseLiftOf(input, ret?.exercise ?? lifts[0]?.exercise ?? null) : null;
   const lapse = lapseLift != null && daysOff != null ? { days: daysOff, lift: lapseLift } : null;
-  const liftReasons = lapse ? [] : lifts.map(l => liftReason(l, input)).filter((r): r is GoalProgressReason => r != null);
+  const liftReasons = lapse
+    ? []
+    : lifts.map(l => { const r = liftReason(l, input); return r && slackWeek ? unproducedLiftReason(l, r, input) : r; }).filter((r): r is GoalProgressReason => r != null);
   // The lift lines: a lapse dates the lift; a return states every lift's return (the one furthest behind, then one that is back).
   const leadLifts: Array<GoalProgressReason | null> = lapse
     ? [lapseReason(input, lapse.lift)]
-    : ret ? liftReturnReasons(rets.length > 0 ? rets : [ret], input) : [liftReasons[0] ?? weekOverWeekReason(input)];
+    : ret ? liftReturnReasons(rets.length > 0 ? rets : [ret], input, slackWeek ? exercise => !trainedThisWeek(exercise) : undefined) : [liftReasons[0] ?? weekOverWeekReason(input)];
   // "Back after a 15-day break" explains a rebuild; once every pre-break best is regained it is no longer news.
   const returnBreak = ret && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null ? liftReturnBreakReason(ret, input) : null;
   // A lapse is not a time to praise the scale either: the weight line is neutral and says so.
-  const rateShown = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
+  const rateLapse = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
+  // ... nor a green weight line in a slack week (the scale moved; the sessions did not).
+  const rateShown = slackWeek && rateLapse?.tone === 'good' ? { ...rateLapse, tone: 'neutral' as const } : rateLapse;
   // Rate at/above the top of the healthy band is a flag worth surfacing early.
   const rateTop = rate?.tone === 'watch' && w.rateKg != null && w.rateKg > 0;
   const reachLead = weightReached ? reachedLeadReason(input, w, targetKg as number) : null;
@@ -2299,7 +2335,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     if (liftsUp) {
       // A week that can no longer reach its target is never "Progressing" (the 28-day line alone stays neutral through it).
       liftState = sessionsBehind
-        ? { verdict: 'behind', headline: clip(`Lifts up, sessions behind — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
+        ? { verdict: 'behind', headline: slackWeek ? sessionsBehindHeadline : clip(`Lifts up, sessions behind — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
         : weekShort
           ? { verdict: 'holding', headline: clip(`Lifts up, week short — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
           : { verdict: 'progressing', headline: clip(`Progressing — ${head.name} est. 1RM ${liftDeltaText(headDisplay)} vs 4 weeks ago`) };
@@ -2319,6 +2355,12 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     } else {
       liftState = { verdict: 'holding', headline: clip(`Holding — ${head.name} est. 1RM ${headDelta} vs 4 weeks ago`) };
     }
+  }
+
+  // A slack week leads with the week, not with a lift gain it did not produce ("Week short — 1 of 4 so far"); a lapse, a return, a stall
+  // and "sessions behind" keep their own headline.
+  if (slackWeek && liftState && (liftState.verdict === 'holding' || liftState.verdict === 'progressing') && !lapse && !ret) {
+    liftState = { verdict: 'holding', headline: `Week short — ${sessionsThisWeek} of ${weeklyTarget} so far` };
   }
 
   // Reaching the weight target never hides training feedback: sessions behind

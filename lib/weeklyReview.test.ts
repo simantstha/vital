@@ -2493,11 +2493,15 @@ test('a week with no session: the headline says so (2nd, 3rd week off), weight g
   assert.equal(fresh.headline, 'No sessions last week', 'one week since signup is not a second week');
 });
 
-test('muscle weight gain is the win in a week with a session, not in a week without one', () => {
-  // Two of four sessions: the sessions stat is not a win, so the up-0.2 kg weekly average is.
-  const trained = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3]] }));
+test('muscle weight gain is the win in a week with a session, not in a week without one - nor in a slack one (wave 23s)', () => {
+  // Three of four sessions: the sessions stat is not a win, so the up-0.2 kg weekly average is.
+  const trained = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[2], WEEK[4]] }));
   assert.equal(statByLabel(trained, 'Weekly avg weight')!.tone, 'good');
   assert.match(trained.win ?? '', /^Your weekly average weight is up 0\.\d kg\.$/);
+  // Two of four is a slack week (half the plan): the scale moved, the training did not - a neutral number, and the win is the sessions done.
+  const slack = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3]] }));
+  assert.equal(statByLabel(slack, 'Weekly avg weight')!.tone, 'neutral');
+  assert.equal(slack.win, 'You still got 2 sessions in — Monday and Thursday.');
   const none = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [] }));
   assert.equal(statByLabel(none, 'Weekly avg weight')!.tone, 'neutral');
   assert.equal(none.win, null);
@@ -2513,7 +2517,7 @@ test('a slack week (1-2 of 4 sessions) has no 4-week lift win: the session itsel
   // The lift stat keeps its numbers but is not green, and the headline leads with the week, not a gain it did not produce (wave 22s).
   assert.ok(one.stats.some(st => st.label.endsWith('est. 1RM')), JSON.stringify(one.stats));
   assert.ok(one.stats.filter(st => st.label.endsWith('est. 1RM')).every(st => st.tone !== 'good'), JSON.stringify(one.stats));
-  assert.equal(one.headline, '1 of 4 sessions — a short week');
+  assert.equal(one.headline, '1 of 4 sessions last week — a short week');
   // A lift trained at working weight that week may still show its gain: green stat, in the headline "over 4 wks".
   const trainedSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 1)] } }));
   assert.equal(statByLabel(trainedSquat, 'Squat est. 1RM')!.tone, 'good');
@@ -2521,15 +2525,16 @@ test('a slack week (1-2 of 4 sessions) has no 4-week lift win: the session itsel
   // ... but not when that week's squat was a light day (a top set under 90% of its best): neutral again.
   const lightSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 90, 1)] } }));
   assert.equal(statByLabel(lightSquat, 'Squat est. 1RM')!.tone, 'neutral');
-  assert.equal(lightSquat.headline, '1 of 4 sessions — a short week');
+  assert.equal(lightSquat.headline, '1 of 4 sessions last week — a short week');
   // 2 of 4 is still half: two days named. No lift in the week's data, or more than two: just the day.
   const two = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]], weightReadings: flat, progression: lifts }));
   assert.equal(two.win, 'You still got 2 sessions in — Monday and Thursday.');
   const noLifts = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], weightReadings: flat, progression: {} }));
   assert.equal(noLifts.win, "You still got Thursday's session in.");
-  // The week's weight win stands (it is that week's own number); 3 of 4 is not slack and keeps the lift win.
+  // A rising scale is no win of a slack week either (wave 23s): the win is the session she did; 3 of 4 is not slack and keeps the lift win.
   const rising = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3]], progression: lifts }));
-  assert.match(rising.win ?? '', /^Your weekly average weight is up /);
+  assert.equal(statByLabel(rising, 'Weekly avg weight')!.tone, 'neutral');
+  assert.equal(rising.win, "You still got Thursday's bench session in.");
   const three = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[2], WEEK[4]], strengthDays: [WEEK[0], WEEK[2], WEEK[4]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 3)] } }));
   assert.match(three.win ?? '', /^Squat estimated 1RM is up 5\skg vs 4 weeks ago\.$/);
 });

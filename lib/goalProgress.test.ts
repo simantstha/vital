@@ -2920,7 +2920,9 @@ test('a week that cannot reach its target: "0 of 4 sessions this week (last: Oct
   const sun = computeGoalProgress(lapseInput(0, { todayKey: sunday, strengthDays: sunDays, trainingDays: sunDays }));
   assert.deepEqual(sun.reasons[0], { kind: 'week_sessions', text: '2 of 4 sessions this week (last: Oct 2)', tone: 'watch' });
   assert.equal(sun.verdict, 'holding');
-  assert.equal(sun.headline, 'Lifts up, week short — Squat est. 1RM +12 kg');
+  // 2 of 4 is a slack week: the card leads with the week, and the squat (not trained this week) is dated and neutral (wave 23s).
+  assert.equal(sun.headline, 'Week short — 2 of 4 so far');
+  assert.equal(sun.reasons.find(r => r.kind === 'lift')!.tone, 'neutral');
   assert.doesNotMatch(JSON.stringify(sun), /Progressing/);
   assertWellFormed(sun);
   // The day before it can still be hit (2 + Sat + Sun = 4): the normal read, no amber.
@@ -2979,16 +2981,52 @@ test('Thursday of a one-session week is already "week short": the card does not 
   assert.equal(wed.verdict, 'progressing');
   const thu = at('2026-10-01', ['2026-10-01']);
   assert.equal(thu.verdict, 'holding');
-  assert.equal(thu.headline, 'Lifts up, week short — Squat est. 1RM +12 kg');
-  assert.deepEqual(thu.reasons[0], { kind: 'week_sessions', text: '1 of 4 sessions this week (last: Oct 1)', tone: 'watch' });
+  assert.equal(thu.headline, 'Week short — 1 of 4 so far');
+  assert.deepEqual(thu.reasons[0], { kind: 'week_sessions', text: '1 of 4 sessions this week (last: today)', tone: 'watch' });
   // Friday and the weekend say the same thing.
   for (const day of ['2026-10-02', '2026-10-03', '2026-10-04']) {
     const p = at(day, ['2026-10-01']);
     assert.equal(p.verdict, 'holding', day);
-    assert.equal(p.headline, 'Lifts up, week short — Squat est. 1RM +12 kg', day);
+    assert.equal(p.headline, 'Week short — 1 of 4 so far', day);
+    // ... and the day after the session it is "yesterday", then the date.
+    assert.equal(p.reasons[0].text, `1 of 4 sessions this week (last: ${day === '2026-10-02' ? 'yesterday' : 'Oct 1'})`, day);
   }
   // Monday of the next week starts clean: no amber week line (it is the lapse, 4 days off, that holds the card then).
   assert.ok(at('2026-10-05', ['2026-10-01']).reasons.every(r => r.kind !== 'week_sessions' || r.tone !== 'watch'));
+});
+
+test('a slack week (half the sessions or fewer, the week out of reach) leads with the week and colours no lift or weight line green it did not produce (wave 23s)', () => {
+  // Thursday 10-01, one session today (1 of 4): the squat (best 142 kg, wk of 09-21) was NOT trained this week.
+  const upTo = (day: string, sessions: string[]) => [...Array.from({ length: 80 }, (_, i) => addDays('2026-08-31', i)).filter(d => d <= '2026-09-27'), ...sessions].filter(d => d <= day);
+  const at = (day: string, sessions: string[], over: Partial<GoalProgressInput> = {}) =>
+    computeGoalProgress(lapseInput(0, { todayKey: day, strengthDays: upTo(day, sessions), trainingDays: upTo(day, sessions), ...over }));
+  const thu = at('2026-10-01', ['2026-10-01']);
+  assert.equal(thu.headline, 'Week short — 1 of 4 so far');
+  assert.equal(thu.verdict, 'holding');
+  const lift = thu.reasons.find(r => r.kind === 'lift')!;
+  assert.deepEqual(lift, { kind: 'lift', text: 'Squat est. 1RM 142 kg (wk of Sep 21)', tone: 'neutral' });
+  assert.ok(thu.reasons.every(r => r.tone !== 'good' || r.kind === 'adherence'), JSON.stringify(thu.reasons));
+  assertWellFormed(thu);
+  // Pounds: the dated line is in the display unit (142 kg = 313 lb).
+  assert.equal(at('2026-10-01', ['2026-10-01'], { unitSystem: 'imperial' }).reasons.find(r => r.kind === 'lift')!.text, 'Squat est. 1RM 313 lb (wk of Sep 21)');
+  // A squat trained at working weight THIS week (week of 09-28: top set 105 kg, its best in the 4 weeks before was 105 kg) keeps its green line,
+  // but the headline still leads with the week.
+  const trained = at('2026-10-01', ['2026-10-01'], { progression: { squat: [...LAPSE_SQUAT, lw('2026-09-28', 142, 1, { topLoadKg: 105 })].map((w, i, all) => i < all.length - 1 ? { ...w, topLoadKg: 105 } : w) } });
+  assert.equal(trained.headline, 'Week short — 1 of 4 so far');
+  assert.equal(trained.reasons.find(r => r.kind === 'lift')!.tone, 'good');
+  // A light day (top set under 90% of its best) is not working weight: neutral and dated again.
+  const light = at('2026-10-01', ['2026-10-01'], { progression: { squat: [...LAPSE_SQUAT.map(w => ({ ...w, topLoadKg: 105 })), lw('2026-09-28', 142, 1, { topLoadKg: 90 })] } });
+  assert.equal(light.reasons.find(r => r.kind === 'lift')!.tone, 'neutral');
+  // More than half the plan (3 of 5 here is not slack, the Sunday still out of reach): the old read stands.
+  const three = computeGoalProgress(lapseInput(0, { todayKey: '2026-10-04', target: { weightKg: null, date: null, weeklySessions: 5 }, strengthDays: upTo('2026-10-04', ['2026-09-29', '2026-10-01', '2026-10-03']), trainingDays: upTo('2026-10-04', ['2026-09-29', '2026-10-01', '2026-10-03']) }));
+  assert.doesNotMatch(three.headline, /^Week short/);
+  // A green weight line is neutral in a slack week (the scale moved; the sessions did not).
+  const gain = (n: number) => Array.from({ length: n }, (_, i) => { const day = addDays('2026-10-01', -(n - 1 - i)); return { measuredAt: `${day}T08:00:00.000Z`, valueKg: 80 + 0.03 * i, source: 'manual' as const, localDay: day }; });
+  const heavier = at('2026-10-01', ['2026-10-01'], { weightReadings: gain(28).map(r => ({ ...r, valueKg: r.valueKg + 0.01 * Number(r.localDay.slice(8)) })), progression: {} });
+  const rate = heavier.reasons.find(r => r.kind === 'rate');
+  assert.ok(rate, JSON.stringify(heavier.reasons));
+  assert.match(rate.text, /on pace for lean gain/);
+  assert.equal(rate.tone, 'neutral', rate.text);
 });
 
 test('headlineLift: the muscle card sends the key of the lift it leads with (sticky), and no other goal carries it (wave 22s)', () => {

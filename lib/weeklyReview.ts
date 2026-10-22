@@ -547,8 +547,9 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
     else if (deltaKg <= -0.05) tone = isTooFastWeek(input) ? 'watch' : 'good';
     else if (deltaKg >= 0.2) tone = isTooSlowWeek(input) ? 'watch' : 'neutral';
   } else if (input.goal === 'muscle') {
-    // Weight gain is a win for a lifter who trained that week; in a week without a session it is only a number.
-    if (deltaKg > 0.05) tone = weekSessionCount(input, week) > 0 ? 'good' : 'neutral';
+    // Weight gain is a win for a lifter who trained that week; in a week without a session, or a slack one (half the planned sessions or
+    // fewer), it is only a number - the scale moved, the training did not.
+    if (deltaKg > 0.05) tone = weekSessionCount(input, week) > 0 && !slackMuscleWeek(input, week) ? 'good' : 'neutral';
     else if (deltaKg <= -0.2) tone = 'watch';
   }
   const cand: Candidate = {
@@ -1771,7 +1772,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
     const protein = by('Protein days hit');
     // A slack week leads with the week: no lift gain it did not produce, no weight or protein filler after the count.
-    if (slackMuscleWeek(input, week) && !input.liftReturn && !(lift && lift.tone === 'good') && parts.length === 1) return clipHeadline(`${parts[0]} — a short week`);
+    if (slackMuscleWeek(input, week) && !input.liftReturn && !(lift && lift.tone === 'good') && parts.length === 1) return clipHeadline(`${parts[0]} last week — a short week`);
     if (lift && input.liftReturn) {
       // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
       parts.push(returnHeadlinePart(input));
