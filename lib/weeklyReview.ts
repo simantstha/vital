@@ -1064,6 +1064,8 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
     comparison = pct === 0 ? 'same as last week' : `${signed(pct, `${Math.abs(pct)}%`)} vs last week`;
     // A cutback week is a planned drop (wave 22e): said so, next to the number.
     if (plan.cutback != null && pct < 0) comparison = `${comparison}, as planned (cutback)`;
+    // A taper / race / recovery week is a planned change (wave 23e): said so, next to the number, like the cutback's.
+    if (isWindDownKind(plan.kind) && pct !== 0) comparison = `${comparison}, as planned (${plan.kind === 'race_week' ? 'race week' : plan.kind})`;
     // The week after a cutback is measured against the last full week before it, said so (wave 23e): "+9% on your last full week (23 km), back on the build after the cutback".
     if (afterCutback) comparison = pct === 0 ? `same as your last full week (${distanceText(input, baseKm)}), back after the cutback` : `${signed(pct, `${Math.abs(pct)}%`)} on your last full week (${distanceText(input, baseKm)}), back on the build after the cutback`;
   } else if (prevKm > 0) comparison = `vs ${distanceText(input, prevKm)} last week`;

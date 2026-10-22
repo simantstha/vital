@@ -134,3 +134,15 @@ test('a comeback week\'s "Next week" names the ladder it climbs (up to ~25% a we
   assert.match(r.nextWeek, /^Build up to ~\d+ km: long run [\d.]+ km, the rest mostly easy runs; then up to ~25% a week until you're back at your usual ~[\d.]+ km, about 10% after that\.$/);
   assert.doesNotMatch(r.nextWeek, /add ~10% a week/);
 });
+
+test('a recovery / taper week quoting a % vs last week says "as planned (recovery)" / "as planned (taper)" (23e P2-7)', () => {
+  // Half marathon on Sun 2026-09-20; recovery week 1 is Mon 09-21, recovery week 2 the reviewed week (Mon 09-28).
+  const race = { raceDate: '2026-09-20', raceDistanceKm: 21.1 };
+  const input = planReview([15, 17, 19, 21, 23, 25, 12, 8, 11], { ...race });
+  const raceRun = run('2026-09-20', 21.1);
+  const r = computeWeeklyReview({ ...input, workouts: [...input.workouts, raceRun], trainingDays: [...input.trainingDays, raceRun.day] });
+  assert.equal(stat(r, 'Volume')!.comparison, '+38% vs last week, as planned (recovery)');
+  // The taper week: reviewing Mon 09-14's week... a half's taper is the 14 days before: the week of 09-07 (13 days out).
+  const taper = computeWeeklyReview({ ...planReview([15, 17, 19, 21, 23, 28, 21], { weekStart: '2026-09-07', ...race }) });
+  assert.match(stat(taper, 'Volume')!.comparison ?? '', /^−25% vs last week, as planned \(taper\)$/);
+});

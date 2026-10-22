@@ -3592,3 +3592,24 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-6: a 
   assert.ok(seen > 0, `${name}: no cutback was skipped, so this invariant checked nothing`);
   return out;
 });
+
+// ── P2-7: a planned drop or rise in a wind-down week is "as planned", like the cutback's ────────────────────
+
+invariant(RUNNERS, 'P2-7: the Volume stat of a taper, race or recovery week that quotes a % vs last week says "as planned (taper / race week / recovery)" next to it', (snaps, name) => {
+  const out: Violation[] = [];
+  const bySunday = new Map(snaps.filter(s => weekdayOf(s.date) === 'Sun').map(s => [s.date, s]));
+  let seen = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (!rv) continue;
+    const kind = bySunday.get(addDays(rv.weekStart, 6))?.card?.distance?.plan?.kind;
+    if (kind !== 'taper' && kind !== 'race_week' && kind !== 'recovery') continue;
+    const volume = rv.review.stats.find(st => st.label === 'Volume');
+    if (!volume || !/[+−-]\d+%/.test(plain(volume.comparison ?? ''))) continue;
+    seen++;
+    const label = kind === 'race_week' ? 'race week' : kind;
+    if (!new RegExp(`, as planned \\(${label}\\)$`).test(plain(volume.comparison ?? ''))) out.push({ snap, detail: `Volume "${visible(volume.value)}" — "${visible(volume.comparison ?? '')}" for a ${kind} week` });
+  }
+  if (name === 'runner_on_plan_half' || name === 'runner_on_plan_obedient' || name === 'runner_on_plan') assert.ok(seen > 0, `${name}: no wind-down week quoted a %, so this invariant checked nothing`);
+  return out;
+});
