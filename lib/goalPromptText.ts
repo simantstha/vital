@@ -184,9 +184,14 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
       const growing = plan.longRunHeld !== true && lrc != null && lrc.targetPeakKm != null
         && roundLongRunKm(lrc.peakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1) < roundLongRunKm(lrc.targetPeakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1);
       const grow = growing ? ` (the long run keeps growing ~${units === 'imperial' ? '1 mi' : '2 km'} a week toward its peak)` : '';
-      return plan.goalReachedBefore === false
-        ? `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the first week at the goal, do not go past it${strides}`
-        : `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
+      if (plan.goalReachedBefore === false) {
+        return `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the first week at the goal, do not go past it${strides}`;
+      }
+      // Wave 23e P3-c: reached before, but last week fell short of it (a cutback, a 28 km week): back TO the goal, not "hold" a number he has not just run.
+      if (plan.lastAtGoal === false) {
+        return `- This week's target: build back to the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — last week was under it, so build back to the goal and do not go past it${strides}`;
+      }
+      return `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
     }
     case 'hold':
       // A cutback week that ran more than 10% over its lowered number: hold at the week it replaced.

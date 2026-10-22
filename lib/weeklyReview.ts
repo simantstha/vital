@@ -1739,7 +1739,7 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
         const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === goal ? ` — aim for ${goal} again` : '';
         return `Close to your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}${again}.`;
       }
-      return plan.goalReachedBefore
+      return plan.goalReachedBefore && plan.lastAtGoal
         ? `You held your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}.`
         : `You reached your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}.`;
     }
@@ -2402,7 +2402,8 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
       break;
     case 'maintain':
       // A runner who has not yet run the weekly goal is building to it, not holding it.
-      text = `${next.goalReachedBefore ? 'Hold' : 'Build to'} ${goalText}; ${lr ? `${lr}, ` : ''}the rest easy${next.strides ? `, ${STRIDES_COPY}` : ''}.`;
+      // (Wave 23e P3-c: and not one whose reviewed week fell short of it either - a cutback, a 28 km week.)
+      text = `${next.goalReachedBefore && next.lastAtGoal ? 'Hold' : 'Build to'} ${goalText}; ${lr ? `${lr}, ` : ''}the rest easy${next.strides ? `, ${STRIDES_COPY}` : ''}.`;
       break;
     case 'build':
     default:

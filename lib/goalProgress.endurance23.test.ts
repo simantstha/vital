@@ -185,6 +185,24 @@ test('the week after a cutback quotes its % against the last full week before th
   assert.equal(afterCut.distance!.plan?.stepBaseKm, 23);
 });
 
+test('"Hold 30 km" only after a week that ran the goal: after 28 km (or a cutback week) a maintain week is "Build to 30 km" (23e P3-c)', () => {
+  // Weeks of 15..23 km, a 40 km spike, then the hold week ran 28 km: this Monday is at the 30 km goal, which he has run before - but not last week.
+  const monday = '2026-04-20';
+  const after28 = computeGoalProgress(input(weeks(monday, [[], wk(28), wk(40), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }));
+  const plan = after28.distance!.plan!;
+  assert.equal(plan.kind, 'maintain');
+  assert.equal(plan.goalReachedBefore, true);
+  assert.equal(plan.lastAtGoal, false);
+  assert.match(plan.purpose, /^Build to 30 km this week: long run [\d.]+ km, the rest easy$/);
+  assert.match(after28.reasons.find(r => r.kind === 'plan')!.text, /^Build to 30 km this week: /);
+  // After a week that ran the goal (30 km; 29.5 is the edge) it is "Hold".
+  const after30 = computeGoalProgress(input(weeks(monday, [[], wk(30), wk(28), wk(25), wk(23), wk(21), wk(19), wk(17)]), { todayKey: monday }));
+  assert.equal(after30.distance!.plan?.kind, 'maintain');
+  assert.equal(after30.distance!.plan?.lastAtGoal, true);
+  assert.match(after30.reasons.find(r => r.kind === 'plan')!.text, /^Hold 30 km this week: /);
+  assert.equal(computeGoalProgress(input(weeks(monday, [[], wk(29.5), wk(28), wk(25), wk(23), wk(21), wk(19), wk(17)]), { todayKey: monday })).distance!.plan?.lastAtGoal, true);
+});
+
 test('"a touch over, fine" is said once: the Monday has it, from Tuesday the card is quiet; a spike keeps its words all week (23e P3-a)', () => {
   // Weeks 1-6 build (15..25 km), two weeks off, a restart week of 12 km, then the comeback week "up to ~15 km" ran at `lastKm`.
   const hist = (lastKm: number) => [[], wk(lastKm), wk(12), [], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];

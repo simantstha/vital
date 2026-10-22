@@ -69,13 +69,17 @@ test('"hit" only when the rounded km reach the step: 20 of ~22 km is "Close to y
   // At the goal: 28 of 30 is close, 30 of 30 is held.
   // (The fifth week here, 2026-09-21, is the calendar's cutback week: run as planned, 24 km - a full 30 would be a skipped cutback, wave 22e.)
   assert.match(computeWeeklyReview(planReview([22, 24, 26, 30, 24, 28])).win ?? '', /^Close to your weekly goal: 28 of 30 km — aim for 30 again\.$/);
-  assert.equal(computeWeeklyReview(planReview([22, 24, 26, 30, 24, 30])).win, 'You held your weekly goal: 30 of 30 km.');
+  // Wave 23e P3-c: "held" needs the week before at the goal too. 30 after the cutback week (24) is back AT the goal - reached; 30 after 30 is held.
+  assert.equal(computeWeeklyReview(planReview([22, 24, 26, 30, 24, 30])).win, 'You reached your weekly goal: 30 of 30 km.');
+  assert.equal(computeWeeklyReview(planReview([22, 24, 26, 30, 30], { weekStart: '2026-10-12' })).win, 'You held your weekly goal: 30 of 30 km.');
 });
 
 test('a goal he has never run is "Build to", not "Hold"', () => {
   const r = computeWeeklyReview(planReview([22, 24, 26, 28]));
   assert.match(r.nextWeek, /^Build to 30 km; /);
-  assert.equal(computeWeeklyReview(planReview([22, 24, 30, 28])).nextWeek.startsWith('Hold 30 km; '), true);
+  // Wave 23e P3-c: and "Hold" only after a week that ran the goal - 28 km (or a 24 km cutback week) after having run 30 is "Build to 30 km", 30 km is "Hold".
+  assert.equal(computeWeeklyReview(planReview([22, 24, 30, 28])).nextWeek.startsWith('Build to 30 km; '), true);
+  assert.equal(computeWeeklyReview(planReview([22, 24, 26, 30, 24, 30])).nextWeek.startsWith('Hold 30 km; '), true);
   // The first time at the goal is "reached", not "held".
   assert.equal(computeWeeklyReview(planReview([22, 24, 26, 28, 30])).win, 'You reached your weekly goal: 30 of 30 km.');
 });

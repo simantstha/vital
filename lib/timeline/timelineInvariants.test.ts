@@ -3654,3 +3654,31 @@ invariant(RUNNERS, 'P3-b: a week graded a spike (a jump over the step, or well o
   if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(spikes > 0, `${name}: no spike week was reviewed, so this invariant checked nothing`);
   return out;
 });
+
+// ── P3-c: "Hold 30 km" only after a week that ran the goal ───────────────────
+
+invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan line, coach target line, review "Next week") is said only after a week that ran the goal (last week >= goal - 0.5 km); a week short of it is told to "Build to" the goal', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const goal = buildScenario(name).user.weeklyDistanceKm as number;
+  const weekKm = (monday: string): number => kmThrough(runKm, monday, addDays(monday, 6));
+  const out: Violation[] = [];
+  let maintainWeeks = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.distance?.plan;
+    if (plan?.kind === 'maintain' && plan.cutback !== true) {
+      maintainWeeks++;
+      const lastKm = weekKm(addDays(mondayOfDate(snap.date), -7));
+      if (lastKm < goal - 0.5) {
+        for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+          if (/^Hold [\d.]+ (?:km|mi) this week|hold the [\d.]+ (?:km|mi)\/week goal/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" after a ${Math.round(lastKm * 10) / 10} km week (goal ${goal} km)` });
+        }
+      }
+    }
+    const rv = snap.review;
+    if (rv && /^Hold [\d.]+ (?:km|mi);/.test(plain(rv.review.nextWeek)) && weekKm(rv.weekStart) < goal - 0.5) {
+      out.push({ snap, detail: `review next week "${visible(rv.review.nextWeek)}" after a ${Math.round(weekKm(rv.weekStart) * 10) / 10} km week (goal ${goal} km)` });
+    }
+  }
+  if (['runner_messy', 'runner_comeback_spike', 'runner_comeback_obedient', 'runner_on_plan_obedient'].includes(name)) assert.ok(maintainWeeks > 0, `${name}: no maintain week was stepped, so this invariant checked nothing`);
+  return out;
+});

@@ -794,6 +794,11 @@ export interface EnduranceWeekPlan {
   longRunJump: { actualKm: number; plannedKm: number; heldKm: number } | null;
   /** True when a training week before this one reached the weekly goal (else a maintain week is still "build to"). */
   goalReachedBefore: boolean;
+  /**
+   * Wave 23e P3-c: last week itself ran the weekly goal (>= goal - 0.5 km). A maintain week is "Hold 30 km" only when the goal was reached before AND last
+   * week was at it; a week after a shorter one (a cutback, a 28 km week) is "Build to 30 km" - never "hold" a number he has not just run.
+   */
+  lastAtGoal: boolean;
   /** Days from the day the plan is read on (today; the week's last day for a past week) to race day; negative after it; null without a race. */
   raceDaysToGo: number | null;
   /** The actual step over last week in whole percent (this week's target against last week's km); null when last week was too small to compare or there is no target. */
@@ -1374,8 +1379,8 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       if (plan.cutback != null) {
         return `Cutback week: ~${formatKm(t ?? plan.goalKm, u)}, ${lrPart ?? 'easy runs'} — absorb the last three weeks${strides}`;
       }
-      // A runner who has never run the weekly goal is still building to it, not holding it.
-      const verb = plan.goalReachedBefore ? 'Hold' : 'Build to';
+      // A runner who has never run the weekly goal is still building to it, not holding it - and (wave 23e P3-c) neither is one whose last week fell short of it.
+      const verb = plan.goalReachedBefore && plan.lastAtGoal ? 'Hold' : 'Build to';
       return lrPart
         ? `${verb} ${formatKm(plan.goalKm, u)} this week: ${lrPart}, the rest easy${strides}`
         : `${verb} ${formatKm(plan.goalKm, u)} this week, the rest of the runs easy${strides}`;
@@ -1420,6 +1425,9 @@ function stepFromShownTarget(targetKm: number, goalKm: number, units: number): n
   if (next == null) return targetKm;
   return next >= goalKm * units - 1e-9 ? goalKm : Math.round((next / units) * 10) / 10;
 }
+
+/** Wave 23e P3-c: last week "ran the goal" when it came within this many km of it (30 km goal: 29.5 km and up). */
+export const LAST_AT_GOAL_SLACK_KM = 0.5;
 
 /** True when a training week before `w` (up to the lookback) ran at least the weekly goal. */
 function goalReachedBefore(ctx: PlanCtx, w: string): boolean {
@@ -1973,6 +1981,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     })(),
     longRunJump,
     goalReachedBefore: goalReachedBefore(ctx, w),
+    lastAtGoal: hasPrior && prev.km >= ctx.goalKm - LAST_AT_GOAL_SLACK_KM,
     raceDaysToGo,
     stepPct,
     stepBaseKm,

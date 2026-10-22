@@ -96,6 +96,15 @@ test('the week after a cutback: the coach quotes the step against the last full 
   assert.match(targetLine(coach(plain)), /step on last week/);
 });
 
+test('the coach never says "hold the goal" after a week under it: it says build back to it, and do not go past it (23e P3-c)', () => {
+  const monday = '2026-04-20';
+  const after28 = targetLine(coach(computeGoalProgress(input(weeks(monday, [[], wk(28), wk(40), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }))));
+  assert.match(after28, /^- This week's target: build back to the 30\.0 km\/week goal; long run [\d.]+ km.*last week was under it, so build back to the goal and do not go past it$/);
+  assert.doesNotMatch(after28, /hold the|the runner is at the goal/);
+  const after30 = targetLine(coach(computeGoalProgress(input(weeks(monday, [[], wk(30), wk(28), wk(25), wk(23), wk(21), wk(19), wk(17)]), { todayKey: monday }))));
+  assert.match(after30, /^- This week's target: hold the 30\.0 km\/week goal; /);
+});
+
 test('"fine, said once" is said once: the coach has it on the Monday after a touch over and not from Tuesday (23e P3-a)', () => {
   const hist = [[], wk(18), wk(12), [], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];
   const line = (todayKey: string) => targetLine(coach(computeGoalProgress(input(weeks(todayKey, hist), { todayKey }))));

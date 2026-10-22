@@ -317,6 +317,8 @@ export interface GoalWeekPlan {
   comebackKm?: number | null;
   /** Additive: false while the runner has never run the weekly goal in a training week (then a "maintain" week is still building to it). */
   goalReachedBefore?: boolean;
+  /** Additive (wave 23e): last week ran the weekly goal (>= goal - 0.5 km): a maintain week is "hold" only then, else "build back to" the goal. */
+  lastAtGoal?: boolean;
   /** Additive: a cutback week (every 4th plain build / maintain week): `targetKm` is ~80% of the week it replaces, the long run is held. */
   cutback?: boolean;
   /** Additive: a light week - 4+ days without a run, or well behind the week's pace from Thursday with the rest of the target out of reach: don't make it up (`longRunKm` is the cap). */
@@ -2727,6 +2729,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             stepPct: plan.stepPct,
             comebackKm: plan.comeback != null ? plan.comeback.medianKm : plan.restart != null ? plan.restart.medianKm : null,
             goalReachedBefore: plan.goalReachedBefore,
+            lastAtGoal: plan.lastAtGoal,
             ...(plan.cutback != null ? { cutback: true } : {}),
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
