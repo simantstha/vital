@@ -243,11 +243,14 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const overWeeks = gp.goal === 'weight_loss'
       ? (upTo != null ? ` over the ${weeks} weeks of weigh-ins up to ${upTo}` : ` over the last ${weeks} weeks of weigh-ins`)
       : '';
-    if (earlierKg != null) {
+    if (earlierKg != null && plan?.earlierPaceStraddles === true) {
+      // The two paces really land on opposite sides of the target date (wave 22w): the range, so the rate does not argue with the call.
       const slow = signedWt(Math.max(gp.ratePerWeek.kg, earlierKg), units, 2).replace(/ (kg|lb)$/, '');
       nowBits.push(`rate ${slow} to ${signedWt(Math.min(gp.ratePerWeek.kg, earlierKg), units, 2)}/wk${overWeeks} (two weekly reads either side of the target date)`);
     } else {
-      nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${overWeeks}`);
+      // Both paces land on the same side of the date (wave 23w): the pace is the current one, and the earlier one is said as what it was.
+      const was = earlierKg != null ? ` (a week ago the pace was ${wt(Math.abs(earlierKg), units, 2)}/wk)` : '';
+      nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${overWeeks}${was}`);
     }
   }
   if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));
@@ -330,24 +333,27 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (read?.state === 'returning') {
     lines.push('- The user is back after a gap in weigh-ins: welcome them back and keep weighing in; do not call the pace too fast or behind until 3 weigh-ins are back.');
   }
-  if (read?.state === 'plateau' && plan?.flatWeeks === 2) {
+  // A card built on a stale read (the week began with no weigh-in for 7+ days) states no fresh scale news: the stale-weigh-in rule above is the one
+  // rule, and "the scale is moving again" / a plateau's advice belong to a fresh reading (wave 23w).
+  const fresh = !plan?.staleSince;
+  if (fresh && read?.state === 'plateau' && plan?.flatWeeks === 2) {
     // Two flat weeks after a confirmed loss (wave 22w): a calm hold. The 21-day line still holds the good weeks, so it must not be called behind.
     lines.push('- Two flat weeks on the raw weekly averages after weeks of steady loss: common, not a failure and not "behind" — the plan holds. No projected date, no calorie cut; give the week\'s one action. If the third week is flat too it becomes a plateau.');
-  } else if (read?.state === 'plateau') {
+  } else if (fresh && read?.state === 'plateau') {
     const cause = plan?.plateauCause ?? null;
     if (cause?.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
       // The logs of the plateau's own weeks name the weekends, and the cause is kept for the whole plateau.
-      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks); the logged weeks name the weekends (weekends averaged ~${Math.round(cause.weekendAvgKcal / 50) * 50} vs ${Math.round(cause.weekdayAvgKcal / 50) * 50} kcal on weekdays): lead with the weekends, do not blame water, and keep that cause for as long as the plateau lasts. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
+      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks); the logged weeks name the weekends (weekends averaged ~${Math.round(cause.weekendAvgKcal / 50) * 50} vs ${Math.round(cause.weekdayAvgKcal / 50) * 50} kcal on weekdays): lead with the weekends (don't lead with water; the logged weekends are the clearer lever), and keep that cause for as long as the plateau lasts. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
     } else if (cause ? cause.kind === 'intake' : read.intake?.low) {
       // The logs say the calories ran over target: that, not water, is what to lead with.
       const avg = Math.round((cause?.avgKcal ?? read.intake?.avgKcal ?? 0) / 10) * 10;
       const target = cause?.targetKcal ?? read.intake?.targetKcal ?? 0;
-      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${target} kcal): lead with the logs — getting back to target is the first lever, do not blame water. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
+      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${target} kcal): lead with the logs — getting back to target is the first lever (don't lead with water; the logged days over target are the clearer lever). Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
     } else {
       lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
     }
   }
-  if (read?.state === 'moving_again') {
+  if (fresh && read?.state === 'moving_again') {
     lines.push('- The scale is moving again after a plateau: no projected date, never "behind", no calorie cut — say to keep doing what restarted it.');
   }
   if (plan?.farBehind) {

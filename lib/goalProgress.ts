@@ -109,6 +109,7 @@ import {
   type WeightWeekPlan,
 } from './weightWeekPlan';
 import {
+  assessWeekendOvereating,
   assessWeightSignals,
   PARTIAL_LOG_KCAL_THRESHOLD,
   PLATEAU_MAX_PCT_PER_WEEK,
@@ -1009,28 +1010,36 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   return { kind: 'rate', text, tone };
 }
 
-/** The logged days of the last 7 against the calorie target; null without a target or 3+ logged days. */
-function calorieAdherenceStats(input: GoalProgressInput): { target: number; hit: number; logged: number; avgKcal: number; frac: number } | null {
-  const target = input.budget?.targetKcal;
-  if (target == null) return null;
+/**
+ * The logged days of the last 7 against the calorie target; null without a target or 3+ logged days.
+ * `levelKcal` (wave 23w): the week's plan states a calorie level ABOVE the budget (the step toward maintenance, or the maintenance it
+ * settled on); the days are then counted against that level, so the line never says "within your 2,000 kcal target" next to "stay at ~2,150".
+ */
+function calorieAdherenceStats(input: GoalProgressInput, levelKcal: number | null = null): { target: number; hit: number; logged: number; avgKcal: number; frac: number; level: boolean } | null {
+  const budget = input.budget?.targetKcal;
+  if (budget == null) return null;
+  const level = levelKcal != null && levelKcal > budget;
+  const target = level ? (levelKcal as number) : budget;
   const logged = lastSevenIntake(input).filter(
     d => d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD,
   );
   if (logged.length < MIN_LOGGED_DAYS_FOR_ADHERENCE) return null;
   const hit = logged.filter(d => (d.kcal as number) <= target * CALORIE_ADHERENCE_TOLERANCE).length;
   const avgKcal = (mean(logged.map(d => d.kcal as number)) as number);
-  return { target, hit, logged: logged.length, avgKcal, frac: hit / logged.length };
+  return { target, hit, logged: logged.length, avgKcal, frac: hit / logged.length, level };
 }
 
-function calorieAdherenceReason(input: GoalProgressInput): GoalProgressReason | null {
-  const stats = calorieAdherenceStats(input);
+function calorieAdherenceReason(input: GoalProgressInput, levelKcal: number | null = null): GoalProgressReason | null {
+  const stats = calorieAdherenceStats(input, levelKcal);
   if (stats == null) return null;
-  const { target, hit, logged } = stats;
+  const { target, hit, logged, level } = stats;
   // The count is a rolling 7 days (not the calendar week), so it says so; and it is a fact, not a verdict: a rolling count that moves a day at
   // a time would flip a good / neutral / watch tone daily, so the tone stays neutral (the week's verdict is the plan's).
+  // Against the plan's own level (the step toward maintenance) it is "within ~2,150 kcal", not "your target": the budget is not that number.
+  const against = level ? `~${withUnit(fmtKcal(target), 'kcal')}` : `your ${withUnit(fmtKcal(target), 'kcal')} target`;
   return {
     kind: 'calorie_adherence',
-    text: `Stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged ${plural(logged, 'day')} in the last 7 days`,
+    text: `Stayed within ${against} on ${hit} of ${logged} logged ${plural(logged, 'day')} in the last 7 days`,
     tone: 'neutral',
   };
 }
@@ -1525,7 +1534,8 @@ function nextStepReason(): GoalProgressReason {
 /** The reached card's third reason: what the plan asks of a reached goal (a new target / maintenance first, then maintenance from real intake). */
 function reachedActionReason(plan: WeightWeekPlan): GoalProgressReason | null {
   const a = plan.action;
-  if (a.kind === 'next_target' || a.kind === 'maintenance_target' || (a.kind === 'hold' && a.kcalTarget != null)) {
+  // A kept maintenance level (a number, or the snack of someone who logs no food) is said every week as the standing level (wave 23w).
+  if (a.kind === 'next_target' || a.kind === 'maintenance_target' || (a.kind === 'hold' && (a.kcalTarget != null || plan.step != null))) {
     return { kind: 'next_step', text: a.text, tone: 'neutral' };
   }
   return null;
@@ -1734,7 +1744,11 @@ function returningOutcome(input: GoalProgressInput, w: WeightBlock, plan: Weight
       ? plan.verdict
       : (down != null && down >= EARLY_DOWN_MIN_KG ? 'progressing' : 'holding'),
     headline: clip(`Welcome back — ${change}`),
-    reasons: build({ kind: 'pace_note', text, tone: 'neutral' }),
+    // The weekly average is not read until 3 weigh-ins are back, so "down X of Y" jumps from the old average to this reading: say so (wave 23w).
+    reasons: build(
+      { kind: 'pace_note', text, tone: 'neutral' },
+      { kind: 'pace_note', text: 'Progress now counts from your latest reading until your weekly average is back', tone: 'neutral' },
+    ),
   };
 }
 
@@ -1781,7 +1795,34 @@ function movingAgainOutcome(input: GoalProgressInput, w: WeightBlock, plan: Weig
   };
 }
 
+const lowerFirst = (t: string): string => t.charAt(0).toLowerCase() + t.slice(1);
+
+/**
+ * The week began with no weigh-in for 7+ days (wave 23w): the card is built on the plan of the last weigh-in's day, so what it says about the
+ * scale is "as of" that day and neutral - "the scale is moving again" in the present tense, in green, next to "No weigh-in since May 10" was two
+ * contradictory sentences. The call and the colour of the verdict are kept (the plan keeps them); the sentences about the scale are dated.
+ */
+function asOfLastWeighIn(input: GoalProgressInput, w: WeightBlock, outcome: Outcome): Outcome {
+  const since = w.plan?.staleSince;
+  if (since == null || outcome.verdict === 'reached' || outcome.verdict === 'insufficient_data' || outcome.verdict === 'needs_target') return outcome;
+  const asOf = `As of ${fmtDate(since, input.todayKey)}`;
+  // The date costs 14 characters of a 70-character headline: "weekly average" gives way to "average" before the clause is cut.
+  const dated = `${asOf}: ${lowerFirst(outcome.headline)}`;
+  const headline = dated.length <= HEADLINE_MAX_CHARS ? dated : clip(dated.replace('weekly average', 'average'));
+  return {
+    ...outcome,
+    headline,
+    reasons: outcome.reasons.map(r => (r.kind === 'rate' || r.kind === 'moving_again' || r.kind === 'plateau'
+      ? { ...r, text: `${asOf}: ${lowerFirst(r.text)}`, tone: 'neutral' as ReasonTone }
+      : r)),
+  };
+}
+
 function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
+  return asOfLastWeighIn(input, w, fatLossOutcomeFresh(input, w));
+}
+
+function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (input.target.weightKg == null) {
     return { verdict: 'needs_target', headline: 'Set a target weight to track your fat-loss progress', reasons: [] };
   }
@@ -1801,8 +1842,13 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
     todayKey: input.todayKey,
     goalStartDay: goalStartDay(input),
   });
-  const { weekend, underEating } = signalReasons(signals);
-  const adherence = calorieAdherenceReason(input);
+  // The weekends watch is a pattern, not a day's crossing of a threshold: it must hold on two days in a row (wave 23w). One flash on the
+  // single day the average tipped over sent a "watch" for a day and then nothing.
+  const weekendSteady = signals.some(s => s.kind === 'weekend_overeating')
+    && assessWeekendOvereating(toSignalPoints(input.intakeDays.filter(d => d.day < input.todayKey))) != null;
+  const { weekend, underEating } = signalReasons(weekendSteady ? signals : signals.filter(s => s.kind !== 'weekend_overeating'));
+  // The week's plan may state a calorie level above the budget (the step toward maintenance): the days are counted against it.
+  const adherence = calorieAdherenceReason(input, plan.step?.loKcal ?? null);
   const tdee = tdeeReason(input);
   const toGo = Math.abs(w.neededKg ?? 0);
   const pace = plan.pace;
@@ -1862,7 +1908,13 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (plan.nearlyThere) {
     // Within a kilo of the target the loss is about to stop on its own: say so, ease off, and keep the verdict the
     // dates give (the card does not turn "too fast" for the last few days and "reached" right after).
-    return { verdict: plan.verdict, headline: clip('Nearly there — start easing calories toward maintenance'), reasons: build(rate, action) };
+    // The week the step is given it starts the easing; the weeks after, it is a level to keep until the step is read (wave 23w).
+    const standing = plan.step != null && plan.step.phase !== 'given';
+    return {
+      verdict: plan.verdict,
+      headline: clip(standing ? 'Nearly there — keep to your easing step' : 'Nearly there — start easing calories toward maintenance'),
+      reasons: build(rate, action),
+    };
   }
 
   // Wrong direction or flat.
@@ -1881,7 +1933,8 @@ function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (!plan.confirmed) {
     return {
       verdict: 'progressing',
-      headline: clip(`Progressing — losing about ${fmtWeight(input, Math.abs(p.kgPerWeek), 2)} a week`),
+      // "About" and one decimal (wave 23w): the 2-decimal rate stays on the rate line below, where it is the measurement.
+      headline: clip(`Progressing — losing about ${fmtWeight(input, Math.abs(p.kgPerWeek))} a week`),
       reasons: build(rate, action),
     };
   }

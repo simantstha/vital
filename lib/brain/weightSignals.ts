@@ -308,7 +308,7 @@ function isWeekendDay(day: string): boolean {
   return dow === 0 || dow === 6;
 }
 
-function assessWeekendOvereating(weekendPatternIntakeKcal: DailyIntakeKcalPoint[] | undefined): WeightSignal | null {
+export function assessWeekendOvereating(weekendPatternIntakeKcal: DailyIntakeKcalPoint[] | undefined): WeightSignal | null {
   if (!weekendPatternIntakeKcal || weekendPatternIntakeKcal.length === 0) return null;
 
   const withData = weekendPatternIntakeKcal.filter(d => d.source !== 'none' && d.kcal != null);

@@ -9,7 +9,7 @@ records what the REAL pure server functions return: goal card, coach goal lines,
 - `types.ts` shared types and calendar helpers.
 
 **Scenarios:** `lifter` (+ `lifter_imperial`: lb copy and the 5 lb step; `lifter_short_week`: one bad week where the week alone, not a
-lapse, must hold "Progressing" back; `lifter_obedient`: lifts exactly the loads the reviews prescribe, one ill week), `weight_loss` (+ `_logged`: plateau, a 12-day gap, trims), `runner_on_plan` (+ `_half`, `_imperial`),
+lapse, must hold "Progressing" back; `lifter_obedient`: lifts exactly the loads the reviews prescribe, one ill week), `weight_loss` (+ `_logged`: plateau, a 12-day gap, trims; `_obedient`: reads the real card every day and does exactly what it says - eats the stated kcal, adds the walks, logs when asked, takes the maintenance step and holds it; built once per process, it runs the card ~110 times), `runner_on_plan` (+ `_half`, `_imperial`),
 `runner_messy` (spike, illness = light week, ignored taper), `runner_no_race`, `runner_on_plan_obedient` (does exactly what the app says: the cutback weeks, the taper) and `runner_comeback_spike` (an illness, then a comeback week that overshoots its ceiling: 15 km, then 29 km).
 
 **Add a scenario:** write a builder returning a `Scenario` (rows only, never inputs) in `scenarios.ts`, add its name to `SCENARIO_NAMES`

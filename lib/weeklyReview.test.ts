@@ -2242,6 +2242,29 @@ test('D. a plateau week is not a weight "win": neutral stat, no win line, named 
   assert.equal(statByLabel(falling, 'Weekly avg weight')!.tone, 'good');
 });
 
+test('wave 23w: a plateau week leads with the plan (the headline is also the push): weekends first, back to target first, or keep the plan', () => {
+  const planWith = (kind: 'weekends' | 'intake' | 'water') => ({
+    state: 'plateau', flatWeeks: 3, plateauCause: { kind }, action: { kind: 'plateau_water', text: 'x' }, verdict: 'holding',
+  }) as unknown as NonNullable<WeeklyReviewInput['weightPlan']>;
+  assert.equal(computeWeeklyReview(plateauWeek({ weightPlan: planWith('weekends') })).headline, 'Flat for 3 weeks — weekends first, in budget 7 of 7 days');
+  assert.equal(computeWeeklyReview(plateauWeek({ weightPlan: planWith('intake') })).headline, 'Flat for 3 weeks — back to target first, in budget 7 of 7 days');
+  assert.equal(computeWeeklyReview(plateauWeek({ weightPlan: planWith('water') })).headline, 'Flat for 3 weeks — keep your plan, in budget 7 of 7 days');
+  // Two flat weeks (a calm hold) or no plan: the stat headline as before.
+  const fortnight = { ...planWith('water'), flatWeeks: 2 } as unknown as NonNullable<WeeklyReviewInput['weightPlan']>;
+  assert.match(computeWeeklyReview(plateauWeek({ weightPlan: fortnight })).headline, /^Weight flat for 3 weeks, in budget/);
+});
+
+test('wave 23w: a week with no weigh-ins at all says so and that the plan waits for the next one - not "not enough data"', () => {
+  const earlier = weigh(PREV2, () => 88.4);
+  const r = computeWeeklyReview(base({ verdict: 'progressing', weightReadings: earlier }));
+  assert.equal(r.headline, 'No weigh-ins last week — your plan picks up when you weigh in');
+  assert.equal(r.nextWeek, 'Weigh in on a few mornings this week and your plan picks up from where it left off.');
+  assert.equal(r.dataSufficiency.sufficient, false);
+  // A user who has never weighed in keeps the generic one; so does a week with a weigh-in.
+  assert.equal(computeWeeklyReview(base({ verdict: 'insufficient_data' })).headline, 'Not enough data for a weekly review yet');
+  assert.equal(computeWeeklyReview(base({ verdict: 'progressing', weightReadings: [...earlier, ...weigh([WEEK[1]], () => 88.2)] })).headline, 'Not enough data for a weekly review yet');
+});
+
 const reachedWeekInput = (over: Partial<WeeklyReviewInput> = {}) => base({
   verdict: 'reached',
   targetWeightKg: 84,

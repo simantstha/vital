@@ -1722,6 +1722,19 @@ function returnHeadlinePart(input: WeeklyReviewInput, prefix = ''): string {
   return above ? `${name} est. 1RM back above pre-break ${withUnit(pre, unit)}` : `${name} est. 1RM back at pre-break best`;
 }
 
+/**
+ * A flat three weeks leads with the plan (wave 23w): the headline is also the push, and "Weight flat for 3 weeks, in budget 2 of 5 logged
+ * days" was a verdict with no way out. The plan's first lever (what the logs of the flat weeks named) comes first; the count follows.
+ */
+function plateauHeadlineLead(input: WeeklyReviewInput): string {
+  const plan = input.weightPlan;
+  if (plan == null || plan.state !== 'plateau' || plan.flatWeeks !== 3) return 'Weight flat for 3 weeks';
+  const kind = plan.plateauCause?.kind;
+  if (kind === 'weekends') return 'Flat for 3 weeks — weekends first';
+  if (kind === 'intake') return 'Flat for 3 weeks — back to target first';
+  return 'Flat for 3 weeks — keep your plan';
+}
+
 function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week): string {
   const standalone = input.goal === 'endurance' ? standaloneEnduranceHeadline(input) : null;
   if (standalone != null) return clipHeadline(standalone);
@@ -1747,7 +1760,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     if (weight) {
       const rounded = weight.value;
       parts.push(
-        isPlateauWeek(input, week) ? 'Weight flat for 3 weeks'
+        isPlateauWeek(input, week) ? plateauHeadlineLead(input)
         : rounded.startsWith('−') ? `Down ${rounded.slice(1)}`
         : rounded.startsWith('+') ? `Up ${rounded.slice(1)}`
         : 'Weight steady',
@@ -2783,6 +2796,8 @@ function muscleSessionsOnly(input: WeeklyReviewInput, week: Week, cands: Candida
 }
 
 function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysWithData: number, statCount: number): WeeklyReview {
+  // A weight-loss user who has weighed in before but not once last week (wave 23w): say what is missing and that the plan waits for it.
+  const noWeighIns = input.goal === 'weight_loss' && input.weightReadings.length > 0 && weekWeighIns(input, week).length === 0;
   return {
     weekStart: week.days[0],
     weekEnd: week.days[6],
@@ -2790,13 +2805,25 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
     verdict: input.weightPlan?.verdict ?? input.verdict,
     weekRating: null,
     weekGap: null,
-    headline: 'Not enough data for a weekly review yet',
+    headline: noWeighIns ? 'No weigh-ins last week — your plan picks up when you weigh in' : 'Not enough data for a weekly review yet',
     stats: [],
     win: null,
     slip: null,
-    nextWeek: emptyReviewNextWeek(input, week, prevWeek),
+    nextWeek: noWeighIns ? 'Weigh in on a few mornings this week and your plan picks up from where it left off.' : emptyReviewNextWeek(input, week, prevWeek),
     dataSufficiency: { daysWithData, statCount, sufficient: false },
   };
+}
+
+/**
+ * Weight loss (wave 23w): while the coming week's plan states a calorie level above the budget (the step toward maintenance, or the
+ * maintenance it settled on), the week is graded against that level - "In budget 4 of 7 days (2,000 kcal target)" next to "Stay at ~2,150
+ * kcal" would grade a week against a budget the plan has just moved past.
+ */
+function gradedAgainstStepLevel(input: WeeklyReviewInput): WeeklyReviewInput {
+  const level = input.goal === 'weight_loss' ? input.weightPlan?.step?.loKcal ?? null : null;
+  const budget = input.budget;
+  if (level == null || budget?.targetKcal == null || level <= budget.targetKcal) return input;
+  return { ...input, budget: { ...budget, targetKcal: level } };
 }
 
 export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
@@ -2804,9 +2831,10 @@ export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
   // A session logged on the review's own Monday (the loader reads relative to the real clock; the review is recomputed when opened) is kept apart
   // for "You're already back", and the lift data is cut at the reviewed week so that Monday never moves the review's lift comparisons (wave 23s).
   week.monday = rawInput.goal === 'muscle' ? readMondaySession(rawInput, week) : null;
-  const input = rawInput.goal === 'muscle' && Object.values(rawInput.progression).some(ws => ws.some(w => w.weekStart > week.days[0]))
+  const lifterInput = rawInput.goal === 'muscle' && Object.values(rawInput.progression).some(ws => ws.some(w => w.weekStart > week.days[0]))
     ? { ...rawInput, progression: progressionUpTo(rawInput.progression, week.days[0]) }
     : rawInput;
+  const input = gradedAgainstStepLevel(lifterInput);
   const prevWeek = makeWeek(addDays(input.weekStart, -7), input.signupDay);
   const daysWithData = countDataDays(input, week);
   const cands = buildCandidates(input, week, prevWeek);
