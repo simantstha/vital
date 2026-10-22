@@ -3687,6 +3687,28 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
   return out;
 });
 
+// ── P3-j: the day the build ends, the coach's "next long run" is the taper's ──
+
+invariant(RUNNERS, 'P3-j: on the last build Sunday, once the long run is run, the coach\'s "next long run" is the taper\'s long run (the number Monday\'s plan shows), not the build week\'s', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    if (weekdayOf(snap.date) !== 'Sun' || (runKm.get(snap.date) ?? 0) <= 0) continue;
+    const monday = snaps.find(s => s.idx === snap.idx + 1);
+    const taper = monday?.card?.distance?.plan;
+    if (taper?.kind !== 'taper' || taper.longRunKm == null) continue;
+    const line = (snap.coach ?? []).map(plain).find(l => l.startsWith('- Long run (running only)'));
+    const m = line ? /next long run ~(\d+(?:\.\d+)?)\s?(km|mi)/.exec(line) : null;
+    if (!m) continue;
+    checked++;
+    const expected = inDisplayUnit(taper.longRunKm, m[2]);
+    if (Math.abs(Number(m[1]) - expected) > 0.55) out.push({ snap, detail: `"${visible(line ?? '')}" but Monday's taper plan has a ${expected} ${m[2]} long run` });
+  }
+  if (name === 'runner_messy' || name === 'runner_on_plan_obedient' || name === 'runner_on_plan') assert.ok(checked > 0, `${name}: no last build Sunday was compared, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P3-o: one figure for the long-run peak on the card and in the coach's line ──
 
 invariant(RUNNERS, 'P3-o: the long-run peak the card quotes ("Long run peak 11.2 mi - ...") is the very figure the coach\'s long-run line gives as the 28-day peak, in the runner\'s unit (no "11 mi" next to "11.2 mi")', (snaps, name) => {

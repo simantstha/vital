@@ -991,7 +991,7 @@ test('pre-taper week (wave 22e): the light-week rule does not apply - it reads "
   const race = { date: addDayKey(weekOf(10), 6), distanceKm: 21.1 };
   const runs = [...runsFor([15, 17, 19, 21, 23, 25, 28]), { day: addDayKey(weekOf(8), 1), km: 3 }, { day: addDayKey(weekOf(8), 3), km: 3 }];
   const sat = enduranceWeekPlan({ runs: runs.filter(r => r.day <= addDayKey(weekOf(8), 5)), weekStart: weekOf(8), goalKm: 30, today: addDayKey(weekOf(8), 5), race, racePeakWeekKm: 28 });
-  assert.deepEqual(sat.preTaper, { nextPhase: 'taper' });
+  assert.deepEqual(sat.preTaper, { nextPhase: 'taper', taperLongRunKm: 7.5 }); // (wave 23e P3-j: the taper's long run as Monday's plan will show it: 65% of the 12 km peak)
   assert.equal(sat.lightWeek, null);
   assert.equal(sat.easingOff?.reason, 'late_week');
   assert.ok(sat.easingOff?.longRunKm != null && sat.easingOff.taperLongRunKm != null && sat.easingOff.taperLongRunKm < sat.easingOff.longRunKm);

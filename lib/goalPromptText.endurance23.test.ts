@@ -113,6 +113,21 @@ test('a long run quoted next to the restart number is at most 40% of it: past tw
   if (keep) assert.ok(Number(keep[2]) <= Number(keep[1]) * 0.4 + 1e-9);
 });
 
+test('the last build Sunday: before the long run the coach\'s "next long run" is that run; once it is run it is the taper\'s long run, the number Monday shows (23e P3-j)', () => {
+  const race = { date: '2026-11-01', distanceKm: 21.1 }; // a half: Monday 10-19 is 13 days out = the first taper week, so Monday 10-12 is the last build week
+  const lastBuildSunday = '2026-10-18';
+  const done = computeGoalProgress(input(weeks(lastBuildSunday, [[[1, 6], [3, 6], [5, 6], [6, 15]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: lastBuildSunday, race, racePeakWeekKm: 30 }));
+  assert.equal(done.distance!.plan?.preTaper, 'taper');
+  const monday = computeGoalProgress(input(weeks('2026-10-19', [[], [[1, 6], [3, 6], [5, 6], [6, 15]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: '2026-10-19', race, racePeakWeekKm: 30 }));
+  assert.equal(monday.distance!.plan?.kind, 'taper');
+  assert.equal(done.longRun?.nextKm, monday.distance!.plan?.longRunKm);
+  assert.match(coach(done), new RegExp(`next long run ~${monday.distance!.plan!.longRunKm} km`));
+  // The morning, before the long run: the build week's long run is still the next one.
+  const morning = computeGoalProgress(input(weeks(lastBuildSunday, [[[1, 6], [3, 6], [5, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: lastBuildSunday, race, racePeakWeekKm: 30 }));
+  assert.equal(morning.longRun?.nextKm, morning.distance!.plan?.longRunKm);
+  assert.ok((morning.longRun?.nextKm ?? 0) > (done.longRun?.nextKm ?? 99));
+});
+
 test('the coach never says "hold the goal" after a week under it: it says build back to it, and do not go past it (23e P3-c)', () => {
   const monday = '2026-04-20';
   const after28 = targetLine(coach(computeGoalProgress(input(weeks(monday, [[], wk(28), wk(40), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }))));

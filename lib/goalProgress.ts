@@ -2936,7 +2936,10 @@ function longRunProgress(input: GoalProgressInput, race: GoalRaceProgress | null
     peakKm,
     targetPeakKm: peak?.peakKm ?? null,
     ...(peak?.raceTargetKm != null ? { raceTargetKm: peak.raceTargetKm } : {}),
-    nextKm: ec.plan?.longRunKm ?? null,
+    // Wave 23e P3-j: on the last day of the last build week, once its long run is run, the NEXT long run is the taper's (Monday's plan), not this week's again.
+    nextKm: ec.plan?.preTaper?.nextPhase === 'taper' && ec.plan.preTaper.taperLongRunKm != null && weekdayOf(input.todayKey) === 0 && ec.plan.longRunAhead === false
+      ? ec.plan.preTaper.taperLongRunKm
+      : ec.plan?.longRunKm ?? null,
     ...(ec.plan?.longRun.capNoteDue ? { capNoteDue: true } : {}),
     ...(ec.plan?.longRun.peakOversized ? { oversized: true } : {}),
     ...(ec.plan?.longRun.peakPlan != null && !ec.plan.longRun.peakPlan.within

@@ -843,7 +843,11 @@ export interface EnduranceWeekPlan {
    * The week BEFORE a taper (or race week): the next Monday's phase is taper / race week. Easing off is fine there, so the
    * light-week rule does not apply; `nextPhase` says what starts tomorrow-ish.
    */
-  preTaper: { nextPhase: 'taper' | 'race_week' } | null;
+  preTaper: {
+    nextPhase: 'taper' | 'race_week';
+    /** Wave 23e P3-j: the taper's long run as Monday's plan will show it (65% of the 28-day peak as of this Sunday, including this week's long run); null before race week. */
+    taperLongRunKm?: number | null;
+  } | null;
   /**
    * A pre-taper week whose target no longer fits in the runs the runner usually has left (or with 4+ days off): "Easing off
    * before your taper - fine". `longRunKm` is the week's planned long run, `taperLongRunKm` the taper's (what a long run
@@ -1793,7 +1797,13 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 
   // The week before a taper (or race week): the next Monday's phase is wind-down. Easing off is the plan's own next step.
   const nextWindPhase = buildLike && info != null && info.phase === 'build' ? phaseAt(ctx, addDayKey(w, 7))?.phase : undefined;
-  const preTaper: EnduranceWeekPlan['preTaper'] = nextWindPhase === 'taper' || nextWindPhase === 'race_week' ? { nextPhase: nextWindPhase } : null;
+  // (Wave 23e P3-j: the taper's long run is read the way Monday's plan will read it - stats as of this week's Sunday, this week's long run included.)
+  const taperPeakKm = nextWindPhase === 'taper' ? longRunStats(ctx.runs, addDayKey(w, 6), ctx.raceDate).peakKm : null;
+  const preTaper: EnduranceWeekPlan['preTaper'] = nextWindPhase === 'taper' || nextWindPhase === 'race_week'
+    ? nextWindPhase === 'taper'
+      ? { nextPhase: nextWindPhase, taperLongRunKm: taperPeakKm == null ? null : roundLongRunKm(taperPeakKm * TAPER_LONG_RUN_SHARE, ctx.units) }
+      : { nextPhase: nextWindPhase }
+    : null;
 
   // Light week: read DURING the week, with days off (or, from Thursday, behind the runner's own pace with the rest of the
   // target out of reach): don't make it up. In a pre-taper week the same reads are "easing off" instead - fine, not light.
