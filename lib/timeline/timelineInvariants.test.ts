@@ -2766,3 +2766,73 @@ invariant(WEIGHT, 'P3-F: "Congratulations" is said on the reach day and on the f
 // G: the scale can read 88.9 / 88.8 while "the scale has been flat for 3 weeks"; the plateau is a statement about the weekly average.
 invariant(WEIGHT, 'P3-G: the opener says "your weekly average has been flat", not "the scale has been flat"', snaps =>
   textMatches(snaps, s => coachTexts(s), /the scale has been flat/i));
+
+// H (carried over)
+invariant(['weight_loss_logged'], 'P3-H: the "weekends average ..." watch is never a one-day flash', (snaps, name) => {
+  const out: Violation[] = [];
+  let runs = 0;
+  let i = 0;
+  const has = (s: DaySnapshot): boolean => (s.card?.reasons ?? []).some(r => r.kind === 'weekend_overeating');
+  while (i < snaps.length) {
+    if (!has(snaps[i])) { i++; continue; }
+    let j = i;
+    while (j + 1 < snaps.length && has(snaps[j + 1])) j++;
+    runs++;
+    if (j === i) out.push({ snap: snaps[i], detail: 'the weekend_overeating watch shows on this day only' });
+    i = j + 1;
+  }
+  // The scenario's one flash (day 32: the weekend average tips over the threshold for a single day) must not show.
+  const flash = snaps.find(s => s.idx === 32);
+  assert.ok(flash != null && !has(flash), `${name}: the day-32 flash is shown (${runs} run(s) of the watch)`);
+  return out;
+});
+
+invariant(['weight_loss'], 'P3-H: the welcome back that moves the progress weight from the old average to today\'s reading says so', (snaps, name) => {
+  const out: Violation[] = [];
+  let jumps = 0;
+  snaps.forEach((snap, i) => {
+    if (i === 0 || !/^Welcome back/.test(plain(snap.card?.headline ?? ''))) return;
+    const before = snaps[i - 1].card?.current.changeKg;
+    const now = snap.card?.current.changeKg;
+    if (before == null || now == null || Math.abs(now - before) < 0.5) return;
+    jumps++;
+    const said = [...(snap.card?.reasons ?? []).map(r => r.text), snap.opener?.required ?? ''].some(t => /progress now counts from/i.test(plain(t)));
+    if (!said) out.push({ snap, detail: `changeKg ${before} -> ${now}: "${visible(snap.card?.headline ?? '')}" / "${visible(snap.opener?.required ?? '')}"` });
+  });
+  assert.ok(jumps > 0, `${name}: no welcome back moved the progress weight, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss', 'weight_loss_logged'], 'P3-H: a review of a week with no weigh-ins says "No weigh-ins last week", not "Not enough data for a weekly review yet"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    if (rv == null) continue;
+    const week = scn.weighIns.filter(w => w.day >= rv.weekStart && w.day <= addDays(rv.weekStart, 6));
+    if (week.length > 0) continue;
+    seen++;
+    if (!/^No weigh-ins last week/.test(plain(rv.review.headline)) || !/your plan picks up when you weigh in/i.test(plain(rv.review.headline + ' ' + rv.review.nextWeek))) {
+      out.push({ snap, detail: `headline "${visible(rv.review.headline)}" / next "${visible(rv.review.nextWeek)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no review covered a week without weigh-ins, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss_logged'], 'P3-H: a tough plateau week\'s push leads with the plan, not with the stats', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    if (rv == null || rv.review.weekRating !== 'tough') continue;
+    seen++;
+    if (/^(?:Weight flat|In budget|Down|Up)\b/.test(plain(rv.alert.body))) out.push({ snap, detail: `push body "${visible(rv.alert.body)}" (headline "${visible(rv.review.headline)}")` });
+  }
+  assert.ok(seen > 0, `${name}: no tough week, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-H: the coach is never told to "not blame water" outright; it is told to lead with the logged cause', snaps =>
+  textMatches(snaps, s => coachTexts(s), /do not blame water/i));

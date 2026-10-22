@@ -2713,6 +2713,8 @@ test('C. coming back after a gap: "Welcome back" with the change since the last 
   assert.equal(p.eta, null);
   assert.equal(p.ratePerWeek.kg, null);
   assert.match(p.reasons[0].text, /^Keep weighing in so your trend catches up — 2 more weigh-ins before your pace is read again$/);
+  // Wave 23w: the progress weight moves from the old weekly average to this reading, and the card says so.
+  assert.equal(p.reasons[1].text, 'Progress now counts from your latest reading until your weekly average is back');
   // Up since the gap reads "up".
   const up = computeGoalProgress(youngGoal(60, { weightReadings: [...pre, ...onDays([0], () => lastKg + 0.8)] }));
   assert.match(up.headline, /^Welcome back — the scale is up 0\.8 kg since/);

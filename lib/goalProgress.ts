@@ -109,6 +109,7 @@ import {
   type WeightWeekPlan,
 } from './weightWeekPlan';
 import {
+  assessWeekendOvereating,
   assessWeightSignals,
   PARTIAL_LOG_KCAL_THRESHOLD,
   PLATEAU_MAX_PCT_PER_WEEK,
@@ -1716,7 +1717,11 @@ function returningOutcome(input: GoalProgressInput, w: WeightBlock, plan: Weight
       ? plan.verdict
       : (down != null && down >= EARLY_DOWN_MIN_KG ? 'progressing' : 'holding'),
     headline: clip(`Welcome back — ${change}`),
-    reasons: build({ kind: 'pace_note', text, tone: 'neutral' }),
+    // The weekly average is not read until 3 weigh-ins are back, so "down X of Y" jumps from the old average to this reading: say so (wave 23w).
+    reasons: build(
+      { kind: 'pace_note', text, tone: 'neutral' },
+      { kind: 'pace_note', text: 'Progress now counts from your latest reading until your weekly average is back', tone: 'neutral' },
+    ),
   };
 }
 
@@ -1810,7 +1815,11 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     todayKey: input.todayKey,
     goalStartDay: goalStartDay(input),
   });
-  const { weekend, underEating } = signalReasons(signals);
+  // The weekends watch is a pattern, not a day's crossing of a threshold: it must hold on two days in a row (wave 23w). One flash on the
+  // single day the average tipped over sent a "watch" for a day and then nothing.
+  const weekendSteady = signals.some(s => s.kind === 'weekend_overeating')
+    && assessWeekendOvereating(toSignalPoints(input.intakeDays.filter(d => d.day < input.todayKey))) != null;
+  const { weekend, underEating } = signalReasons(weekendSteady ? signals : signals.filter(s => s.kind !== 'weekend_overeating'));
   // The week's plan may state a calorie level above the budget (the step toward maintenance): the days are counted against it.
   const adherence = calorieAdherenceReason(input, plan.step?.loKcal ?? null);
   const tdee = tdeeReason(input);

@@ -417,11 +417,11 @@ test('muscle: the coach is told when the last strength session was; a week or mo
 
 // ── wave 20c: the coach plateau note leads with the logs, "since start" is the one progress weight, the pace window is honest ──
 
-test('coach plateau note: with logged days over target it leads with the logs and does not blame water', () => {
+test('coach plateau note: with logged days over target it leads with the logs (and does not rule water out outright)', () => {
   const intake = { avgKcal: 2157, targetKcal: 2000, loggedDays: 4, daysWithinTarget: 1, low: true };
   const over = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake } }), 'metric').join('\n');
-  assert.match(over, /Plateau on the raw weekly averages \(flat for 3 weeks\) while the logged days ran over target \(averaging ~2160 vs 2000 kcal\): lead with the logs — getting back to target is the first lever, do not blame water\./);
-  assert.doesNotMatch(over, /often water/);
+  assert.match(over, /Plateau on the raw weekly averages \(flat for 3 weeks\) while the logged days ran over target \(averaging ~2160 vs 2000 kcal\): lead with the logs — getting back to target is the first lever \(don't lead with water; the logged days over target are the clearer lever\)\./);
+  assert.doesNotMatch(over, /often water|do not blame water/);
   // On target (or no logs): the existing note, unchanged.
   const fine = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake: { ...intake, avgKcal: 1950, daysWithinTarget: 4, low: false } } }), 'metric').join('\n');
   assert.match(fine, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water — not a failure/);

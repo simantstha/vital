@@ -343,12 +343,12 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const cause = plan?.plateauCause ?? null;
     if (cause?.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
       // The logs of the plateau's own weeks name the weekends, and the cause is kept for the whole plateau.
-      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks); the logged weeks name the weekends (weekends averaged ~${Math.round(cause.weekendAvgKcal / 50) * 50} vs ${Math.round(cause.weekdayAvgKcal / 50) * 50} kcal on weekdays): lead with the weekends, do not blame water, and keep that cause for as long as the plateau lasts. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
+      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks); the logged weeks name the weekends (weekends averaged ~${Math.round(cause.weekendAvgKcal / 50) * 50} vs ${Math.round(cause.weekdayAvgKcal / 50) * 50} kcal on weekdays): lead with the weekends (don't lead with water; the logged weekends are the clearer lever), and keep that cause for as long as the plateau lasts. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
     } else if (cause ? cause.kind === 'intake' : read.intake?.low) {
       // The logs say the calories ran over target: that, not water, is what to lead with.
       const avg = Math.round((cause?.avgKcal ?? read.intake?.avgKcal ?? 0) / 10) * 10;
       const target = cause?.targetKcal ?? read.intake?.targetKcal ?? 0;
-      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${target} kcal): lead with the logs — getting back to target is the first lever, do not blame water. Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
+      lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${target} kcal): lead with the logs — getting back to target is the first lever (don't lead with water; the logged days over target are the clearer lever). Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
     } else {
       lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
     }

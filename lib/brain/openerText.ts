@@ -250,7 +250,7 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
       const change = Math.abs(delta) < 0.1
         ? `the scale is about the same as ${since}`
         : `the scale is ${delta > 0 ? 'down' : 'up'} ${weightAmount(Math.abs(delta), units)} ${unit} since ${since}`;
-      return `Welcome back — ${change}; keep weighing in so your trend catches up.`;
+      return `Welcome back — ${change} — progress now counts from your latest reading; keep weighing in so your trend catches up.`;
     }
   }
   const current = progressKg(gp);
