@@ -2736,7 +2736,20 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
   };
 }
 
-export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
+/**
+ * Weight loss (wave 23w): while the coming week's plan states a calorie level above the budget (the step toward maintenance, or the
+ * maintenance it settled on), the week is graded against that level - "In budget 4 of 7 days (2,000 kcal target)" next to "Stay at ~2,150
+ * kcal" would grade a week against a budget the plan has just moved past.
+ */
+function gradedAgainstStepLevel(input: WeeklyReviewInput): WeeklyReviewInput {
+  const level = input.goal === 'weight_loss' ? input.weightPlan?.step?.loKcal ?? null : null;
+  const budget = input.budget;
+  if (level == null || budget?.targetKcal == null || level <= budget.targetKcal) return input;
+  return { ...input, budget: { ...budget, targetKcal: level } };
+}
+
+export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
+  const input = gradedAgainstStepLevel(rawInput);
   const week = makeWeek(input.weekStart, input.signupDay);
   const prevWeek = makeWeek(addDays(input.weekStart, -7), input.signupDay);
   const daysWithData = countDataDays(input, week);

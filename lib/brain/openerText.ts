@@ -140,6 +140,12 @@ function reachedAsks(gp: GoalProgress | null | undefined): boolean {
   return daysAgo != null && daysAgo <= REACHED_ASK_DAYS;
 }
 
+/** "2,150–2,200 kcal" / "2,150 kcal": a daily level in the opener's plain spaces. */
+function kcalRange(lo: number, hi: number): string {
+  const f = (n: number): string => Math.round(n).toLocaleString('en-US');
+  return lo === hi ? `${f(hi)} kcal` : `${f(lo)}–${f(hi)} kcal`;
+}
+
 /** The question a lapse check-in ends in. */
 const LAPSE_ASK = 'Want to plan how to get back in?';
 
@@ -192,13 +198,22 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
       }
       return `You've reached ${weightAmount(target, units)} ${unit} — want to set a new target or switch to maintenance?`;
     }
-    // The plan has a calorie instruction for a reached goal (a held weight on real intake made the maintenance target, or the
-    // target already is maintenance): say it in the plan's words, as the card's last reason does (lib/weightWeekPlan.ts).
     const plan = gp.weightRead?.plan;
-    if (plan != null && (plan.action.kind === 'maintenance_target' || (plan.action.kind === 'hold' && plan.action.kcalTarget != null))) {
-      return `${plan.action.text.replace(/[.\s]+$/, '')}.`;
-    }
     const holdKg = gp.weightRead?.weekMeanKg ?? gp.weightRead?.scaleKg ?? gp.current.weightKg;
+    // The step toward maintenance (or the level it settled on) stands from the week after it was given (wave 23w): one short sentence, not the
+    // plan's whole instruction again.
+    const step = plan?.step;
+    if (plan != null && step != null && (step.phase === 'standing' || step.phase === 'settled') && holdKg != null && Math.abs(holdKg - target) <= HOLDING_RANGE_KG) {
+      const at = Math.round(holdKg * 10) === Math.round(target * 10) ? weightAmount(target, units) : weightFixed(holdKg, units);
+      const level = step.loKcal != null && step.hiKcal != null ? `stay around ~${kcalRange(step.loKcal, step.hiKcal)}` : 'keep your daily snack';
+      return `You're holding at ${at} ${unit} — ${level} this week and keep weighing in.`;
+    }
+    // The plan has a calorie instruction for a reached goal (a held weight on real intake made the maintenance target, or the
+    // target already is maintenance): say it in the plan's words, as the card's last reason does (lib/weightWeekPlan.ts) - without the
+    // date the step is read on, which the card carries.
+    if (plan != null && (plan.action.kind === 'maintenance_target' || (plan.action.kind === 'hold' && plan.action.kcalTarget != null))) {
+      return `${plan.action.text.replace(/;\s*we'll read it on .*$/, '').replace(/[.\s]+$/, '')}.`;
+    }
     if (holdKg != null) {
       const diff = holdKg - target;
       if (Math.abs(diff) <= HOLDING_RANGE_KG) {

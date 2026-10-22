@@ -217,6 +217,28 @@ test('reached goal: the opener congratulates and asks for a new target or mainte
   assert.match(goalOpenerLine({ ...reached, goal: 'muscle' }, 'metric') ?? '', /^You've reached 76 kg/);
 });
 
+test('wave 23w: once the step toward maintenance is given the opener is one short sentence, not the plan\'s whole instruction', () => {
+  const planWith = (step: Record<string, unknown>, action: Record<string, unknown>) => ({ state: 'maintenance', action, step }) as unknown as NonNullable<GoalProgress['weightRead']>['plan'];
+  const reached = (plan: NonNullable<GoalProgress['weightRead']>['plan'], weekMeanKg = 84) => gp({
+    verdict: 'reached', headline: 'Goal reached — 84 kg (Jun 12)', eta: null, reachedAt: '2026-06-12',
+    target: { weightKg: 84, date: null, weeklySessions: null, weeklyDistanceKm: null },
+    current: { weightKg: weekMeanKg, startWeightKg: 92, changeKg: -8, progressPct: 100 },
+    weightRead: { ...READ, state: 'reached', weekMeanKg, scaleKg: 84, reachedDaysAgo: 12, plan },
+  });
+  const standing = planWith({ phase: 'standing', loKcal: 2150, hiKcal: 2200, food: false }, { kind: 'maintenance_target', text: "Stay at ~2,150–2,200 kcal (the step you started Jun 5); we'll read it on Mon, Jun 22", kcalTarget: 2150 });
+  assert.equal(goalOpenerLine(reached(standing), 'metric'), "You're holding at 84 kg — stay around ~2,150–2,200 kcal this week and keep weighing in.");
+  assert.equal(goalOpenerLine(reached(standing, 83.7), 'metric'), "You're holding at 83.7 kg — stay around ~2,150–2,200 kcal this week and keep weighing in.");
+  const settled = planWith({ phase: 'settled', loKcal: 2050, hiKcal: 2050, food: false }, { kind: 'hold', text: 'Stay at ~2,050 kcal — your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act', kcalTarget: 2050 });
+  assert.equal(goalOpenerLine(reached(settled), 'metric'), "You're holding at 84 kg — stay around ~2,050 kcal this week and keep weighing in.");
+  const snack = planWith({ phase: 'standing', loKcal: null, hiKcal: null, food: true }, { kind: 'maintenance_target', text: "Keep the daily snack (the step you started Jun 5); we'll read it on Mon, Jun 22" });
+  assert.equal(goalOpenerLine(reached(snack), 'metric'), "You're holding at 84 kg — keep your daily snack this week and keep weighing in.");
+  // The week the step is read says so, in the plan's words (without the date of the next read).
+  const read = planWith({ phase: 'read', loKcal: 2150, hiKcal: 2200, food: false }, { kind: 'maintenance_target', text: "Your weekly average held within 0.5 kg on ~2,150–2,200 kcal — keep it, that's your maintenance", kcalTarget: 2150 });
+  assert.equal(goalOpenerLine(reached(read), 'metric'), "Your weekly average held within 0.5 kg on ~2,150–2,200 kcal — keep it, that's your maintenance.");
+  const more = planWith({ phase: 'given', loKcal: 2300, hiKcal: 2350, food: false }, { kind: 'maintenance_target', text: "Your weekly average is still falling (down 0.7 kg in a week) — add another ~150 kcal a day (to ~2,300–2,350 kcal); we'll read it on Mon, Jun 1", kcalTarget: 2300 });
+  assert.equal(goalOpenerLine(reached(more), 'metric'), 'Your weekly average is still falling (down 0.7 kg in a week) — add another ~150 kcal a day (to ~2,300–2,350 kcal).');
+});
+
 // ── Wave 19b: a lifter who has already logged sessions is not "yet to log a few days" ──
 
 test('muscle opener after the first sessions: says how many are in and when the 4-week lift trend starts', () => {

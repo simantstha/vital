@@ -22,6 +22,12 @@
  * Daily-changing FACTS still update daily on the card (the weekly average, the
  * kilos to go, the weigh-in count, today's scale): they are not part of the plan.
  *
+ * The step toward maintenance is given ONCE (wave 23w): "add ~150-200 kcal a day" (or, for someone who logs no food, "add a ~150-200 kcal
+ * snack") in the week it first applies, then it is a standing level ("Stay at ~2,150-2,200 kcal (the step you started Jun 5); we'll read it on
+ * Mon, Jun 22") until the first plan Monday 14+ days after it, which reads the weekly average: held within 0.5 kg - keep it, that is the
+ * maintenance; still falling - add another ~150; rising - back off ~100. A held weight on logged intake names the target as soon as two
+ * held weeks exist. `weightWeekPlan` composes the raw weekly plan (`makeWeekPlan`) with that history (`withStandingStep`).
+ *
  * The state may change mid-week only for events, each at most once a week:
  *  - the target is reached;
  *  - welcome back, after a gap of 7+ days without a weigh-in;
@@ -133,6 +139,15 @@ export const MAINTENANCE_STEP_LO_KCAL = 150;
 export const MAINTENANCE_STEP_HI_KCAL = 200;
 /** The step is the plan's instruction until this many days after the target was reached (counted on the week's Monday): add, watch 2 weeks, once more. */
 export const MAINTENANCE_STEP_DAYS = 21;
+/** The step is read on the first plan Monday this many days after it was given (wave 23w). */
+export const MAINTENANCE_READ_DAYS = 14;
+/** The weekly average has held when the last two weekly means are within this many kg of each other (wave 23w). */
+export const MAINTENANCE_HELD_KG = 0.5;
+/** After the step the average is still falling / rising: add another notch / back off by this many kcal a day. */
+export const MAINTENANCE_MORE_KCAL = 150;
+export const MAINTENANCE_BACK_OFF_KCAL = 100;
+/** How many weeks back the step's history is read (the step is given once, so its first week must be found). */
+const STEP_LOOKBACK_WEEKS = 16;
 
 const KG_TO_LB = 2.20462;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -174,6 +189,32 @@ export interface WeightPlanAction {
   text: string;
   /** The daily calorie target the action lands on ("trim to ~1,800", "eat 2,000", "maintain 2,050"). */
   kcalTarget?: number;
+}
+
+/** What the weekly average said when the step toward maintenance was read. */
+export type WeightStepOutcome = 'held' | 'falling' | 'rising';
+
+/**
+ * Additive (wave 23w). The step toward maintenance, given once and then a standing level (see the file header). Null in every plan week the
+ * step is not part of: before "nearly there", and after a maintenance target that was named from the user's own logged intake.
+ */
+export interface WeightPlanStep {
+  /** The day the step (the latest notch) was given: its week's Monday, or the day an event gave it mid-week. */
+  since: string;
+  /** The plan Monday it is read on: the first one 14+ days after `since`. */
+  readOn: string;
+  /**
+   * given: the week it is given (the full "add ..." sentence) · standing: stay at the level until `readOn` · read: read this week and held
+   * (keep it) · settled: the kept maintenance level, said as a level in the weeks after.
+   */
+  phase: 'given' | 'standing' | 'read' | 'settled';
+  /** What the last read said (a notch added after "falling", backed off after "rising"); null before the first read. */
+  outcome: WeightStepOutcome | null;
+  /** The level, kcal a day, as a range (equal for a single figure). Null for a user who logs no food: the step is a food, not a number. */
+  loKcal: number | null;
+  hiKcal: number | null;
+  /** The step is a food (a ~150-200 kcal snack): the user logs no food. */
+  food: boolean;
 }
 
 export type PlateauCauseKind = 'water' | 'intake' | 'weekends';
@@ -258,6 +299,8 @@ export interface WeightWeekPlan {
    * The coach lines say "updated Tue Jun 9: ..." instead of "the same all week". Null for a plan decided on its Monday.
    */
   updated: { day: string; why: string } | null;
+  /** Additive (wave 23w). The step toward maintenance, given once and then a standing level (see WeightPlanStep); null outside it. */
+  step: WeightPlanStep | null;
   /**
    * Additive (wave 22w). The week began with no weigh-in for 7+ days: the plan is the one from the day of that last weigh-in (its call
    * and colour kept - a plan is never remade from stale data), with the neutral "no weigh-in since..." action. The last weigh-in's day;
@@ -837,32 +880,214 @@ function paceOf(read: WeightLossRead): WeightPlanPace | null {
  */
 export function weightWeekPlan(input: WeightPlanInput): WeightWeekPlan | null {
   const plan = makeWeekPlan(input);
-  return plan == null ? null : saidBackFromTrim(input, plan);
+  return plan == null ? null : saidBackFromTrim(input, withStandingStep(input, plan));
 }
 
 /**
  * When this week's plan states a calorie level ABOVE the trim last week's plan asked for, it says so: "Go back to 2,000 kcal - last
  * week's trim isn't needed". A calorie target never moves back up on the next Monday in silence (wave 22w). Last week's plan is the
- * one made as of that week's Sunday (the plan the user was left with); it is read once, never recursively.
+ * one made as of that week's Sunday (the plan the user was left with); it is read once, never recursively. (A maintenance target that
+ * replaces the step says so in `withStandingStep`, which knows the whole history of the step.)
  */
 function saidBackFromTrim(input: WeightPlanInput, plan: WeightWeekPlan): WeightWeekPlan {
   const a = plan.action;
-  // The user's own held intake names the maintenance target after a week that gave the budget-based step: a different figure says it replaces
-  // it ("add ~150-200 kcal (to ~2,150-2,200)" and then, in silence, "make ~2,050 your maintenance target" is whiplash).
-  if (plan.state === 'maintenance' && a.kcalTarget != null && a.kind === 'maintenance_target' && a.text.startsWith("You've held")) {
-    const was = makeWeekPlan({ ...input, todayKey: addDays(plan.weekStart, -1) })?.action;
-    const step = was != null && (was.kind === 'maintenance_target' || was.kind === 'next_target' || was.kind === 'ease_to_maintenance')
-      && was.kcalTarget != null && !was.text.startsWith("You've held");
-    if (step && was.kcalTarget != null && Math.abs(a.kcalTarget - was.kcalTarget) >= 100) {
-      return { ...plan, action: { ...a, text: `${a.text} (it replaces last week's step to ~${kcalText(was.kcalTarget)})` } };
-    }
-    return plan;
-  }
   if ((plan.state !== 'plateau' && plan.state !== 'pace') || a.kcalTarget == null || a.kind === 'trim') return plan;
   const previous = makeWeekPlan({ ...input, todayKey: addDays(plan.weekStart, -1), reached: false, reachedAt: null });
   const was = previous?.action;
   if (was == null || was.kind !== 'trim' || was.kcalTarget == null || a.kcalTarget <= was.kcalTarget) return plan;
   return { ...plan, action: { ...a, text: `Go back to ${kcalText(a.kcalTarget)} — last week's trim isn't needed. ${a.text}` } };
+}
+
+// ── The maintenance step: given once, a standing level, read two weeks later (wave 23w) ───────────────────────────────────────────
+
+/** The weeks the step can run through: closing in on the target ("nearly there"), then the target reached and held. */
+function inStepWeeks(p: WeightWeekPlan): boolean {
+  return p.state === 'reached' || p.state === 'maintenance' || (p.state === 'pace' && p.nearlyThere);
+}
+
+/** The plan of the calendar week starting `weekStart` as the user was left with it: made as of its Sunday (or `asOfDay`), before a reach later than that. */
+function rawPlanOfWeek(input: WeightPlanInput, weekStart: string, asOfDay = addDays(weekStart, 6)): WeightWeekPlan | null {
+  const reached = input.reached && (input.reachedAt == null || input.reachedAt <= asOfDay);
+  return makeWeekPlan({ ...input, todayKey: asOfDay, reached, reachedAt: reached ? input.reachedAt : null });
+}
+
+/** The calories a raw plan named from the user's own held intake ("You've held about 84 kg on ~2,050 kcal"), else null. */
+function heldKcalOf(p: WeightWeekPlan): number | null {
+  return p.heldKg != null && p.action.kcalTarget != null && p.action.text.startsWith("You've held") ? p.action.kcalTarget : null;
+}
+
+/** What the weekly average says on a plan Monday: the last two 7-day means (3+ weigh-ins each), held within 0.5 kg or still falling / rising. */
+function readStepOutcome(days: ReadonlyArray<WeightTrendDay>, monday: string): { outcome: WeightStepOutcome; deltaKg: number } | null {
+  const asOf = addDays(monday, -1);
+  const known = through(days, asOf);
+  const w2 = meanOver(known, asOf, 7);
+  const w1 = meanOver(known, addDays(asOf, -7), 7);
+  if (w1 == null || w2 == null || w1.n < WEEK_MEAN_MIN_WEIGH_INS || w2.n < WEEK_MEAN_MIN_WEIGH_INS) return null;
+  const deltaKg = w2.meanKg - w1.meanKg;
+  return { outcome: Math.abs(deltaKg) <= MAINTENANCE_HELD_KG + 1e-9 ? 'held' : deltaKg < 0 ? 'falling' : 'rising', deltaKg };
+}
+
+interface StepLevel { lo: number | null; hi: number | null }
+
+/** The level after another notch (capped at the maintenance estimate when there is one) or after backing off (never under the budget). */
+function nextStepLevel(input: WeightPlanInput, level: StepLevel, outcome: 'falling' | 'rising'): StepLevel {
+  if (level.lo == null || level.hi == null) return level;
+  if (outcome === 'rising') {
+    const floor = input.targetKcal != null && input.targetKcal > 0 ? input.targetKcal : 0;
+    return { lo: Math.max(level.lo - MAINTENANCE_BACK_OFF_KCAL, floor), hi: Math.max(level.hi - MAINTENANCE_BACK_OFF_KCAL, floor) };
+  }
+  let hi = level.hi + MAINTENANCE_MORE_KCAL;
+  let lo = level.lo + MAINTENANCE_MORE_KCAL;
+  const tdee = tdeeEstimate(input);
+  if (tdee != null) {
+    hi = Math.max(level.hi, Math.min(hi, roundTo(tdee, TRIM_ROUND_KCAL)));
+    lo = Math.min(lo, hi);
+  }
+  return { lo, hi };
+}
+
+type StepEvent =
+  | { kind: 'held_named'; was: StepLevel; replacesNamed: boolean }
+  | { kind: 'read_held' }
+  | { kind: 'more' | 'back_off'; deltaKg: number; was: StepLevel; levelMoved: boolean };
+
+const lowerFirst = (t: string): string => t.charAt(0).toLowerCase() + t.slice(1);
+
+/**
+ * The maintenance step is given ONCE (wave 23w). The raw weekly plan says "add ~150-200 kcal a day ..." in every week it applies; this
+ * reads the step's whole history - the weeks back to the one it first applied - and replaces the repeats with what the user needs to
+ * know that week:
+ *  - the week it is given: the full sentence (unchanged);
+ *  - the weeks after: a standing level - "Stay at ~2,150-2,200 kcal (the step you started Jun 5); we'll read it on Mon, Jun 22";
+ *  - the first plan Monday 14+ days after the step: read from the weekly average - held within 0.5 kg ("keep it, that's your
+ *    maintenance"), still falling (add another ~150 kcal) or rising (back off ~100 kcal); the next notch is given once and stands too;
+ *  - a held weight on logged intake (the raw plan's "You've held about 84 kg on ~2,050 kcal") also settles it, as soon as it exists;
+ *  - once settled the level is kept as it was named (a sticky figure: logged days rounding to 2,150 one week and 2,200 the next do not
+ *    move it), unless the user's own held intake differs by 100+ kcal and says it replaces the step.
+ * A user who logs no food gets the same loop with a snack, never a calorie number. The raw plans of the earlier weeks are the plans the user
+ * was left with (made as of each Sunday), so nothing here is stored.
+ */
+function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightWeekPlan {
+  if (plan.staleSince != null || !inStepWeeks(plan)) return plan;
+  // The weeks the step has run through, oldest first, back to the week it first applied.
+  const chain: Array<{ weekStart: string; plan: WeightWeekPlan }> = [{ weekStart: plan.weekStart, plan }];
+  for (let k = 1; k <= STEP_LOOKBACK_WEEKS; k++) {
+    const weekStart = addDays(plan.weekStart, -7 * k);
+    const p = rawPlanOfWeek(input, weekStart);
+    if (p == null || !inStepWeeks(p)) break;
+    chain.unshift({ weekStart, plan: p });
+  }
+  const first = chain.findIndex(w => w.plan.step != null);
+  if (first < 0) return plan;
+  const weeks = chain.slice(first);
+  const marker = weeks[0].plan.step as WeightPlanStep;
+  // The day it was first given: the first week's Monday, or the day an event gave it mid-week.
+  const mondayPlan = weeks[0].weekStart === plan.weekStart && plan.updated == null ? plan : rawPlanOfWeek(input, weeks[0].weekStart, weeks[0].weekStart);
+  const since = mondayPlan?.step != null ? weeks[0].weekStart : weeks[0].plan.updated?.day ?? weeks[0].weekStart;
+
+  if (weeks.length === 1) return { ...plan, step: { ...marker, since, readOn: mondayOnOrAfter(addDays(since, MAINTENANCE_READ_DAYS)), phase: 'given' } };
+
+  // Walk the weeks forward: a held weight on logged intake names the target; the first Monday 14+ days after the step reads it.
+  const days = [...input.days].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+  let given = since;
+  let level: StepLevel = { lo: marker.loKcal, hi: marker.hiKcal };
+  let food = marker.food;
+  let settled = false;
+  let lastOutcome: WeightStepOutcome | null = null;
+  let event: StepEvent | null = null;
+  for (let i = 1; i < weeks.length; i++) {
+    event = null;
+    const wk = weeks[i];
+    const heldKcal = heldKcalOf(wk.plan);
+    if (!settled) {
+      if (heldKcal != null) {
+        event = { kind: 'held_named', was: level, replacesNamed: false };
+        settled = true;
+        lastOutcome = 'held';
+        level = { lo: heldKcal, hi: heldKcal };
+        food = false;
+      } else if (wk.weekStart >= addDays(given, MAINTENANCE_READ_DAYS)) {
+        const read = readStepOutcome(days, wk.weekStart);
+        if (read == null) continue; // too few weigh-ins to read it: it waits for the next Monday
+        lastOutcome = read.outcome;
+        if (read.outcome === 'held') {
+          event = { kind: 'read_held' };
+          settled = true;
+        } else {
+          const next = nextStepLevel(input, level, read.outcome);
+          event = { kind: read.outcome === 'falling' ? 'more' : 'back_off', deltaKg: read.deltaKg, was: level, levelMoved: next.lo !== level.lo || next.hi !== level.hi || level.lo == null };
+          level = next;
+          given = wk.weekStart;
+        }
+      }
+    } else if (heldKcal != null && level.lo != null && Math.abs(heldKcal - level.lo) >= 100) {
+      // Named again only when two Mondays in a row say it (a week of logs that rounds 100 kcal away is noise, not a new maintenance).
+      const before = heldKcalOf(weeks[i - 1].plan);
+      if (before != null && Math.sign(before - level.lo) === Math.sign(heldKcal - level.lo) && Math.abs(before - level.lo) >= 100) {
+        event = { kind: 'held_named', was: level, replacesNamed: true };
+        level = { lo: heldKcal, hi: heldKcal };
+      }
+    }
+  }
+
+  const readOnRaw = mondayOnOrAfter(addDays(given, MAINTENANCE_READ_DAYS));
+  const readOn = !settled && readOnRaw <= plan.weekStart && event == null ? addDays(plan.weekStart, 7) : readOnRaw;
+  const numeric = level.lo != null && level.hi != null;
+  const levelStr = numeric ? `~${levelText(level.lo as number, level.hi as number)}` : '';
+  const ask = plan.action.kind === 'next_target';
+  const said = (t: string): string => (ask ? `Set a new target or switch to maintenance — ${lowerFirst(t)}` : t);
+  const kind: WeightPlanActionKind = ask ? 'next_target' : plan.state === 'pace' ? 'ease_to_maintenance' : 'maintenance_target';
+  const when = fmtWeekday(readOn, input.todayKey);
+  const cue = `${planWeightText(input, HOLDING_NEAR_TARGET_KG)} above or below your target`;
+  const held = planWeightText(input, MAINTENANCE_HELD_KG);
+  const stepBase = { since: given, readOn, outcome: lastOutcome, loKcal: level.lo, hiKcal: level.hi, food };
+  const withKcal = numeric ? { kcalTarget: level.lo as number } : {};
+  const result = (action: WeightPlanAction, phase: WeightPlanStep['phase']): WeightWeekPlan => ({ ...plan, action, step: { ...stepBase, phase } });
+
+  if (event?.kind === 'held_named') {
+    // The user's own held intake names the maintenance target. A different figure from the step says it replaces it.
+    const was = event.was;
+    const differs = was.lo != null && was.hi != null && numeric && ((level.lo as number) < was.lo - 50 || (level.lo as number) > was.hi + 50);
+    const replaces = event.replacesNamed ? `~${levelText(was.lo as number, was.hi as number)}` : `the step to ~${levelText(was.lo as number, was.hi as number)}`;
+    const text = differs ? `${plan.action.text} (it replaces ${replaces})` : plan.action.text;
+    return result({ ...plan.action, text: said(text), ...withKcal }, 'read');
+  }
+  if (event?.kind === 'read_held') {
+    const text = numeric
+      ? `Your weekly average held within ${held} on ${levelStr} — keep it, that's your maintenance`
+      : `Your weekly average held within ${held} — keep that snack, it's your maintenance`;
+    return result({ kind, text: said(text), ...withKcal }, 'read');
+  }
+  if (event != null) {
+    const moved = planWeightText(input, Math.abs(event.deltaKg));
+    const falling = event.kind === 'more';
+    const lead = falling ? `Your weekly average is still falling (down ${moved} in a week)` : `Your weekly average is rising (up ${moved} in a week)`;
+    let text: string;
+    if (!numeric) {
+      text = falling
+        ? `${lead} — add another small snack (~${fmtKcal(MAINTENANCE_MORE_KCAL)} kcal); we'll read it on ${when}`
+        : `${lead} — make the snack ~${fmtKcal(MAINTENANCE_BACK_OFF_KCAL)} kcal smaller; we'll read it on ${when}`;
+    } else if (falling && !event.levelMoved) {
+      text = `${lead} — you are already at the top of your maintenance estimate, so stay at ${levelStr} and we'll read it on ${when}`;
+    } else if (falling) {
+      text = `${lead} — add another ~${kcalText(MAINTENANCE_MORE_KCAL)} a day (to ${levelStr}); we'll read it on ${when}`;
+    } else if (!event.levelMoved) {
+      text = `${lead} — go back to ${levelStr} and we'll read it on ${when}`;
+    } else {
+      text = `${lead} — back off ~${kcalText(MAINTENANCE_BACK_OFF_KCAL)} a day (to ${levelStr}); we'll read it on ${when}`;
+    }
+    return result({ kind, text: said(text), ...withKcal }, 'given');
+  }
+  if (settled) {
+    const text = numeric
+      ? `Stay at ${levelStr} — your maintenance; if your average drifts ${cue}, that is your cue to act`
+      : `Keep the daily snack — it's your maintenance; if your average drifts ${cue}, that is your cue to act`;
+    return result({ kind: ask ? 'next_target' : 'hold', text: said(text), ...withKcal }, 'settled');
+  }
+  const text = numeric
+    ? `Stay at ${levelStr} (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`
+    : `Keep the daily snack (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
+  return result({ kind, text: said(text), ...withKcal }, 'standing');
 }
 
 /**
@@ -981,7 +1206,7 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
     etaDate: null, weeksVsTarget: null,
     action: { kind: 'keep_weighing', text: 'Keep weighing in — your pace settles after 3 weeks of weigh-ins' },
     plateauCause: null, pace: null, earlierPace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
-    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, updated: null, staleSince: null,
+    away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, updated: null, step: null, staleSince: null,
   };
 
   // The target is reached (any day: the crossing is an event): a CTA for the first week, then maintenance.
@@ -1190,15 +1415,19 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
   }
 
   let action: WeightPlanAction;
+  let stepMarker: WeightPlanStep | null = null;
   if (nearlyThere) {
-    // The step is a number (wave 22w): "Start easing calories toward maintenance" alone gave no figure to ease to.
-    const step = maintenanceStep(input);
+    // The step is a number (wave 22w): "Start easing calories toward maintenance" alone gave no figure to ease to. For someone who logs no
+    // food it is a food instead (wave 23w): there is no calorie figure they could check.
+    const food = !logsFood(c);
+    const step = maintenanceStep(input, food);
     const lead = targetKg != null ? `Start easing calories toward maintenance as you close in on ${planWeightText(input, targetKg)}` : 'Start easing calories toward maintenance';
     action = {
       kind: 'ease_to_maintenance',
       text: step != null ? `${lead} — ${step.text}` : lead,
       ...(step?.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
     };
+    if (step != null) stepMarker = rawStep(weekStart, step, food);
   } else if (tooFast) {
     const t = input.targetKcal;
     action = {
@@ -1236,6 +1465,7 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
     state: 'pace',
     call,
     earlierPace,
+    step: stepMarker,
     verdict,
     etaDate,
     weeksVsTarget: read.state === 'confirmed' && etaDate != null ? weeks : null,
@@ -1264,15 +1494,33 @@ function budgetIsMaintenance(input: WeightPlanInput): boolean {
   return input.targetKcal != null && tdee != null && input.targetKcal >= tdee - MAINTENANCE_BUDGET_MARGIN_KCAL;
 }
 
+/** The concrete step toward maintenance as the plan states it the week it is given. */
+interface MaintenanceStep {
+  text: string;
+  /** The first notch (budget + 150) for a user who logs food; null for a user who does not (a food, not a number) or with no budget. */
+  kcalTarget: number | null;
+  lo: number | null;
+  hi: number | null;
+}
+
+/** "2,150–2,200 kcal" / "2,150 kcal": a level as a range of daily calories (the number carries its unit; the caller puts "~" in front). */
+function levelText(lo: number, hi: number): string {
+  return lo === hi ? kcalText(hi) : `${fmtKcal(lo)}–${kcalText(hi)}`;
+}
+
 /**
  * The concrete step toward maintenance (wave 22w): "add ~150-200 kcal a day (to ~2,150-2,200 kcal) and watch the weekly average for 2
  * weeks". From the budget, capped at the maintenance estimate when there is one; with no budget only the amounts are named.
  * `kcalTarget` is the first notch (budget + 150). Null when the budget already is at or past the estimate.
+ * For someone who logs no food (`food`, wave 23w) the step is a food - "add a ~150-200 kcal snack a day (e.g. yogurt and fruit)" - and
+ * carries no calorie target: there is no log to check a number against.
  */
-function maintenanceStep(input: WeightPlanInput): { text: string; kcalTarget: number | null } | null {
+function maintenanceStep(input: WeightPlanInput, food = false): MaintenanceStep | null {
   const watch = 'and watch the weekly average for 2 weeks';
+  const amounts = `${fmtKcal(MAINTENANCE_STEP_LO_KCAL)}–${kcalText(MAINTENANCE_STEP_HI_KCAL)}`;
+  const snack = `add a ~${amounts} snack a day (e.g. yogurt and fruit) ${watch}`;
   const budget = input.targetKcal != null && input.targetKcal > 0 ? input.targetKcal : null;
-  if (budget == null) return { text: `add ~${fmtKcal(MAINTENANCE_STEP_LO_KCAL)}–${kcalText(MAINTENANCE_STEP_HI_KCAL)} a day ${watch}`, kcalTarget: null };
+  if (budget == null) return { text: food ? snack : `add ~${amounts} a day ${watch}`, kcalTarget: null, lo: null, hi: null };
   const tdee = tdeeEstimate(input);
   let hi = budget + MAINTENANCE_STEP_HI_KCAL;
   let lo = budget + MAINTENANCE_STEP_LO_KCAL;
@@ -1281,9 +1529,28 @@ function maintenanceStep(input: WeightPlanInput): { text: string; kcalTarget: nu
     lo = Math.min(lo, hi);
   }
   if (hi <= budget) return null;
+  if (food) return { text: snack, kcalTarget: null, lo: null, hi: null };
   const amount = lo === hi ? kcalText(hi - budget) : `${fmtKcal(lo - budget)}–${kcalText(hi - budget)}`;
-  const landing = lo === hi ? kcalText(hi) : `${fmtKcal(lo)}–${kcalText(hi)}`;
-  return { text: `add ~${amount} a day (to ~${landing}) ${watch}`, kcalTarget: lo };
+  return { text: `add ~${amount} a day (to ~${levelText(lo, hi)}) ${watch}`, kcalTarget: lo, lo, hi };
+}
+
+/** The first plan Monday on or after `day`. */
+function mondayOnOrAfter(day: string): string {
+  const monday = weekStartKeyForDay(day);
+  return monday < day ? addDays(monday, 7) : monday;
+}
+
+/** The marker a raw plan carries in the week the step first applies; `withStandingStep` corrects its dates from the step's history. */
+function rawStep(weekStart: string, step: MaintenanceStep, food: boolean): WeightPlanStep {
+  return {
+    since: weekStart,
+    readOn: mondayOnOrAfter(addDays(weekStart, MAINTENANCE_READ_DAYS)),
+    phase: 'given',
+    outcome: null,
+    loKcal: step.lo,
+    hiKcal: step.hi,
+    food,
+  };
 }
 
 /** The plan for a week in which the target is reached: the CTA for its first days, then maintenance. */
@@ -1306,6 +1573,8 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
     pace = paceOf(built.read);
   }
   const base: WeightWeekPlan = { ...blank, call: 'none', verdict: 'reached', pace, tooFast };
+  // Someone who logs no food gets the step as a food, never a calorie number (wave 23w).
+  const food = !logsFood(c);
   if (asking) {
     // A calorie target that already is maintenance has nothing to "switch" to: keep it there (the review says the same).
     if (budgetIsMaintenance(input)) {
@@ -1316,26 +1585,29 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
       };
     }
     // Switching to maintenance is a number: the step from the budget (the TDEE estimate caps it) and how long to watch.
-    const step = maintenanceStep(input);
+    // The first time it is said it says why (the deficit has done its job): the card also reads "Holding at ...".
+    const step = maintenanceStep(input, food);
     return {
       ...base,
       state: 'reached',
       action: {
         kind: 'next_target',
-        text: step != null ? `Set a new target or switch to maintenance — ${step.text}` : 'Set a new target or switch to maintenance',
+        text: step != null ? `Set a new target or switch to maintenance — you no longer need a deficit, so ${step.text}` : 'Set a new target or switch to maintenance',
         ...(step?.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
       },
+      step: step != null ? rawStep(c.weekStart, step, food) : null,
     };
   }
 
-  // Maintenance: the weekly average has held within a kilo for 2+ weeks, on logged intake — make that the target.
+  // Maintenance: the weekly average has held within a kilo for 2+ weeks (and within 0.5 kg week to week), on logged intake - make that
+  // the target. As soon as two such weeks exist (wave 23w): it no longer waits 13 days after the reach.
   let held: { kg: number; kcal: number } | null = null;
   const known = through(days, asOf);
   const w2 = meanOver(known, asOf, 7);
   const w1 = meanOver(known, addDays(asOf, -7), 7);
-  const reachedLongEnough = input.reachedAt == null || dayNumber(asOf) - dayNumber(input.reachedAt) >= MAINTENANCE_HELD_DAYS - 1;
-  if (reachedLongEnough && w1 != null && w2 != null && w1.n >= WEEK_MEAN_MIN_WEIGH_INS && w2.n >= WEEK_MEAN_MIN_WEIGH_INS
-    && Math.abs(w1.meanKg - targetKg) <= HOLDING_NEAR_TARGET_KG && Math.abs(w2.meanKg - targetKg) <= HOLDING_NEAR_TARGET_KG) {
+  if (w1 != null && w2 != null && w1.n >= WEEK_MEAN_MIN_WEIGH_INS && w2.n >= WEEK_MEAN_MIN_WEIGH_INS
+    && Math.abs(w1.meanKg - targetKg) <= HOLDING_NEAR_TARGET_KG && Math.abs(w2.meanKg - targetKg) <= HOLDING_NEAR_TARGET_KG
+    && Math.abs(w2.meanKg - w1.meanKg) <= MAINTENANCE_HELD_KG + 1e-9) {
     const logged = loggedInSpan(input.intakeDays, addDays(asOf, -(MAINTENANCE_HELD_DAYS - 1)), asOf);
     if (logged.length >= MAINTENANCE_MIN_LOGGED_DAYS) {
       held = { kg: (w1.meanKg + w2.meanKg) / 2, kcal: roundTo(avg(logged.map(l => l.kcal)), TRIM_ROUND_KCAL) };
@@ -1370,16 +1642,17 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
   }
   // Still on the deficit budget for the first weeks of maintenance (counted on the week's Monday, so the plan is one thing all week).
   const sinceMonday = since != null ? dayNumber(c.weekStart) - dayNumber(since) : null;
-  const step = sinceMonday != null && sinceMonday > MAINTENANCE_STEP_DAYS ? null : maintenanceStep(input);
+  const step = sinceMonday != null && sinceMonday > MAINTENANCE_STEP_DAYS ? null : maintenanceStep(input, food);
   if (step != null) {
     return {
       ...base,
       state: 'maintenance',
       action: {
         kind: 'maintenance_target',
-        text: `Target reached — ${step.text}; a drift of ${cue} is your cue to act`,
+        text: `Target reached, so no deficit is needed — ${step.text}; a drift of ${cue} is your cue to act`,
         ...(step.kcalTarget != null ? { kcalTarget: step.kcalTarget } : {}),
       },
+      step: rawStep(c.weekStart, step, food),
     };
   }
   return {
