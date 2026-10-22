@@ -2682,6 +2682,28 @@ invariant(['weight_loss_logged'], 'P3-C: a plateau cause named at the flat fortn
   return out;
 });
 
+// D: a card built on a stale read speaks in the past: "As of May 10: ...", neutral, and the coach is not told "the scale is moving again".
+const W23_AS_OF = /^As of [A-Z][a-z]{2} \d{1,2}\b/;
+
+invariant(WEIGHT, 'P3-D: while the newest weigh-in is a week old or more the card says "As of <date>: ..." in a neutral tone, and the coach gets no "moving again" rule', (snaps, name) => {
+  const out: Violation[] = [];
+  let stale = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan?.staleSince == null || snap.card == null || snap.card.verdict === 'reached') continue;
+    stale++;
+    for (const r of snap.card.reasons) {
+      if (r.kind === 'action' || r.kind === 'weigh_in_age' || r.kind === 'calorie_adherence' || r.kind === 'weekend_overeating') continue;
+      if (!W23_AS_OF.test(plain(r.text)) || r.tone !== 'neutral') out.push({ snap, detail: `stale since ${plan.staleSince}: [${r.kind}/${r.tone}] "${visible(r.text)}"` });
+    }
+    if (!W23_AS_OF.test(plain(snap.card.headline))) out.push({ snap, detail: `stale since ${plan.staleSince}: headline "${visible(snap.card.headline)}"` });
+    const rule = (snap.coach ?? []).find(l => /The scale is moving again after a plateau/.test(plain(l)));
+    if (rule != null) out.push({ snap, detail: `the coach still gets "${visible(rule.slice(0, 120))}" next to the stale-weigh-in rule` });
+  }
+  if (name !== 'weight_loss_obedient' || stale > 0) assert.ok(stale > 0, `${name}: no stale day, so this invariant checked nothing`);
+  return out;
+});
+
 // E: a reached opener after the question is one short clause, not "Target reached — add ~150-200 kcal a day (to ...) and watch ...; a drift of ...".
 invariant(WEIGHT, 'P3-E: once the new-target question is over, the reached opener is one short sentence ("You\'re holding at 84 kg — stay around ~2,150-2,200 kcal this week and keep weighing in.")', (snaps, name) => {
   const out: Violation[] = [];

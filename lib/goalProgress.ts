@@ -1763,7 +1763,34 @@ function movingAgainOutcome(input: GoalProgressInput, w: WeightBlock, plan: Weig
   };
 }
 
+const lowerFirst = (t: string): string => t.charAt(0).toLowerCase() + t.slice(1);
+
+/**
+ * The week began with no weigh-in for 7+ days (wave 23w): the card is built on the plan of the last weigh-in's day, so what it says about the
+ * scale is "as of" that day and neutral - "the scale is moving again" in the present tense, in green, next to "No weigh-in since May 10" was two
+ * contradictory sentences. The call and the colour of the verdict are kept (the plan keeps them); the sentences about the scale are dated.
+ */
+function asOfLastWeighIn(input: GoalProgressInput, w: WeightBlock, outcome: Outcome): Outcome {
+  const since = w.plan?.staleSince;
+  if (since == null || outcome.verdict === 'reached' || outcome.verdict === 'insufficient_data' || outcome.verdict === 'needs_target') return outcome;
+  const asOf = `As of ${fmtDate(since, input.todayKey)}`;
+  // The date costs 14 characters of a 70-character headline: "weekly average" gives way to "average" before the clause is cut.
+  const dated = `${asOf}: ${lowerFirst(outcome.headline)}`;
+  const headline = dated.length <= HEADLINE_MAX_CHARS ? dated : clip(dated.replace('weekly average', 'average'));
+  return {
+    ...outcome,
+    headline,
+    reasons: outcome.reasons.map(r => (r.kind === 'rate' || r.kind === 'moving_again' || r.kind === 'plateau'
+      ? { ...r, text: `${asOf}: ${lowerFirst(r.text)}`, tone: 'neutral' as ReasonTone }
+      : r)),
+  };
+}
+
 function fatLossOutcome(input: GoalProgressInput, w: WeightBlock): Outcome {
+  return asOfLastWeighIn(input, w, fatLossOutcomeFresh(input, w));
+}
+
+function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome {
   if (input.target.weightKg == null) {
     return { verdict: 'needs_target', headline: 'Set a target weight to track your fat-loss progress', reasons: [] };
   }

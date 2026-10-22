@@ -2012,7 +2012,8 @@ test('aging weigh-in (7-14 days): verdict kept, no ETA/pace, headline drops the 
   assert.equal(aging.eta, null);
   assert.equal(aging.onPaceForTargetDate, null);
   assert.doesNotMatch(aging.headline, /around/);
-  assert.match(aging.headline, /^[A-Za-z ]+ — about [\d.]+ kg to go$/);
+  // (The week began with the weigh-in already a week old: what the card says about the scale is dated - wave 23w.)
+  assert.match(aging.headline, /^As of \w{3} \d{1,2}: [A-Za-z ]+ — about [\d.]+ kg to go$/);
   assert.deepEqual(aging.reasons.map(r => r.kind).slice(0, 2), ['rate', 'weigh_in_age']);
   assert.equal(aging.reasons[1].text, 'Based on a weigh-in 9 days ago');
   // 6 days old is still fresh.

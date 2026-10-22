@@ -450,3 +450,13 @@ test('wave 23w: the coach says the two paces are "either side of the target date
   assert.match(lines(false), /rate -0\.54 kg\/wk \(-0\.61% bw\) over the last 3 weeks of weigh-ins \(a week ago the pace was 0\.46 kg\/wk\)/);
   assert.doesNotMatch(lines(false), /either side/);
 });
+
+test('wave 23w: a card built on a stale read gives the coach no "moving again" or plateau rule', () => {
+  const stale = (state: 'moving_again' | 'plateau') => formatGoalProgressLines(gp({
+    eta: null,
+    weightRead: { ...WEIGHT_READ, state, plan: { state, weekStart: '2026-05-18', action: { kind: 'keep_weighing', text: 'No weigh-in since May 10 — step on the scale when you can; your plan picks up from there' }, staleSince: '2026-05-10', flatWeeks: 3, plateauCause: null } as unknown as NonNullable<GoalProgress['weightRead']>['plan'] },
+  }), 'metric').join('\n');
+  assert.match(stale('moving_again'), /No weigh-in since May 10: say so and ask for a weigh-in/);
+  assert.doesNotMatch(stale('moving_again'), /moving again after a plateau/);
+  assert.doesNotMatch(stale('plateau'), /Plateau on the raw weekly averages/);
+});

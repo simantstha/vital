@@ -333,10 +333,13 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (read?.state === 'returning') {
     lines.push('- The user is back after a gap in weigh-ins: welcome them back and keep weighing in; do not call the pace too fast or behind until 3 weigh-ins are back.');
   }
-  if (read?.state === 'plateau' && plan?.flatWeeks === 2) {
+  // A card built on a stale read (the week began with no weigh-in for 7+ days) states no fresh scale news: the stale-weigh-in rule above is the one
+  // rule, and "the scale is moving again" / a plateau's advice belong to a fresh reading (wave 23w).
+  const fresh = !plan?.staleSince;
+  if (fresh && read?.state === 'plateau' && plan?.flatWeeks === 2) {
     // Two flat weeks after a confirmed loss (wave 22w): a calm hold. The 21-day line still holds the good weeks, so it must not be called behind.
     lines.push('- Two flat weeks on the raw weekly averages after weeks of steady loss: common, not a failure and not "behind" — the plan holds. No projected date, no calorie cut; give the week\'s one action. If the third week is flat too it becomes a plateau.');
-  } else if (read?.state === 'plateau') {
+  } else if (fresh && read?.state === 'plateau') {
     const cause = plan?.plateauCause ?? null;
     if (cause?.kind === 'weekends' && cause.weekendAvgKcal != null && cause.weekdayAvgKcal != null) {
       // The logs of the plateau's own weeks name the weekends, and the cause is kept for the whole plateau.
@@ -350,7 +353,7 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
       lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
     }
   }
-  if (read?.state === 'moving_again') {
+  if (fresh && read?.state === 'moving_again') {
     lines.push('- The scale is moving again after a plateau: no projected date, never "behind", no calorie cut — say to keep doing what restarted it.');
   }
   if (plan?.farBehind) {
