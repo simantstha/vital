@@ -11,7 +11,7 @@ import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline } from './engine';
-import { SCENARIO_NAMES, buildScenario, type ScenarioName } from './scenarios';
+import { OBEDIENT_SHORT_WEEK, SCENARIO_NAMES, buildScenario, type ScenarioName } from './scenarios';
 import { addDays, dayDiff, weekdayOf, type DaySnapshot } from './types';
 
 const ALL: readonly ScenarioName[] = SCENARIO_NAMES;
@@ -2459,5 +2459,92 @@ invariant(RUNNERS, 'a cutback week\'s negative change is said "as planned" on th
     }
   }
   if (name === 'runner_on_plan_obedient') assert.ok(seen > 0, `${name}: no cutback week showed a negative change, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// wave 23s: strength round 5 (strength coach + 3 lifter personas). Every invariant here was written BEFORE the rule it locks in.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// G-S. lifter_obedient does exactly what the app says (the prescribed loads, 4 sessions a week) except for ONE ill week (week 7, only
+// Thursday). Outside that week - its cards, and the review that rates it - she is never criticised: no amber line on the card, no
+// "behind"/"stalled" verdict, no review slip, no amber review stat, no "mixed"/"tough" week.
+const OBEDIENT_ILL_START = addDays('2026-03-02', (OBEDIENT_SHORT_WEEK - 1) * 7);
+const OBEDIENT_ILL_END = addDays(OBEDIENT_ILL_START, 6);
+
+invariant(['lifter_obedient'], 'an obedient lifter is never criticised outside her one ill week (no amber line, no slip, no behind / stalled / tough)', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const inIllWeek = snap.date >= OBEDIENT_ILL_START && snap.date <= OBEDIENT_ILL_END;
+    if (!inIllWeek && snap.card) {
+      checked++;
+      for (const r of snap.card.reasons) if (r.tone === 'watch') out.push({ snap, detail: `card.reasons (${r.kind}) is amber: "${visible(r.text)}"` });
+      if (snap.card.verdict === 'behind' || snap.card.verdict === 'stalled' || snap.card.verdict === 'too_fast') out.push({ snap, detail: `card verdict ${snap.card.verdict}: "${visible(snap.card.headline)}"` });
+    }
+    const r = snap.review?.review;
+    if (r && r.weekStart !== OBEDIENT_ILL_START) {
+      if (r.slip != null) out.push({ snap, detail: `review.slip: "${visible(r.slip)}"` });
+      for (const st of r.stats) if (st.tone === 'watch') out.push({ snap, detail: `review stat ${st.label} is amber: ${st.value} ${st.comparison ?? ''}` });
+      if (r.weekRating === 'tough' || r.weekRating === 'mixed') out.push({ snap, detail: `week rated ${r.weekRating}: "${visible(r.headline)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no card day was checked`);
+  return out;
+});
+
+// G-S. Never two different loads for the same lift on one day: every "<lift> A → B kg", "<lift> ~X kg" or "<lift> X kg" in the day's texts
+// (card, coach lines, opener, review) that names a load for a lift names the SAME load as the others of that lift that day.
+const LOAD_MENTION = /\b(squat|bench(?: press)?|deadlift|overhead press)\s+(~?)(\d+(?:\.\d+)?)(?:\s?→\s?(\d+(?:\.\d+)?))?\s?(kg|lb)\b/gi;
+const liftWord = (w: string): string => (/^bench/i.test(w) ? 'bench' : w.toLowerCase());
+
+/** Every load a text names for a lift: the load to lift (the arrow's right side, else the single number). */
+function loadMentions(text: string): Array<{ lift: string; load: number; unit: string; raw: string }> {
+  return [...plain(text).matchAll(LOAD_MENTION)].map(m => ({ lift: liftWord(m[1]), load: Number(m[4] ?? m[3]), unit: m[5], raw: m[0] }));
+}
+
+invariant(LIFTERS, 'one load per lift per day: no two texts of the same day name different loads for the same lift', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const byLift = new Map<string, Array<{ load: number; where: string; raw: string }>>();
+    for (const t of allTexts(snap)) for (const m of loadMentions(t.text)) byLift.set(m.lift, [...(byLift.get(m.lift) ?? []), { load: m.load, where: t.where, raw: m.raw }]);
+    for (const [lift, ms] of byLift) {
+      if (new Set(ms.map(m => m.load)).size > 1) out.push({ snap, detail: `${lift}: ${ms.map(m => `"${m.raw}" (${m.where})`).join(' vs ')}` });
+    }
+  }
+  return out;
+});
+
+// G-S. The loop closes for an obedient lifter: the load a review prescribes for a lift IS what she lifts the week after (her top working
+// set of that lift), and the next review starts its step from that load, on the grid and without a "~". Counted from the scenario's rows.
+invariant(['lifter_obedient'], 'the loads a review prescribes are the loads she then lifts, and the next review steps from them (no "~", exactly one step)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const exerciseOf: Record<string, string> = { squat: 'squat', bench: 'bench press', deadlift: 'deadlift' };
+  const top = (exercise: string, from: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === exercise && !s.isWarmup && s.day >= from && s.day <= addDays(from, 6) && s.loadKg != null).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  const out: Violation[] = [];
+  let pairs = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const nextMonday = addDays(r.weekStart, 7);
+    // The ill week is the one week she is not following the prescription (its loads are a single volume session), on either side of it.
+    if (nextMonday === OBEDIENT_ILL_START || r.weekStart === OBEDIENT_ILL_START) continue;
+    for (const m of plain(r.nextWeek).matchAll(/\b(squat|bench|deadlift)\s+(~?)(\d+(?:\.\d+)?)(?:\s?→\s?(\d+(?:\.\d+)?))?\s?kg\b/gi)) {
+      const exercise = exerciseOf[liftWord(m[1])];
+      const prescribed = Number(m[4] ?? m[3]);
+      const lifted = top(exercise, nextMonday);
+      if (lifted == null) continue;
+      pairs++;
+      if (lifted !== prescribed) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}" prescribes ${liftWord(m[1])} ${prescribed} kg, she lifted ${lifted} kg in the week of ${nextMonday}` });
+      if (m[4] != null) {
+        const was = top(exercise, r.weekStart);
+        if (m[2] === '~' || was !== Number(m[3]) || Math.abs(Number(m[4]) - Number(m[3]) - 2.5) > 1e-9) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}": ${m[0]} should step one grid step from the ${was} kg she lifted that week, without a "~"` });
+      }
+    }
+  }
+  assert.ok(pairs > 8, `${name}: only ${pairs} prescribed loads were compared, so this invariant checked (almost) nothing`);
   return out;
 });
