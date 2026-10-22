@@ -14,6 +14,8 @@ import {
   recoveryWeek,
   weekStepOrGoalKm,
 } from '../enduranceProgression';
+import { nextLoadCues, shortWeekLoadCues } from '../liftChange';
+import { summarizeProgression } from '../progressionMath';
 import { addDays, type IntakeRow, type Scenario, type SetRow, type WeighIn, type WorkoutRow } from './types';
 
 const DAY0 = '2026-03-02'; // a Monday
@@ -492,6 +494,82 @@ export function lifterShortWeek(): Scenario {
   };
 }
 
+/** The week (1-based) of the obedient lifter in which only the Thursday session happens (an illness); the weeks after it are obedient again. */
+export const OBEDIENT_SHORT_WEEK = 7;
+
+/**
+ * Wave 23s (G-S): the lifter who DOES what the app says. Each Monday she reads last week the way the weekly review does and lifts
+ * exactly the loads it prescribes for the coming week: the normal next-load step after a full week (`nextLoadCues`), and after a
+ * short week the skipped lifts' planned step repeated ("Squat 112.5 kg and deadlift 127.5 kg (the steps you skipped), bench 87.5 -> 90 kg",
+ * `shortWeekLoadCues`). Same four sessions a week as `lifter` (Mon squat + bench, Tue deadlift, Thu bench volume, Sat light squat +
+ * deadlift), no deload, no weeks off - and the one bad week (week 7: only Thursday, an illness). Deterministic: the loads are a pure
+ * function of the sets so far. The timeline invariants check that the loads she lifts ARE the loads the reviews print.
+ */
+export function lifterObedient(): Scenario {
+  const base = lifter();
+  const sets: SetRow[] = [];
+  const notes: string[] = [];
+  const roundPlate = (kg: number): number => Math.round(kg / 2.5) * 2.5;
+  const displays: Record<string, string> = { squat: 'Squat', 'bench press': 'Bench Press', deadlift: 'Deadlift' };
+  const start: Record<string, number> = { squat: 100, 'bench press': 80, deadlift: 120 };
+
+  const pushSets = (day: string, ex: string, n: number, reps: number, load: number, rpe: number, warm = true): void => {
+    if (warm) {
+      sets.push({ day, exercise: ex, display: displays[ex], reps: 5, loadKg: roundPlate(load * 0.5), rpe: null, isWarmup: true });
+      sets.push({ day, exercise: ex, display: displays[ex], reps: 3, loadKg: roundPlate(load * 0.75), rpe: null, isWarmup: true });
+    }
+    for (let i = 0; i < n; i++) sets.push({ day, exercise: ex, display: displays[ex], reps, loadKg: load, rpe, isWarmup: false });
+  };
+
+  /** The loads the review of `reviewedWeek` (a Monday) prescribes, by the review's own rules, from the sets logged so far. */
+  const prescribed = (reviewedWeek: string, current: Record<string, number>): Record<string, number> => {
+    const weekEnd = addDays(reviewedWeek, 6);
+    const logged = sets.filter(s => s.day <= weekEnd);
+    const progression = summarizeProgression(logged.map(s => ({
+      exercise: s.exercise, performed_at: new Date(`${s.day}T18:00:00.000Z`), local_day: s.day, rpe: s.rpe, reps: s.reps, load_kg: s.loadKg, is_warmup: s.isWarmup,
+    })));
+    const done = new Set(logged.filter(s => !s.isWarmup && s.day >= reviewedWeek).map(s => s.day)).size;
+    const opts = { imperial: false, leadKey: null, rebuilding: false };
+    const next: Record<string, number> = { ...current };
+    if (done >= 4) {
+      for (const c of nextLoadCues(progression, reviewedWeek, opts)) next[c.key] = c.hold ? c.load.from : c.load.to;
+    } else {
+      for (const c of shortWeekLoadCues(progression, reviewedWeek, opts)) next[c.key] = c.kind === 'hold' ? c.load.from : c.load.to;
+    }
+    return next;
+  };
+
+  let loads = { ...start };
+  const history: string[] = [];
+  for (let w = 1; w <= 14; w++) {
+    const monday = addDays(DAY0, (w - 1) * 7);
+    if (w > 1) loads = prescribed(addDays(monday, -7), loads);
+    history.push(`w${w} squat ${loads.squat} / bench ${loads['bench press']} / deadlift ${loads.deadlift}`);
+    const L = (ex: string): number => loads[ex];
+    if (w === OBEDIENT_SHORT_WEEK) {
+      pushSets(addDays(monday, 3), 'bench press', 3, 8, roundPlate(L('bench press') * 0.85), 8);
+      continue;
+    }
+    pushSets(addDays(monday, 0), 'squat', 3, 5, L('squat'), 8);
+    pushSets(addDays(monday, 0), 'bench press', 3, 5, L('bench press'), 8);
+    pushSets(addDays(monday, 1), 'deadlift', 2, 5, L('deadlift'), 8);
+    pushSets(addDays(monday, 3), 'bench press', 3, 8, roundPlate(L('bench press') * 0.85), 8);
+    pushSets(addDays(monday, 5), 'squat', 2, 5, roundPlate(L('squat') * 0.9), 7, false);
+    pushSets(addDays(monday, 5), 'deadlift', 2, 5, roundPlate(L('deadlift') * 0.9), 7, false);
+  }
+  notes.push(`Week 1 loads: squat ${start.squat}, bench press ${start['bench press']}, deadlift ${start.deadlift} kg. From week 2 every Monday she lifts the loads the review of the week before prescribes (the real nextLoadCues after a full week, the real shortWeekLoadCues after a short one), top set of the week = that load.`);
+  notes.push(`Week ${OBEDIENT_SHORT_WEEK} (days ${(OBEDIENT_SHORT_WEEK - 1) * 7}-${OBEDIENT_SHORT_WEEK * 7 - 1}): only the Thursday bench volume session (an illness); the Monday, Tuesday and Saturday sessions are dropped. Obedient again from the next Monday.`);
+  notes.push(`Top loads by week: ${history.join('; ')}.`);
+
+  return {
+    ...base,
+    name: 'lifter_obedient',
+    title: `Lifter who does exactly what the app says (4 sessions a week, the prescribed loads, one ill week: week ${OBEDIENT_SHORT_WEEK})`,
+    sets,
+    inputNotes: [base.inputNotes[0], ...notes, base.inputNotes[base.inputNotes.length - 1]],
+  };
+}
+
 // ── imperial variant of runner_on_plan, only around phase transitions ──────
 
 export function runnerOnPlanImperial(phaseKey: (date: string) => string): Scenario {
@@ -627,6 +705,7 @@ export const SCENARIO_NAMES = [
   'lifter',
   'lifter_imperial',
   'lifter_short_week',
+  'lifter_obedient',
   'weight_loss',
   'weight_loss_logged',
   'runner_on_plan',
@@ -656,6 +735,7 @@ export function buildScenario(name: ScenarioName): Scenario {
     case 'lifter': return lifter();
     case 'lifter_imperial': return lifterImperial();
     case 'lifter_short_week': return lifterShortWeek();
+    case 'lifter_obedient': return lifterObedient();
     case 'weight_loss': return weightLoss();
     case 'weight_loss_logged': return weightLossLogged();
     case 'runner_on_plan': return runnerOnPlan();

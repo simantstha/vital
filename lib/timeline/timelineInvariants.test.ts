@@ -7,11 +7,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { TAPER_GOOD_MIN_FRACTION, racePhaseInfo } from '../enduranceProgression';
-import { liftLapseMinDays } from '../liftChange';
+import { weekFitsSessionTarget, type GoalLiftReturn } from '../goalProgress';
+import { liftLapseMinDays, liftReturnDisplay, liftShortName } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline } from './engine';
-import { SCENARIO_NAMES, buildScenario, type ScenarioName } from './scenarios';
+import { OBEDIENT_SHORT_WEEK, SCENARIO_NAMES, buildScenario, type ScenarioName } from './scenarios';
 import { addDays, dayDiff, weekdayOf, type DaySnapshot } from './types';
 
 const ALL: readonly ScenarioName[] = SCENARIO_NAMES;
@@ -1301,7 +1302,7 @@ invariant(LIFTERS, 'a muscle review never asks to make up, catch up or lock in t
 });
 
 // The same week, the other way round: a muscle week with 1..target-1 sessions says "Back to N this week" + "don't make up", ends with
-// "starting today" (the review is read on its Monday) and cues the planned load of every main lift she did NOT train that week: the
+// "starting today" (the review is read on its Monday, unless she has lifted that day) and cues the planned load of every main lift she did NOT train that week: the
 // step the previous week's cue already gave ("Squat 112.5 kg"), taken from the scenario's own rows so a wrong load cannot excuse itself.
 invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week", not to make up the missed ones, and repeats the planned load of each lift skipped', (snaps, name) => {
   const scn = buildScenario(name);
@@ -1318,7 +1319,9 @@ invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week"
     checked++;
     const text = plain(r.nextWeek);
     if (!new RegExp(`^Back to ${target} this week — don't make up the missed ones\\.`).test(text)) out.push({ snap, detail: `review.nextWeek does not open with the no-makeup line: "${visible(r.nextWeek)}"` });
-    if (!/, starting today\.$/.test(text)) out.push({ snap, detail: `review.nextWeek does not end "starting today.": "${visible(r.nextWeek)}"` });
+    // (Wave 23s: not once she has already lifted on the review's own Monday - "starting today" is then stale.)
+    const liftedMonday = scn.sets.some(x => !x.isWarmup && x.day === snap.date);
+    if (liftedMonday ? /\btoday\b/.test(text) : !/, starting today\.$/.test(text)) out.push({ snap, detail: `review.nextWeek ${liftedMonday ? 'says "today" after a session on its Monday' : 'does not end "starting today."'}: "${visible(r.nextWeek)}"` });
     const weekStart = r.weekStart;
     const prevStart = addDays(weekStart, -7);
     for (const ex of ['squat', 'deadlift']) {
@@ -1527,14 +1530,17 @@ invariant(LIFTERS, 'while every lift is rebuilding, the card reasons and the coa
     const imperial = buildScenario(name).profile.units === 'imperial';
     const card = plain(snap.card?.reasons.map(r => r.text).join(' | ') ?? '');
     const coach = plain((snap.coach ?? []).join(' | '));
-    for (const r of rets) {
+    for (const [i, r] of rets.entries()) {
+      // The headline lift's line prints its numbers, so its share is of THOSE (whole kg or lb); the standing line and the coach line print
+      // none, so their share is of whole kg whatever the unit (wave 23s: a lb lifter reads the same 95% as a kg one).
       const f = imperial ? 2.20462 : 1;
       const pre = Math.round(r.preBreakKg * f);
       const recent = Math.min(Math.round(r.recentKg * f), pre - 1);
-      const pct = Math.min(99, Math.round((recent / pre) * 100));
-      const label = r.name.toLowerCase();
-      if (!new RegExp(`${label}[^|]*\\b${pct}%`, 'i').test(card)) out.push({ snap, detail: `card reasons do not give ${r.name} at ${pct}%: "${visible(card)}"` });
-      if (!new RegExp(`${label} ${pct}% of its pre-break best`, 'i').test(coach)) out.push({ snap, detail: `coach lines do not give ${r.name} at ${pct}%: "${visible(coach)}"` });
+      const shownPct = Math.min(99, Math.round((recent / pre) * 100));
+      const kgPct = liftReturnDisplay(r, false).pct;
+      const label = liftShortName(r.exercise);
+      if (!new RegExp(`${i === 0 ? r.name.toLowerCase() : label}[^|]*\\b${i === 0 ? shownPct : kgPct}%`, 'i').test(card)) out.push({ snap, detail: `card reasons do not give ${r.name} at ${i === 0 ? shownPct : kgPct}%: "${visible(card)}"` });
+      if (!new RegExp(`${r.name.toLowerCase()} ${kgPct}% of its pre-break best`, 'i').test(coach)) out.push({ snap, detail: `coach lines do not give ${r.name} at ${kgPct}%: "${visible(coach)}"` });
     }
   }
   if (name === 'lifter') assert.ok(days > 0, `${name}: no day had two or more lifts all rebuilding, so this invariant checked nothing`);
@@ -1591,16 +1597,15 @@ invariant(LIFTERS, 'a "back at / above / at or above pre-break" sentence matches
 });
 
 // "Lifts up, week short — Squat +10 kg" read like a load added to the bar: the number is the estimated 1RM, so the headline says so.
-invariant(LIFTERS, 'a "Lifts up, ..." headline says the number is the est. 1RM', (snaps, name) => {
+// (Wave 23s: a slack week now leads with "Week short — 1 of 4 so far", so no lifter scenario reaches a "Lifts up" headline any more; the
+// unit tests in lib/goalProgress.test.ts cover "Lifts up, sessions behind". The invariant stays for the day one appears.)
+invariant(LIFTERS, 'a "Lifts up, ..." headline says the number is the est. 1RM', snaps => {
   const out: Violation[] = [];
-  let seen = 0;
   for (const snap of snaps) {
     const h = snap.card?.headline;
     if (h == null || !/^Lifts up\b/.test(plain(h))) continue;
-    seen++;
     if (!/est\. 1RM/.test(plain(h))) out.push({ snap, detail: `card.headline: "${visible(h)}"` });
   }
-  if (name === 'lifter_short_week') assert.ok(seen > 0, `${name}: no "Lifts up" headline appeared, so this invariant checked nothing`);
   return out;
 });
 
@@ -1708,7 +1713,7 @@ invariant(LIFTERS, 'a review of a week with at most half its planned sessions ra
       if (st.tone === 'good') out.push({ snap, detail: `${r.weekGap.done} of ${r.weekGap.target} sessions: stat "${st.label}" ${st.value} is rated good, but the lift had no working-weight set in the reviewed week (top ${now ?? 'none'} kg vs ${best ?? 'none'} kg before)` });
       for (const t of texts) if (plain(t.text).includes(`${st.label} +`)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" leads with a ${st.label} gain, but the lift had no working-weight set in the reviewed week` });
     }
-    if (!gainShown && !/^\d+ of \d+ sessions — a short week$/.test(plain(r.headline))) out.push({ snap, detail: `review.headline: "${visible(r.headline)}" (a slack week with no lift gain to show leads with the week: "N of M sessions — a short week")` });
+    if (!gainShown && !/^\d+ of \d+ sessions last week — a short week$/.test(plain(r.headline))) out.push({ snap, detail: `review.headline: "${visible(r.headline)}" (a slack week with no lift gain to show leads with the week: "N of M sessions last week — a short week")` });
   }
   if (name === 'lifter_short_week') assert.ok(checked > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
   return out;
@@ -2459,5 +2464,352 @@ invariant(RUNNERS, 'a cutback week\'s negative change is said "as planned" on th
     }
   }
   if (name === 'runner_on_plan_obedient') assert.ok(seen > 0, `${name}: no cutback week showed a negative change, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// wave 23s: strength round 5 (strength coach + 3 lifter personas). Every invariant here was written BEFORE the rule it locks in.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// G-S. lifter_obedient does exactly what the app says (the prescribed loads, 4 sessions a week) except for ONE ill week (week 7, only
+// Thursday). Outside that week - its cards, and the review that rates it - she is never criticised: no amber line on the card, no
+// "behind"/"stalled" verdict, no review slip, no amber review stat, no "mixed"/"tough" week.
+const OBEDIENT_ILL_START = addDays('2026-03-02', (OBEDIENT_SHORT_WEEK - 1) * 7);
+const OBEDIENT_ILL_END = addDays(OBEDIENT_ILL_START, 6);
+
+invariant(['lifter_obedient'], 'an obedient lifter is never criticised outside her one ill week (no amber line, no slip, no behind / stalled / tough)', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const inIllWeek = snap.date >= OBEDIENT_ILL_START && snap.date <= OBEDIENT_ILL_END;
+    if (!inIllWeek && snap.card) {
+      checked++;
+      for (const r of snap.card.reasons) if (r.tone === 'watch') out.push({ snap, detail: `card.reasons (${r.kind}) is amber: "${visible(r.text)}"` });
+      if (snap.card.verdict === 'behind' || snap.card.verdict === 'stalled' || snap.card.verdict === 'too_fast') out.push({ snap, detail: `card verdict ${snap.card.verdict}: "${visible(snap.card.headline)}"` });
+    }
+    const r = snap.review?.review;
+    if (r && r.weekStart !== OBEDIENT_ILL_START) {
+      if (r.slip != null) out.push({ snap, detail: `review.slip: "${visible(r.slip)}"` });
+      for (const st of r.stats) if (st.tone === 'watch') out.push({ snap, detail: `review stat ${st.label} is amber: ${st.value} ${st.comparison ?? ''}` });
+      if (r.weekRating === 'tough' || r.weekRating === 'mixed') out.push({ snap, detail: `week rated ${r.weekRating}: "${visible(r.headline)}"` });
+    }
+  }
+  assert.ok(checked > 0, `${name}: no card day was checked`);
+  return out;
+});
+
+// G-S. Never two different loads for the same lift on one day: every "<lift> A → B kg", "<lift> ~X kg" or "<lift> X kg" in the day's texts
+// (card, coach lines, opener, review) that names a load for a lift names the SAME load as the others of that lift that day.
+const LOAD_MENTION = /\b(squat|bench(?: press)?|deadlift|overhead press)\s+(~?)(\d+(?:\.\d+)?)(?:\s?→\s?(\d+(?:\.\d+)?))?\s?(kg|lb)\b/gi;
+const liftWord = (w: string): string => (/^bench/i.test(w) ? 'bench' : w.toLowerCase());
+
+/** Every load a text names for a lift: the load to lift (the arrow's right side, else the single number). */
+function loadMentions(text: string): Array<{ lift: string; load: number; unit: string; raw: string }> {
+  return [...plain(text).matchAll(LOAD_MENTION)].map(m => ({ lift: liftWord(m[1]), load: Number(m[4] ?? m[3]), unit: m[5], raw: m[0] }));
+}
+
+invariant(LIFTERS, 'one load per lift per day: no two texts of the same day name different loads for the same lift', (snaps) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const byLift = new Map<string, Array<{ load: number; where: string; raw: string }>>();
+    for (const t of allTexts(snap)) for (const m of loadMentions(t.text)) byLift.set(m.lift, [...(byLift.get(m.lift) ?? []), { load: m.load, where: t.where, raw: m.raw }]);
+    for (const [lift, ms] of byLift) {
+      if (new Set(ms.map(m => m.load)).size > 1) out.push({ snap, detail: `${lift}: ${ms.map(m => `"${m.raw}" (${m.where})`).join(' vs ')}` });
+    }
+  }
+  return out;
+});
+
+// G-S. The loop closes for an obedient lifter: the load a review prescribes for a lift IS what she lifts the week after (her top working
+// set of that lift), and the next review starts its step from that load, on the grid and without a "~". Counted from the scenario's rows.
+invariant(['lifter_obedient'], 'the loads a review prescribes are the loads she then lifts, and the next review steps from them (no "~", exactly one step)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const exerciseOf: Record<string, string> = { squat: 'squat', bench: 'bench press', deadlift: 'deadlift' };
+  const top = (exercise: string, from: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === exercise && !s.isWarmup && s.day >= from && s.day <= addDays(from, 6) && s.loadKg != null).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  const out: Violation[] = [];
+  let pairs = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const nextMonday = addDays(r.weekStart, 7);
+    // The ill week is the one week she is not following the prescription (its loads are a single volume session), on either side of it.
+    if (nextMonday === OBEDIENT_ILL_START || r.weekStart === OBEDIENT_ILL_START) continue;
+    for (const m of plain(r.nextWeek).matchAll(/\b(squat|bench|deadlift)\s+(~?)(\d+(?:\.\d+)?)(?:\s?→\s?(\d+(?:\.\d+)?))?\s?kg\b/gi)) {
+      const exercise = exerciseOf[liftWord(m[1])];
+      const prescribed = Number(m[4] ?? m[3]);
+      const lifted = top(exercise, nextMonday);
+      if (lifted == null) continue;
+      pairs++;
+      if (lifted !== prescribed) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}" prescribes ${liftWord(m[1])} ${prescribed} kg, she lifted ${lifted} kg in the week of ${nextMonday}` });
+      if (m[4] != null) {
+        const was = top(exercise, r.weekStart);
+        if (m[2] === '~' || was !== Number(m[3]) || Math.abs(Number(m[4]) - Number(m[3]) - 2.5) > 1e-9) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}": ${m[0]} should step one grid step from the ${was} kg she lifted that week, without a "~"` });
+      }
+    }
+  }
+  assert.ok(pairs > 8, `${name}: only ${pairs} prescribed loads were compared, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// ── Main item: the slack-week rule on every surface. A muscle week with 0 < sessions <= half the target that can no longer reach its target
+// (the card's Thu-Sun) shows no green lift or weight line unless that lift was trained at working weight that week (a top set at 90% or more
+// of its best in the 4 weeks before); the card's headline leads with the week; the review's headline names it, its weight stat is neutral and
+// its win is the session she did. Counted from the scenario's own rows, so a card that miscounts cannot excuse itself.
+const SESSIONS_RE_WEEK = /^Week short — \d+ of \d+ so far$/;
+
+interface SlackDay { done: number; target: number; monday: string }
+
+function slackCardDay(name: ScenarioName, date: string): SlackDay | null {
+  const scn = buildScenario(name);
+  const target = scn.user.weeklySessions;
+  if (target == null) return null;
+  const monday = mondayOfDate(date);
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const done = [...trained].filter(d => d >= monday && d <= date).length;
+  const daysLeft = 7 - dayDiff(date, monday);
+  return done > 0 && done * 2 <= target && !weekFitsSessionTarget(done, target, daysLeft, trained.has(date)) ? { done, target, monday } : null;
+}
+
+/** True when `exercise` had a top set in [from, to] at 90% or more of its best top set in the 4 weeks before `from` (or none before). */
+function trainedAtWorkingWeight(name: ScenarioName, exercise: string, from: string, to: string): boolean {
+  const scn = buildScenario(name);
+  const top = (a: string, b: string): number | null => {
+    const loads = scn.sets.filter(s => s.exercise === exercise && !s.isWarmup && s.day >= a && s.day <= b && s.loadKg != null && s.loadKg > 0).map(s => s.loadKg as number);
+    return loads.length > 0 ? Math.max(...loads) : null;
+  };
+  const now = top(from, to);
+  const best = top(addDays(from, -28), addDays(from, -1));
+  return now != null && (best == null || now >= best * 0.9 - 1e-9);
+}
+
+/** The exercise key a lift line or stat label names ("Squat est. 1RM …", "This week: Bench Press est. 1RM …"), or null. */
+function exerciseNamed(name: ScenarioName, text: string): string | null {
+  const scn = buildScenario(name);
+  const hit = [...new Map(scn.sets.map(s => [s.display, s.exercise])).entries()].find(([display]) => plain(text).toLowerCase().includes(`${display.toLowerCase()} est. 1rm`));
+  return hit ? hit[1] : null;
+}
+
+invariant(LIFTERS, 'in a slack week (at most half the sessions, week out of reach) the card leads with the week and shows no green lift or weight line for a lift not trained at working weight', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    const slack = card ? slackCardDay(name, snap.date) : null;
+    if (!card || !slack) continue;
+    days++;
+    const headline = plain(card.headline);
+    if (card.liftReturn == null && !/^No sessions for/.test(headline) && card.verdict !== 'behind' && !SESSIONS_RE_WEEK.test(headline)) {
+      out.push({ snap, detail: `${slack.done} of ${slack.target} sessions, week out of reach: headline "${visible(card.headline)}" should lead with the week ("Week short — ${slack.done} of ${slack.target} so far")` });
+    }
+    for (const r of card.reasons) {
+      if (r.tone !== 'good') continue;
+      if (r.kind === 'rate') out.push({ snap, detail: `green weight line in a slack week: "${visible(r.text)}"` });
+      if (r.kind !== 'lift') continue;
+      const exercise = exerciseNamed(name, r.text);
+      if (exercise == null || !trainedAtWorkingWeight(name, exercise, slack.monday, snap.date)) out.push({ snap, detail: `green lift line in a slack week for a lift not trained at working weight this week: "${visible(r.text)}"` });
+    }
+  }
+  if (name === 'lifter_short_week' || name === 'lifter_obedient') assert.ok(days >= 4, `${name}: only ${days} slack-week day(s) were stepped, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+invariant(LIFTERS, 'in a slack-week REVIEW the headline names the week, the weight stat is neutral, the win is the session she did and the push follows the headline', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    const r = rv?.review;
+    if (!rv || !r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0 || r.weekGap.done * 2 > r.weekGap.target) continue;
+    checked++;
+    const weekEnd = addDays(r.weekStart, 6);
+    const returning = rv.progress.liftReturn != null;
+    for (const st of r.stats) {
+      if (st.tone !== 'good') continue;
+      const exercise = exerciseNamed(name, st.label);
+      if (exercise == null && /weight/i.test(st.label)) out.push({ snap, detail: `green weight stat in a slack week: ${st.label} ${st.value} [good]` });
+      else if (exercise != null && !trainedAtWorkingWeight(name, exercise, r.weekStart, weekEnd)) out.push({ snap, detail: `green lift stat in a slack week for a lift not trained at working weight: ${st.label} ${st.value}` });
+    }
+    if (r.win != null && /weight/i.test(plain(r.win))) out.push({ snap, detail: `review.win cites the scale in a slack week: "${visible(r.win)}"` });
+    if (!returning && !/^\d+ of \d+ sessions last week — a short week$/.test(plain(r.headline)) && !r.stats.some(st => st.tone === 'good' && exerciseNamed(name, st.label) != null)) {
+      out.push({ snap, detail: `review.headline "${visible(r.headline)}" should name the week ("${r.weekGap.done} of ${r.weekGap.target} sessions last week — a short week")` });
+    }
+    if (plain(rv.alert.body) !== plain(r.headline)) out.push({ snap, detail: `push body "${visible(rv.alert.body)}" does not follow the headline "${visible(r.headline)}"` });
+  }
+  if (name === 'lifter_short_week' || name === 'lifter_obedient') assert.ok(checked > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P3 copy. "(last: Apr 16)" on Apr 16 is "(last: today)" (and "yesterday" the day after); the rate is "about 0.4 lb/wk"; a rebuild's
+// standing line is a lowercase list of est. 1RM shares, the same in kg and lb (no numbers on the line, so the % comes from kg); and
+// when every lift is rebuilding the headline says which one is furthest behind.
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const shortDateOf = (day: string): string => `${MONTH_NAMES[Number(day.slice(5, 7)) - 1]} ${Number(day.slice(8, 10))}`;
+
+invariant(LIFTERS, 'a "(last: …)" never names today or yesterday by its date', (snaps, name) => {
+  const out: Violation[] = [];
+  let lasts = 0;
+  for (const snap of snaps) {
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const m = /\(last: ([A-Z][a-z]{2} \d{1,2})\)/.exec(plain(t.text));
+      if (!m) continue;
+      lasts++;
+      if (m[1] === shortDateOf(snap.date)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" should say "(last: today)"` });
+      if (m[1] === shortDateOf(addDays(snap.date, -1))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" should say "(last: yesterday)"` });
+    }
+  }
+  if (name === 'lifter_short_week') assert.ok(lasts > 0, `${name}: no "(last: …)" appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(LIFTERS, 'a lean-gain weight rate is "about 0.4 kg/wk" (one decimal), not 0.37 lb/wk', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'rate') continue;
+      const text = plain(r.text);
+      if (/^Trend weight (?:up|down) /.test(text) && !/^Trend weight (?:up|down) about \d+(?:\.\d)? (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `card.reasons (rate): "${visible(r.text)}"` });
+    }
+  }
+  return out;
+});
+
+/** The lifts' standing line: lowercase short names, whole-kg percentages (unit-independent, the line shows no numbers). */
+function standingLine(snap: DaySnapshot): string | null {
+  const rets = snap.card?.liftReturns;
+  if (!rets || rets.length < 2 || rets.some(r => r.regained)) return null;
+  const others = rets.slice(1);
+  const list = others.map(r => `${others.length > 1 ? liftShortName(r.exercise) : r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ');
+  return others.length > 1 ? `${list} of pre-break est. 1RM` : `${list} of its pre-break est. 1RM`;
+}
+
+invariant(LIFTERS, 'while every lift is rebuilding the standing line is "bench 95%, deadlift 94% of pre-break est. 1RM": lowercase, est. 1RM, the same % in kg and lb', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    const want = standingLine(snap);
+    if (want == null) continue;
+    days++;
+    const has = (snap.card?.reasons ?? []).some(r => plain(r.text) === want);
+    if (!has) out.push({ snap, detail: `card.reasons has no "${want}": ${(snap.card?.reasons ?? []).map(r => `"${visible(r.text)}"`).join(' | ')}` });
+  }
+  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(days > 0, `${name}: no all-rebuilding day with two or more lifts, so this invariant checked nothing`);
+  return out;
+});
+
+test('lifter_imperial: a rebuild shows the same lift percentages as lifter on the same day (the line has no numbers, so they come from kg)', () => {
+  const kg = runTimeline('lifter');
+  const lb = runTimeline('lifter_imperial');
+  let compared = 0;
+  const bad: string[] = [];
+  for (const [i, k] of kg.entries()) {
+    const a = k.card?.reasons.find(r => / pre-break est\. 1RM$/.test(plain(r.text)))?.text;
+    const b = lb[i].card?.reasons.find(r => / pre-break est\. 1RM$/.test(plain(r.text)))?.text;
+    if (a == null && b == null) continue;
+    compared++;
+    if (a !== b) bad.push(`day ${i}: kg "${a}" vs lb "${b}"`);
+  }
+  assert.ok(compared > 0, 'no rebuild standing line was compared');
+  assert.deepEqual(bad.slice(0, 5), [], `${bad.length} day(s) differ`);
+});
+
+invariant(LIFTERS, 'while every lift is rebuilding the card and review headlines say which lift is furthest behind when it is not the headline lift', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  const check = (snap: DaySnapshot, where: string, headline: string | undefined, rets: readonly GoalLiftReturn[] | null | undefined): void => {
+    if (!rets || rets.length < 2 || rets.some(r => r.regained) || headline == null) return;
+    const worst = rets.reduce((w, r) => (r.recentKg / r.preBreakKg < w.recentKg / w.preBreakKg - 1e-9 ? r : w), rets[0]);
+    if (worst.exercise === rets[0].exercise) return;
+    days++;
+    if (!plain(headline).includes(`${liftShortName(worst.exercise)} furthest`)) out.push({ snap, detail: `${where} "${visible(headline)}" does not name ${worst.name} as furthest behind (${rets.map(r => `${r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ')})` });
+  };
+  for (const snap of snaps) {
+    check(snap, 'card.headline', snap.card?.headline, snap.card?.liftReturns);
+    check(snap, 'review.headline', snap.review?.review.headline, snap.review?.progress.liftReturns);
+  }
+  if (name === 'lifter') assert.ok(days > 0, `${name}: no all-rebuilding day with the furthest lift behind the headline lift, so this invariant checked nothing`);
+  return out;
+});
+
+// ── Imperial "~": a next-load cue says "~" exactly when its start is not the load she logged, and the start rounds DOWN to the grid, so the
+// real step from her load is never more than 5 lb. lifter_imperial read "bench ~195 → 200" for a 193 lb bench (+7 from what she lifted).
+// The logged load is one of that lift's weekly top sets (lb, to the whole pound) of the reviewed weeks.
+invariant(['lifter_imperial'], 'every lb next-load cue starts at the grid below the load she logged, says "~" when it moved, and is at most 5 lb above what she lifted', (snaps, name) => {
+  const scn = buildScenario(name);
+  const exerciseOf: Record<string, string> = { squat: 'squat', bench: 'bench press', deadlift: 'deadlift' };
+  const toLb = (kg: number): number => Math.round(kg * 2.20462);
+  const out: Violation[] = [];
+  let cues = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    for (const m of plain(r.nextWeek).matchAll(/\b(squat|bench|deadlift)\s+(~?)(\d+)\s?→\s?(\d+)\s?lb\b/gi)) {
+      const exercise = exerciseOf[liftWord(m[1])];
+      const tops = new Set<number>();
+      for (let w = 0; w < 5; w++) {
+        const from = addDays(r.weekStart, -7 * w);
+        const loads = scn.sets.filter(x => x.exercise === exercise && !x.isWarmup && x.day >= from && x.day <= addDays(from, 6) && x.loadKg != null).map(x => toLb(x.loadKg as number));
+        if (loads.length > 0) tops.add(Math.max(...loads));
+      }
+      const start = Number(m[3]);
+      const to = Number(m[4]);
+      cues++;
+      const fits = [...tops].some(l => Math.floor(l / 5) * 5 === start && (l !== start) === (m[2] === '~') && to - l > 0 && to - l <= 5);
+      if (!fits) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}": ${m[0]} does not start at the grid below a logged load (${[...tops].join(', ')} lb), with "~" only when it moved, and at most 5 lb above it` });
+    }
+  }
+  assert.ok(cues > 5, `${name}: only ${cues} lb next-load cues appeared, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// ── Day 70: the Monday review said "2nd week off — book one easy session today at ~90% … (Squat ~102.5 kg)" on the Monday she had already
+// squatted 110 kg. A review read on a day she has already lifted (the loader reads her sets relative to the real clock, and the review is
+// recomputed when opened) never tells her to start today; after a week without a session it says she is already back, and names the session.
+invariant(LIFTERS, 'a review read on a Monday she has already lifted does not say "today" (a week off: "You\'re already back — Monday\'s 110 kg squat was your first session; …")', (snaps, name) => {
+  const scn = buildScenario(name);
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const out: Violation[] = [];
+  let weeksOff = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || !trained.has(snap.date)) continue;
+    if (/\btoday\b/i.test(plain(r.nextWeek))) out.push({ snap, detail: `she lifted on ${snap.date}, but review.nextWeek says "${visible(r.nextWeek)}"` });
+    if (r.weekGap?.kind === 'sessions' && r.weekGap.done === 0) {
+      weeksOff++;
+      const imperial = scn.profile.units === 'imperial';
+      const lifted = scn.sets.filter(x => !x.isWarmup && x.day === snap.date && x.loadKg != null).map(x => (imperial ? Math.round((x.loadKg as number) * 2.20462) : (x.loadKg as number)));
+      const head = /^You're already back — Monday's (\d+(?:\.\d+)?)\s(?:kg|lb) \w+(?: and \d+(?:\.\d+)?\s(?:kg|lb) [\w ]+)? (?:was|were) your first session; /.exec(plain(r.nextWeek));
+      if (!head) out.push({ snap, detail: `a week off, then a session on the review's Monday: review.nextWeek "${visible(r.nextWeek)}" should open "You're already back — Monday's … was your first session; …"` });
+      else if (!lifted.includes(Number(head[1]))) out.push({ snap, detail: `review.nextWeek names ${head[1]} but she lifted ${lifted.join(', ')} that Monday` });
+    }
+  }
+  if (name === 'lifter') assert.ok(weeksOff > 0, `${name}: no week off was followed by a session on the review's Monday, so this invariant checked nothing`);
+  return out;
+});
+
+// ── The first time "est. 1RM" reaches a lifter it is explained, once: in the Next-week row of the first weekly review that shows an
+// est. 1RM stat (iOS shows nextWeek verbatim, unlimited lines; the stat tile's comparison is capped at two lines and the card shows
+// three reasons). Never on the card (that would repeat daily), never in a later review.
+const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
+
+invariant(LIFTERS, 'est. 1RM is explained once: in the first weekly review that shows an est. 1RM stat, never on the card and never again', (snaps, name) => {
+  const out: Violation[] = [];
+  const firstWithStat = snaps.find(s => s.review?.review.stats.some(st => st.label.endsWith('est. 1RM')));
+  const holders: DaySnapshot[] = [];
+  for (const snap of snaps) {
+    for (const t of allTexts(snap)) {
+      if (!/most you could lift once/.test(plain(t.text))) continue;
+      if (!t.where.startsWith('review.')) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" explains est. 1RM outside the review` });
+      else if (!holders.includes(snap)) holders.push(snap);
+    }
+  }
+  assert.ok(firstWithStat, `${name}: no review showed an est. 1RM stat`);
+  if (holders.length !== 1 || holders[0] !== firstWithStat) {
+    out.push({ snap: firstWithStat, detail: `the explainer should be in the first review with an est. 1RM stat (${describeDay(firstWithStat)}) and nowhere else, found on: ${holders.map(describeDay).join(', ') || 'no day'}` });
+  } else if (!plain(firstWithStat.review?.review.nextWeek ?? '').endsWith(EST_1RM_EXPLAINER)) {
+    out.push({ snap: firstWithStat, detail: `review.nextWeek should end "${EST_1RM_EXPLAINER}": "${visible(firstWithStat.review?.review.nextWeek ?? '')}"` });
+  }
   return out;
 });

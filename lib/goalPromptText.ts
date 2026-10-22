@@ -305,9 +305,9 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   if (rebuilding.length > 0) {
     const back = returns.filter(r => r.regained);
     // Where each rebuilding lift stands whenever there is more than one lift to say it of (some back, or several still rebuilding):
-    // the percentage as the card prints it (of the shown numbers), not the payload's rounded-down one.
-    const imperial = units === 'imperial';
-    const behind = rebuilding.length < returns.length || rebuilding.length > 1 ? ` (${rebuilding.map(r => `${r.name.toLowerCase()} ${liftReturnDisplay(r, imperial).pct}% of its pre-break best`).join(', ')}${back.length > 0 ? `; ${back.map(r => r.name.toLowerCase()).join(', ')} back` : ''})` : '';
+    // the percentage as the card prints it, not the payload's rounded-down one - of whole kg whatever the unit, like the card's
+    // number-free standing line (a lb and a kg lifter read the same share).
+    const behind = rebuilding.length < returns.length || rebuilding.length > 1 ? ` (${rebuilding.map(r => `${r.name.toLowerCase()} ${liftReturnDisplay(r, false).pct}% of its pre-break best`).join(', ')}${back.length > 0 ? `; ${back.map(r => r.name.toLowerCase()).join(', ')} back` : ''})` : '';
     lines.push(`- Returning from a ${returns[0].breakDays}-day break (ended ${returns[0].endedOn}): lifts are rebuilding${behind} — do not call this a stall or suggest a deload${back.length > 0 ? ', and do not say every lift is back' : ''}.`);
   }
 
