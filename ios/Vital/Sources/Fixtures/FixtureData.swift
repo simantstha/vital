@@ -886,7 +886,7 @@ enum FixtureData {
         case .endurance:
             content = "Mostly sleep. Last night was \(lastNight) and you've averaged \(hoursMinutes(avgMinutes)) this week, with \(shortNights) of the last 7 nights under 6 hours. Your HRV is \(abs(hrvGap)) ms under your normal — the pattern you usually get after short nights."
         case .weightLoss:
-            content = "Mostly short sleep. Last night was \(lastNight), about \(humanDuration(usualMinutes - profile.sleepMinutes)) under your usual — but your HRV is \(abs(hrvGap)) ms above your normal, so you're recovering fine. With two night feeds, the short sleep is expected — protect a nap or an earlier wind-down on non-feed nights; it's not your training."
+            content = "Mostly short sleep. Last night was \(lastNight), about \(humanDuration(usualMinutes - profile.sleepMinutes)) under your usual — but your HRV is \(abs(hrvGap)) ms above your normal, so you're recovering fine. With two night feeds, that's expected — protect a nap; it's not your training."
         default:
             content = "Not much points to sleep — last night was \(lastNight) and your HRV (\(hrvToday) ms) is inside your normal \(hrvRange) ms. A heavy training week can feel draining even when recovery looks fine; keep protein up and ease the next session if it lingers."
         }
