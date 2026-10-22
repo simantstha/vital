@@ -67,6 +67,7 @@ import {
   longRunCapNote,
   longRunWord,
   CUTBACK_SKIPPED_FRACTION,
+  COMEBACK_MAX_GROWTH,
   comebackCapRead,
   overCapPhrase,
   overUpToCap,
@@ -2312,8 +2313,12 @@ function buildNextWeekText(input: WeeklyReviewInput, next: EnduranceWeekPlan): s
   const windAfter = weekAfterNextWindDown(input);
   const usual = next.comeback != null && next.comeback.medianKm > nextKm + 0.5 ? next.comeback.medianKm : null;
   const growthText = `then add ~${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}% a week`;
+  // Wave 23e: a comeback climbs a ladder (each ceiling up to 25% over the week just run), not 10% a week: name it, and the 10% that follows once he is back.
+  const ladderText = usual != null
+    ? `then up to ~${Math.round((COMEBACK_MAX_GROWTH - 1) * 100)}% a week until you're back at your usual ~${distanceText(input, usual)}${usual < next.goalKm - 0.5 ? `, about ${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}% after that` : ''}`
+    : growthText;
   const after = windAfter != null ? thenWindDown(windAfter)
-    : usual != null ? `${growthText}, back toward your usual ~${distanceText(input, usual)}`
+    : usual != null ? ladderText
     : reachesTarget ? `${targetText} the week after`
     : `${growthText} toward ${targetText}`;
   // A careful comeback's target is a ceiling ("up to ~16 km"), not a step to hit.

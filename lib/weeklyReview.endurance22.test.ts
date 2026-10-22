@@ -84,7 +84,7 @@ test('a comeback week\'s "Next week" climbs "back toward your usual ~N km", as t
   // Weeks 1-6 build (15..25 km), two weeks off, a restart week of 12 km, then the comeback week ran 14.5 km.
   const history = [15, 17, 19, 21, 23, 25, 0, 0, 12, 14.5];
   const r = computeWeeklyReview(planReview(history));
-  assert.match(r.nextWeek, /^Build up to ~\d+ km: long run [\d.]+ km, the rest mostly easy runs; then add ~10% a week, back toward your usual ~22 km\.$/);
+  assert.match(r.nextWeek, /^Build up to ~\d+ km: long run [\d.]+ km, the rest mostly easy runs; then up to ~25% a week until you're back at your usual ~22 km, about 10% after that\.$/);
 });
 
 test('recovery week 1\'s Volume stat says the week before held the race (22e)', () => {

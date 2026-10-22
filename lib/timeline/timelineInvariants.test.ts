@@ -2122,7 +2122,8 @@ invariant(RUNNERS, '"Next week" never sends a runner "toward 30 km" / "30 km the
 });
 
 // A comeback week's "Next week" and the same Monday's card say the SAME place the climb goes: "back toward your usual ~29 km", not "toward 30 km".
-const BACK_TOWARD_USUAL = /back toward your usual ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
+// ("back toward your usual ~22 km" on the card; since wave 23e the review names the ladder: "until you're back at your usual ~22 km".)
+const BACK_TOWARD_USUAL = /back (?:toward|at) your usual ~(\d+(?:\.\d+)?)\s?(km|mi)\b/;
 
 invariant(RUNNERS, "a comeback week's review Next week names the same usual km as the Monday card (\"back toward your usual ~29 km\")", (snaps, name) => {
   const out: Violation[] = [];
@@ -3533,5 +3534,24 @@ invariant(OBEDIENT, 'P2-4: no build-week "+N%" over 15% on any surface (card, co
     }
   }
   assert.ok(afterCutback > 0, `${name}: no review of a week right after a cutback was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P2-5: a comeback's "Next week" names the ladder it climbs, not "then add ~10% a week" ──────────────────────
+
+invariant(RUNNERS, 'P2-5: when the coming week is a comeback rung ("up to ~N km", back toward the usual week) the review\'s "Next week" names the ladder ("up to ~25% a week until you\'re back at your usual ~N km"), never "then add ~10% a week"', (snaps, name) => {
+  const out: Violation[] = [];
+  let comebackReviews = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    const plan = snap.card?.distance?.plan;
+    // (A rung that already reaches the usual week says "30 km the week after" and has no ladder left to name.)
+    if (!rv || !plan || plan.comebackKm == null || plan.kind !== 'build' || (plan.targetKm ?? 0) >= plan.comebackKm - 0.5) continue;
+    comebackReviews++;
+    const next = plain(rv.review.nextWeek);
+    if (/add ~10% a week/.test(next)) out.push({ snap, detail: `next week "${visible(rv.review.nextWeek)}" says +10% a week, the card's ceiling is ~${plan.targetKm} km (back toward ~${plan.comebackKm} km)` });
+    else if (!/up to ~25% a week until you're back at your usual ~[\d.]+ (?:km|mi)/.test(next)) out.push({ snap, detail: `next week "${visible(rv.review.nextWeek)}" does not name the ladder` });
+  }
+  if (name === 'runner_comeback_spike' || name === 'runner_comeback_obedient' || name === 'runner_messy') assert.ok(comebackReviews > 0, `${name}: no comeback review was stepped, so this invariant checked nothing`);
   return out;
 });

@@ -125,3 +125,12 @@ test('the week after a cutback is reviewed against the last full week before it:
   const plainWeek = computeWeeklyReview(planReview([15, 17, 19, 21, 23], { weekStart: '2026-10-12' }));
   assert.equal(stat(plainWeek, 'Volume')!.comparison, '+10% vs last week');
 });
+
+test('a comeback week\'s "Next week" names the ladder it climbs (up to ~25% a week until the usual week, about 10% after), not "then add ~10% a week" (23e P2-5)', () => {
+  // Weeks 1-8 build to 30 km; week 9 is one 6 km run then a break; week 10 comes back with 15 km.
+  const sick = planReview([15, 17, 19, 21, 23, 25, 28, 30, 6, 15]);
+  const sickWeek = { ...sick, workouts: sick.workouts.filter(w => !(w.day > addDays(WEEK_START, -7 + 1) && w.day <= addDays(WEEK_START, -7 + 6))) };
+  const r = computeWeeklyReview(sickWeek);
+  assert.match(r.nextWeek, /^Build up to ~\d+ km: long run [\d.]+ km, the rest mostly easy runs; then up to ~25% a week until you're back at your usual ~[\d.]+ km, about 10% after that\.$/);
+  assert.doesNotMatch(r.nextWeek, /add ~10% a week/);
+});

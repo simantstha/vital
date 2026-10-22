@@ -161,7 +161,7 @@ test('a comeback week more than 10% over its "up to" cap is "a touch over, fine"
   assert.equal(r.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
   assert.equal(r.win, null);
   assert.equal(r.slip, null);
-  assert.equal(r.nextWeek, 'Build up to ~18 km: long run 9 km, the rest mostly easy runs; then add ~10% a week, back toward your usual ~22 km.'); // the card: "back toward your usual ~22 km"
+  assert.equal(r.nextWeek, 'Build up to ~18 km: long run 9 km, the rest mostly easy runs; then up to ~25% a week until you\'re back at your usual ~22 km, about 10% after that.'); // the card: "back toward your usual ~22 km" (wave 23e: the review names the ladder)
   // Far past the ceiling it is a spike (a mixed week, with its gap), said in the ceiling's words, and next week stays AT the ceiling.
   const well = computeWeeklyReview(planReview([...history, 21]));
   assert.equal(well.headline, '4 sessions, 21 of up to ~15 km — well over the ceiling · goal 30 km');
