@@ -71,7 +71,12 @@ final class ScreenshotTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        if let run = testRun, !run.hasSucceeded {
+        // Check totalFailureCount, not hasSucceeded: XCTestRun.hasSucceeded is
+        // still false during tearDown (the run has not stopped yet), so testing
+        // it would annotate every test, including passing ones. totalFailureCount
+        // already holds the failures recorded so far, so this annotates only a
+        // test that has failed.
+        if let run = testRun, run.totalFailureCount > 0 {
             XCTFail("Last harness step: \(lastStep)")
         }
         try super.tearDownWithError()
