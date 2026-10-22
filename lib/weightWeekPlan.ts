@@ -265,6 +265,11 @@ export interface WeightWeekPlan {
    * off it: the pace a week earlier, so the card can show the honest range ("Down 0.37-0.58 kg/wk") instead of one rate that argues with "on track".
    */
   earlierPace: WeightPlanPace | null;
+  /**
+   * Additive (wave 23w). `earlierPace` is set and the two paces really land on opposite sides of the target date (one early, one late). False when both
+   * land before it (or both after), so the coach can say "a week ago the pace was ..." instead of "either side of the target date".
+   */
+  earlierPaceStraddles: boolean;
   /** A pace that a pace a week earlier confirms (the date may be stated). */
   confirmed: boolean;
   /** The goal is younger than 3 weeks as of `asOf`: only an early read. */
@@ -702,6 +707,16 @@ function plateauRun(c: Ctx, asOf: string): string[] {
 function plateauCauseFor(c: Ctx, asOf: string): WeightPlateauCause {
   const run = plateauRun(c, asOf);
   const intake = c.input.intakeDays;
+  // A cause the flat fortnight named a week before the plateau (on the same logs) is carried into it (wave 23w): "weekends ~2,400" and, a
+  // Monday later, "~2,350" for the same weekends is two numbers for one cause. Only a cause the logs named (not the plain "water") is carried.
+  if (run.length > 0) {
+    const fortnightSunday = addDays(run[run.length - 1], -7);
+    const known = through(c.days, fortnightSunday);
+    if (known.length > 0 && flatFortnightAt(c, known[known.length - 1].day) != null) {
+      const carried = judgeSpan(intake, fortnightSunday, c.input.targetKcal, FLAT_FORTNIGHT_DAYS);
+      if (carried != null && carried.kind !== 'water') return carried;
+    }
+  }
   for (let i = run.length - 1; i >= 0; i--) {
     const cause = judgeSpan(intake, run[i], c.input.targetKcal);
     if (cause) return cause;
@@ -1205,7 +1220,7 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
     weekStart, asOf, state: 'early', call: 'none', verdict: down ? 'progressing' : 'holding',
     etaDate: null, weeksVsTarget: null,
     action: { kind: 'keep_weighing', text: 'Keep weighing in — your pace settles after 3 weeks of weigh-ins' },
-    plateauCause: null, pace: null, earlierPace: null, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
+    plateauCause: null, pace: null, earlierPace: null, earlierPaceStraddles: false, confirmed: false, young: false, onPace: null, tooFast: false, nearlyThere: false, slow: false,
     away: false, farBehind: false, projectedEta: null, plateauMeanKg: null, flatWeeks: null, heldKg: null, firstPaceWeek: false, updated: null, step: null, staleSince: null,
   };
 
@@ -1449,15 +1464,22 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
   }
 
   // On pace because the pace now and the pace a week ago straddle the date: the single rate shown must not argue with the call (wave 22w).
+  // Whether they REALLY straddle it (one projection early, one late) is told apart from two that both land before it (wave 23w).
   let earlierPace: WeightPlanPace | null = null;
+  let earlierPaceStraddles = false;
   if (call === 'on_pace' && !unconfirmed && targetDate != null && targetKg != null) {
-    const projectsOnPace = (p: WeightPace | null): boolean => {
-      if (p == null) return false;
+    const daysAhead = (p: WeightPace | null): number | null => {
+      if (p == null) return null;
       const eta = paceEta(p, targetKg, { fromKg: paceCurrentKg(known, p), minPct: PLATEAU_MAX_PCT_PER_WEEK, maxDays: MAX_ETA_DAYS });
-      return eta != null && Math.abs(etaDaysAhead(eta, targetDate)) <= ON_PACE_MARGIN_DAYS;
+      return eta != null ? etaDaysAhead(eta, targetDate) : null;
     };
     const earlier = bridgedPace(known, addDays(anchor, -PACE_RECHECK_DAYS));
-    if (earlier != null && !projectsOnPace(pace)) earlierPace = { kgPerWeek: earlier.kgPerWeek, pctPerWeek: earlier.pctPerWeek, windowDays: earlier.windowDays };
+    const now = daysAhead(pace);
+    if (earlier != null && !(now != null && Math.abs(now) <= ON_PACE_MARGIN_DAYS)) {
+      earlierPace = { kgPerWeek: earlier.kgPerWeek, pctPerWeek: earlier.pctPerWeek, windowDays: earlier.windowDays };
+      const then = daysAhead(earlier);
+      earlierPaceStraddles = now != null && then != null && (now >= 0) !== (then >= 0);
+    }
   }
 
   return {
@@ -1465,6 +1487,7 @@ function planCore(input: WeightPlanInput, note: UpdateNote): WeightWeekPlan | nu
     state: 'pace',
     call,
     earlierPace,
+    earlierPaceStraddles,
     step: stepMarker,
     verdict,
     etaDate,

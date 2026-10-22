@@ -538,6 +538,40 @@ test('P1-1: the flat fortnight judges its cause over its own 14 days of logs', (
   assert.equal(plainSpaces(onTarget.action.text), "Keep 2,000 kcal; we'll look again next Monday");
 });
 
+test('P3-C: a cause the flat fortnight named is carried into the plateau a week later - one cause, one figure', () => {
+  // Weekends run 2,500 before day 42 and 2,200 after it: the 14 days of the fortnight (35-48) and the 21 of the plateau (35-55) average different figures.
+  const logs = intake(range(0, 70), n => (dow(n) >= 5 ? (n < 42 ? 2500 : 2200) : 1950) + (n % 3 === 0 ? 40 : -20));
+  const fortnight = planAt(STALL, 49, { intakeDays: logs });
+  assert.equal(fortnight.flatWeeks, 2);
+  assert.equal(fortnight.plateauCause?.kind, 'weekends');
+  const plateau = planAt(STALL, 56, { intakeDays: logs });
+  assert.equal(plateau.flatWeeks, 3);
+  assert.equal(plateau.plateauCause?.kind, 'weekends');
+  // The figure the plateau quotes is the one the fortnight named, not a re-judgement of the longer span.
+  assert.equal(plateau.plateauCause?.weekendAvgKcal, fortnight.plateauCause?.weekendAvgKcal);
+  assert.equal(plateau.plateauCause?.weekdayAvgKcal, fortnight.plateauCause?.weekdayAvgKcal);
+  assert.equal(planAt(STALL, 63, { intakeDays: logs }).plateauCause?.weekendAvgKcal, fortnight.plateauCause?.weekendAvgKcal, 'kept for as long as the plateau lasts');
+  // A fortnight that named only "water" (too few logged days) hands the plateau nothing to carry: the plateau judges its own span.
+  const thin = intake(range(42, 55).filter(n => n % 2 === 0), n => (dow(n) >= 5 ? 2500 : 1950));
+  assert.equal(planAt(STALL, 49, { intakeDays: thin }).plateauCause?.kind, 'water');
+});
+
+test('P3-B: "on pace" on two paces that land on opposite sides of the date says so; two that both land early do not', () => {
+  const speeding = readings(range(0, 100), n => (n < 35 ? 92 - 0.05 * n : 92 - 0.05 * 35 - 0.1 * (n - 35)) + wobble(n));
+  // Day 49, date day 126: last week's pace lands after the date, this week's before it.
+  const straddling = planAt(speeding, 49, { targetDate: D(126) });
+  assert.equal(straddling.call, 'on_pace');
+  assert.ok(straddling.earlierPace != null);
+  assert.equal(straddling.earlierPaceStraddles, true);
+  // Day 56, date day 110: both paces land before it (this one 14+ days early, last week's within the margin).
+  const bothEarly = planAt(speeding, 56, { targetDate: D(110) });
+  assert.equal(bothEarly.call, 'on_pace');
+  assert.ok(bothEarly.earlierPace != null);
+  assert.equal(bothEarly.earlierPaceStraddles, false);
+  // No range at all: nothing straddles.
+  assert.equal(planAt(STEADY, 42).earlierPaceStraddles, false);
+});
+
 test('P1-1: a slow steady loss, or a loss that never was confirmed, is not a flat fortnight', () => {
   assert.equal(planAt(SLOW, 49).flatWeeks, null);
   assert.equal(planAt(STEADY, 56).flatWeeks, null);

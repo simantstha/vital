@@ -243,11 +243,14 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     const overWeeks = gp.goal === 'weight_loss'
       ? (upTo != null ? ` over the ${weeks} weeks of weigh-ins up to ${upTo}` : ` over the last ${weeks} weeks of weigh-ins`)
       : '';
-    if (earlierKg != null) {
+    if (earlierKg != null && plan?.earlierPaceStraddles === true) {
+      // The two paces really land on opposite sides of the target date (wave 22w): the range, so the rate does not argue with the call.
       const slow = signedWt(Math.max(gp.ratePerWeek.kg, earlierKg), units, 2).replace(/ (kg|lb)$/, '');
       nowBits.push(`rate ${slow} to ${signedWt(Math.min(gp.ratePerWeek.kg, earlierKg), units, 2)}/wk${overWeeks} (two weekly reads either side of the target date)`);
     } else {
-      nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${overWeeks}`);
+      // Both paces land on the same side of the date (wave 23w): the pace is the current one, and the earlier one is said as what it was.
+      const was = earlierKg != null ? ` (a week ago the pace was ${wt(Math.abs(earlierKg), units, 2)}/wk)` : '';
+      nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${overWeeks}${was}`);
     }
   }
   if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));

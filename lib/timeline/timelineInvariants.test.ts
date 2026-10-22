@@ -2645,6 +2645,43 @@ invariant(['weight_loss'], 'P2-A: a user who logs no food gets the maintenance s
 });
 
 // ── P3 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// B: the coach's "(two weekly reads either side of the target date)" is true only when the two paces land on opposite sides of the date.
+invariant(['weight_loss'], 'P3-B: the coach line says the two reads are "either side of the target date" only on a day they are (days 42-48 are not)', (snaps, name) => {
+  const out: Violation[] = [];
+  let ranges = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const line = (snap.coach ?? []).find(l => /either side of the target date/.test(plain(l)));
+    if (plan?.earlierPace != null) ranges++;
+    if (line != null && plan?.earlierPaceStraddles !== true) out.push({ snap, detail: `"${visible(line.slice(0, 260))}" while both paces land on the same side (earlierPaceStraddles ${plan?.earlierPaceStraddles})` });
+    if (plan?.earlierPace != null && plan.earlierPaceStraddles !== true && snap.idx >= 42 && snap.idx <= 48
+      && !(snap.coach ?? []).some(l => /a week ago the pace was [\d.]+/.test(plain(l)))) {
+      out.push({ snap, detail: 'the coach line does not say what the pace was a week ago' });
+    }
+  }
+  assert.ok(ranges > 0, `${name}: no day showed a pace range, so this invariant checked nothing`);
+  return out;
+});
+
+// C: one plateau cause, one figure. The flat fortnight names "weekends ~2,400"; the plateau a week later keeps that number.
+invariant(['weight_loss_logged'], 'P3-C: a plateau cause named at the flat fortnight keeps its figure when the plateau is called (no ~2,400 then ~2,350)', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  let prev: { snap: DaySnapshot; kcal: number; kind: string } | null = null;
+  for (const snap of w23Mondays(snaps)) {
+    const cause = snap.card?.weightRead?.plan?.plateauCause;
+    const kcal = cause?.kind === 'weekends' ? cause.weekendAvgKcal : cause?.kind === 'intake' ? cause.avgKcal : null;
+    if (prev != null && cause != null && kcal != null && cause.kind === prev.kind && dayDiff(snap.date, prev.snap.date) === 7) {
+      compared++;
+      if (Math.round(kcal / 50) !== Math.round(prev.kcal / 50)) out.push({ snap, detail: `Mon ${prev.snap.date} quoted ~${prev.kcal} kcal, Mon ${snap.date} quotes ~${kcal} kcal for the same ${cause.kind} cause` });
+    }
+    prev = cause != null && kcal != null ? { snap, kcal, kind: cause.kind } : null;
+  }
+  assert.ok(compared > 0, `${name}: no two consecutive Mondays named the same cause, so this invariant checked nothing`);
+  return out;
+});
+
 // E: a reached opener after the question is one short clause, not "Target reached — add ~150-200 kcal a day (to ...) and watch ...; a drift of ...".
 invariant(WEIGHT, 'P3-E: once the new-target question is over, the reached opener is one short sentence ("You\'re holding at 84 kg — stay around ~2,150-2,200 kcal this week and keep weighing in.")', (snaps, name) => {
   const out: Violation[] = [];

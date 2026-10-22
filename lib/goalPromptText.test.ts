@@ -441,3 +441,12 @@ test('coach lines: the pace window is 3 weeks, or 4 while a gap in weigh-ins is 
   assert.match(formatGoalProgressLines(gp({ weightRead: { ...WEIGHT_READ, paceWindowDays: 21 } }), 'metric').join('\n'), /over the last 3 weeks of weigh-ins/);
   assert.match(formatGoalProgressLines(gp({ weightRead: { ...WEIGHT_READ, paceWindowDays: 28 } }), 'metric').join('\n'), /over the last 4 weeks of weigh-ins/);
 });
+
+test('wave 23w: the coach says the two paces are "either side of the target date" only when they really are', () => {
+  const plan = (straddles: boolean) => ({ state: 'pace', weekStart: '2026-10-05', action: { kind: 'keep_going', text: 'Keep your routine — it is working' }, earlierPace: { kgPerWeek: -0.46, pctPerWeek: -0.51, windowDays: 21 }, earlierPaceStraddles: straddles }) as unknown as NonNullable<GoalProgress['weightRead']>['plan'];
+  const lines = (straddles: boolean) => formatGoalProgressLines(gp({ ratePerWeek: { kg: -0.54, pctBodyweight: -0.61 }, weightRead: { ...WEIGHT_READ, plan: plan(straddles) } }), 'metric').join('\n');
+  assert.match(lines(true), /rate -0\.46 to -0\.54 kg\/wk over the last 3 weeks of weigh-ins \(two weekly reads either side of the target date\)/);
+  // Both land before the date: the current pace, and what the pace was a week ago.
+  assert.match(lines(false), /rate -0\.54 kg\/wk \(-0\.61% bw\) over the last 3 weeks of weigh-ins \(a week ago the pace was 0\.46 kg\/wk\)/);
+  assert.doesNotMatch(lines(false), /either side/);
+});
