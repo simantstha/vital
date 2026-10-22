@@ -248,7 +248,9 @@ test('long run: a peak the weekly goal cannot carry is "what fits", the race pea
     race, unitSystem: 'imperial', target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 50 },
   }));
   assert.equal(reached.distance!.plan?.kind, 'build');
-  assert.equal(reached.reasons.find(r => r.kind === 'long_run')?.text, 'Long run peak 11 mi — on target');
+  // (Wave 23e P3-o: the peak the runner RAN is quoted as measured, to one decimal - the figure the coach's long-run line gives too (17.9 km = 11.1 mi);
+  // only plan numbers (the peak target, "the 9 mi plan") are rounded to the half mile. Reached/target are still compared at the same rounding.)
+  assert.equal(reached.reasons.find(r => r.kind === 'long_run')?.text, 'Long run peak 11.1 mi — on target');
 });
 
 test('d0: no "No training sessions logged" watch line on the day the goal is set (endurance only)', () => {

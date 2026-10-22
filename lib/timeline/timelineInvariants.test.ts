@@ -3687,6 +3687,26 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
   return out;
 });
 
+// ── P3-o: one figure for the long-run peak on the card and in the coach's line ──
+
+invariant(RUNNERS, 'P3-o: the long-run peak the card quotes ("Long run peak 11.2 mi - ...") is the very figure the coach\'s long-run line gives as the 28-day peak, in the runner\'s unit (no "11 mi" next to "11.2 mi")', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const coachLine = (snap.coach ?? []).map(plain).find(l => /28-day peak/.test(l));
+    const coachPeak = coachLine ? /28-day peak (\d+(?:\.\d+)?)\s?(?:km|mi)/.exec(coachLine) : null;
+    if (!coachPeak) continue;
+    for (const t of cardTexts(snap)) {
+      const m = /(?:Long run peak|Peak long run|Long-run peak done —) (\d+(?:\.\d+)?)\s?(?:km|mi)/.exec(plain(t.text));
+      if (!m) continue;
+      compared++;
+      if (Math.abs(Number(m[1]) - Number(coachPeak[1])) > 0.05 + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but the coach says "${visible(coachLine ?? '')}"` });
+    }
+  }
+  if (name === 'runner_on_plan_imperial') assert.ok(compared > 0, `${name}: no card peak line was compared, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P3-h: a restart's long run is at most 40% of the restart number it is quoted with ──
 
 invariant(RUNNERS, 'P3-h: a long run quoted next to a restart number ("restart at ~12 km ...; long run 6.5 km") is at most 40% of that restart number', (snaps, name) => {
