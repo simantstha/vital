@@ -3250,7 +3250,18 @@ function wholeWeeksSessionsReason(input: GoalProgressInput): GoalProgressReason 
     lastRunIdx = i;
   }
   const breakContext = longGap || (endurancePlan != null && (endurancePlan.restart != null || endurancePlan.comeback != null || endurancePlan.onBreak));
-  if (hi > 0 && lo * 2 <= hi && (lo === 0 || breakContext)) return { kind: 'sessions', text: `${hi} ${plural(hi, noun)} a week before your break`, tone: 'neutral' };
+  if (hi > 0 && lo * 2 <= hi && (lo === 0 || breakContext)) {
+    // Wave 23e P3-f: with a run-free week in the window, "before your break" quotes only the weeks OLDER than that gap (counts[0] is the newest week). A window
+    // whose runs are all AFTER the gap is the other side of it: "3 runs a week since you came back" (it used to say "before your break" about post-break weeks).
+    const oldestZero = counts.lastIndexOf(0);
+    if (oldestZero >= 0) {
+      const olderHi = Math.max(0, ...counts.slice(oldestZero + 1));
+      if (olderHi > 0) return { kind: 'sessions', text: `${olderHi} ${plural(olderHi, noun)} a week before your break`, tone: 'neutral' };
+      const newerHi = Math.max(0, ...counts.slice(0, oldestZero));
+      if (newerHi > 0) return { kind: 'sessions', text: `${newerHi} ${plural(newerHi, noun)} a week since you came back`, tone: 'neutral' };
+    }
+    return { kind: 'sessions', text: `${hi} ${plural(hi, noun)} a week before your break`, tone: 'neutral' };
+  }
   const rate = lo === hi ? `${hi}` : hi - lo === 1 ? `${lo} or ${hi}` : `${lo}–${hi}`;
   const span = counts.length >= 3 ? `over the last ${counts.length} weeks` : 'so far';
   return { kind: 'sessions', text: `${rate} ${plural(hi, noun)} a week ${span}`, tone: 'neutral' };

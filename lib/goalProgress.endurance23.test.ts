@@ -185,6 +185,17 @@ test('the week after a cutback quotes its % against the last full week before th
   assert.equal(afterCut.distance!.plan?.stepBaseKm, 23);
 });
 
+test('the sessions line quotes "before your break" only from weeks older than the run-free gap; post-gap weeks say "since you came back" (23e P3-f)', () => {
+  const three: Array<[number, number]> = [[1, 5], [3, 5], [5, 5]];
+  const sessions = (plan: Array<Array<[number, number]>>): string => computeGoalProgress(input(weeks(TODAY, plan))).reasons.find(r => r.kind === 'sessions')!.text;
+  // Last three weeks: 3 runs, 3 runs, then nothing (the window ends in the gap): all the runs are AFTER it.
+  assert.equal(sessions([[], three, three, [], wk(30)]), '3 runs a week since you came back');
+  // The gap in the middle, four runs a week before it, three since: the number is the one from before the break.
+  assert.equal(sessions([[], three, [], wk(30)]), '4 runs a week before your break');
+  // Currently on a break (the newest weeks are the empty ones): still "before your break", from the older weeks.
+  assert.equal(sessions([[], [], [], wk(30), wk(30)]), '4 runs a week before your break');
+});
+
 test('the taper week\'s own long run is no yardstick: a 14 km peak run on the taper Sunday (the taper plans ~9) reads "Peak long run 14 km - done", not "longer than the 9 km plan" (23e P3-e)', () => {
   const race = { date: '2026-10-25', distanceKm: 21.1 }; // Monday 10-12 is the taper week (13 days out), Sunday 10-18 its last day; the peak target is 15 km
   const sun = '2026-10-18';

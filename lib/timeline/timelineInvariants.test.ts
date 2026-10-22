@@ -3687,6 +3687,43 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
   return out;
 });
 
+// ── P3-f: "N runs a week before your break" names weeks from before the break ───
+
+invariant(RUNNERS, 'P3-f: when the sessions window holds a run-free week, "N runs a week before your break" quotes only weeks OLDER than that gap, and a window with only post-gap weeks says "N runs a week since you came back"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const runDays = new Set(scn.workouts.filter(w => w.type === 'Running' && (w.distanceM ?? 0) > 0).map(w => w.day));
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const line = snap.card?.reasons.find(r => r.kind === 'sessions');
+    const m = line ? /^(\d+) runs? a week (before your break|since you came back)$/.exec(plain(line.text)) : null;
+    if (!m) continue;
+    // Whole calendar weeks before this one, newest first (4 of them, none that began before the goal did).
+    const thisMonday = mondayOfDate(snap.date);
+    const counts: number[] = [];
+    for (let k = 1; k <= 4; k++) {
+      const monday = addDays(thisMonday, -7 * k);
+      if (monday < scn.day0) break;
+      let n = 0;
+      for (let i = 0; i < 7; i++) if (runDays.has(addDays(monday, i))) n++;
+      counts.push(n);
+    }
+    const oldestZero = counts.lastIndexOf(0);
+    if (oldestZero < 0) continue; // no run-free week in the window: the older rule (a half-empty week with a break context) is not this one
+    checked++;
+    const older = counts.slice(oldestZero + 1);
+    const newer = counts.slice(0, oldestZero);
+    const said = Number(m[1]);
+    if (m[2] === 'before your break') {
+      if (Math.max(0, ...older) !== said) out.push({ snap, detail: `"${visible(line?.text ?? '')}" but the weeks before the gap ran ${JSON.stringify(older)} and the weeks after it ${JSON.stringify(newer)} (newest first: ${JSON.stringify(counts)})` });
+    } else if (older.some(n => n > 0) || Math.max(0, ...newer) !== said) {
+      out.push({ snap, detail: `"${visible(line?.text ?? '')}" but the weeks are ${JSON.stringify(counts)} (newest first)` });
+    }
+  }
+  if (name === 'runner_messy') assert.ok(checked > 0, `${name}: no sessions line met a run-free week, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P3-e: no race-week reproach about the taper week's own long run ──────────
 
 invariant(RUNNERS, 'P3-e: in the taper and race week the long-run line never reproaches the runner against the taper week\'s own long run ("Long-run peak done - 14 km, longer than the 9 km plan"): it is said only against the peak target, otherwise "Peak long run 14 km - done"', (snaps, name) => {
