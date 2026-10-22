@@ -2739,7 +2739,8 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.longRunAhead ? { longRunAhead: true } : {}),
             ...(plan.last?.cutback === true && plan.stepBaseKm > (plan.last?.km ?? 0) + 1e-9 ? { stepBaseKm: plan.stepBaseKm, stepAfterCutback: true } : {}),
             ...(plan.longRunTrim != null ? { longRunTrim: { fullKm: plan.longRunTrim.fullKm, remainingKm: plan.longRunTrim.remainingKm, weekDone: plan.longRunTrim.weekDone, today: plan.longRunTrim.today } } : {}),
-            ...(plan.last?.overCap ? { overCap: true, ...(plan.last.capRead != null ? { overCapRead: plan.last.capRead } : {}) } : {}),
+            // (Wave 23e P3-a: a "touch over" is said once - the coach's "fine, said once" clause is the Monday's; a spike's hold ('well') is said all week.)
+            ...(plan.last?.overCap && (plan.last.capRead !== 'touch' || weekdayOf(input.todayKey) === 1) ? { overCap: true, ...(plan.last.capRead != null ? { overCapRead: plan.last.capRead } : {}) } : {}),
           },
         }
       : {}),
@@ -3522,8 +3523,13 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   // A comeback week's "up to ~18 km" is a ceiling: more than 10% over it (but not far) is "a touch over, fine" - said neutrally and once,
   // never "on plan" (the review words it the same; the ceiling then climbs from the ceiling, not from the overshoot). Far over it is a
   // spike: the hold branch above says so.
+  // Wave 23e P3-a: said ONCE - on that Sunday (the "Week done" headline) and on the Monday after (this line, with the review); from Tuesday the week is about
+  // what is ahead, so the card is quiet about the overshoot ("Building - 20 km last week, back after your break").
   if (level === 'good' && last?.capRead === 'touch' && lastPlanKm != null) {
-    return finish('building', `Building — ${distanceNum(input, lastKm)} of up to ~${fmt(lastPlanKm)} last week, ${overCapPhrase('touch')}`, planBody());
+    if (weekdayOf(input.todayKey) === 1) {
+      return finish('building', `Building — ${distanceNum(input, lastKm)} of up to ~${fmt(lastPlanKm)} last week, ${overCapPhrase('touch')}`, planBody());
+    }
+    return finish('building', `Building — ${fmt(lastKm)} last week, back after your break`, planBody());
   }
   const how = last?.kind === 'baseline' ? ', your baseline'
     : last?.kind === 'restart' || last?.kind === 'rebuild' && plan.restart != null ? ', back after your break'

@@ -1218,7 +1218,8 @@ invariant(RUNNERS, 'a comeback week more than 10% over its "up to" cap is never 
       const nd = next?.card?.distance;
       if (!next || !nd || (nd.plan?.kind !== 'build' && nd.plan?.kind !== 'hold')) continue;
       if (ON_TRACK_WORDS.test(plain(next.card?.headline ?? ''))) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" after a week of ${d.thisWeekKm} of up to ~${d.stepTargetKm} km` });
-      else if (!/a touch over|well over the ceiling/i.test(next.card?.headline ?? '')) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" does not say last week went over its ceiling (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
+      // (Wave 23e P3-a: "a touch over, fine" is said ONCE - on that Sunday and the Monday after; a spike's hold keeps its words all week.)
+      else if ((i === 0 || nd.plan?.overCapRead === 'well') && !/a touch over|well over the ceiling/i.test(next.card?.headline ?? '')) out.push({ snap: next, detail: `card.headline "${visible(next.card?.headline ?? '')}" does not say last week went over its ceiling (${d.thisWeekKm} of up to ~${d.stepTargetKm} km)` });
     }
   }
   if (name === 'runner_messy') assert.ok(overWeeks > 0, `${name}: no comeback week went over its "up to" cap, so this invariant checked nothing`);
@@ -3611,5 +3612,28 @@ invariant(RUNNERS, 'P2-7: the Volume stat of a taper, race or recovery week that
     if (!new RegExp(`, as planned \\(${label}\\)$`).test(plain(volume.comparison ?? ''))) out.push({ snap, detail: `Volume "${visible(volume.value)}" — "${visible(volume.comparison ?? '')}" for a ${kind} week` });
   }
   if (name === 'runner_on_plan_half' || name === 'runner_on_plan_obedient' || name === 'runner_on_plan') assert.ok(seen > 0, `${name}: no wind-down week quoted a %, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══ Round-5 P3s (one invariant each, written BEFORE the fix) ═════════════════════════════════════════════════
+
+// ── P3-a: "a touch over, fine" is said once ──────────────────────────────────
+
+invariant(RUNNERS, 'P3-a: "a touch over, fine" is said once - on the Sunday the week ended and on the Monday after (card, review, coach, opener) - never from Tuesday on', (snaps, name) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const wd = weekdayOf(snap.date);
+    if (wd === 'Sun' || wd === 'Mon') continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      if (/touch over|a little over/i.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  if (name === 'runner_messy') {
+    // ... and it IS said on the Monday (day 77), with the quiet read from the Tuesday (day 78).
+    const monday = snaps.find(s => s.idx === 77) as DaySnapshot;
+    if (!/a touch over, fine/.test(plain(monday.card?.headline ?? ''))) out.push({ snap: monday, detail: `the Monday headline no longer says it once: "${visible(monday.card?.headline ?? '')}"` });
+    const tuesday = snaps.find(s => s.idx === 78) as DaySnapshot;
+    if (plain(tuesday.card?.headline ?? '') !== 'Building — 20 km last week, back after your break') out.push({ snap: tuesday, detail: `Tuesday headline "${visible(tuesday.card?.headline ?? '')}"` });
+  }
   return out;
 });

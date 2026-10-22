@@ -95,3 +95,11 @@ test('the week after a cutback: the coach quotes the step against the last full 
   const plain = computeGoalProgress(input(weeks('2026-10-12', [[], wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-12' }));
   assert.match(targetLine(coach(plain)), /step on last week/);
 });
+
+test('"fine, said once" is said once: the coach has it on the Monday after a touch over and not from Tuesday (23e P3-a)', () => {
+  const hist = [[], wk(18), wk(12), [], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];
+  const line = (todayKey: string) => targetLine(coach(computeGoalProgress(input(weeks(todayKey, hist), { todayKey }))));
+  assert.match(line('2026-10-26'), /last week ran a touch over its ceiling — fine, said once/);
+  assert.match(line('2026-10-27'), /^- This week's target: build up to ~18\.0 km \(a ceiling for a careful comeback/);
+  assert.doesNotMatch(line('2026-10-27'), /touch over|said once/);
+});

@@ -184,3 +184,24 @@ test('the week after a cutback quotes its % against the last full week before th
   assert.equal(afterCut.distance!.plan?.stepAfterCutback, true);
   assert.equal(afterCut.distance!.plan?.stepBaseKm, 23);
 });
+
+test('"a touch over, fine" is said once: the Monday has it, from Tuesday the card is quiet; a spike keeps its words all week (23e P3-a)', () => {
+  // Weeks 1-6 build (15..25 km), two weeks off, a restart week of 12 km, then the comeback week "up to ~15 km" ran at `lastKm`.
+  const hist = (lastKm: number) => [[], wk(lastKm), wk(12), [], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];
+  const day = (todayKey: string, lastKm: number) => computeGoalProgress(input(weeks(todayKey, hist(lastKm)), { todayKey }));
+  const monday = day('2026-10-26', 18);
+  assert.equal(monday.headline, 'Building — 18 of up to ~15 km last week, a touch over, fine');
+  assert.equal(monday.distance!.plan?.overCapRead, 'touch');
+  for (const tuesdayOn of ['2026-10-27', '2026-10-28']) {
+    const card = day(tuesdayOn, 18);
+    assert.equal(card.headline, 'Building — 18 km last week, back after your break');
+    assert.equal(card.verdict, 'building');
+    assert.equal(card.distance!.plan?.overCap, undefined);
+    assert.equal(card.distance!.plan?.overCapRead, undefined);
+    assert.equal(card.distance!.stepTargetKm, 18); // the ceiling still climbs from the ceiling, not the overshoot
+    assert.doesNotMatch(texts(card), /touch over|on plan/);
+  }
+  // A spike (far over the ceiling) is a hold AT the ceiling, said all week.
+  assert.equal(day('2026-10-27', 20).headline, 'Well over the ceiling last week — stay at ~15 km this week');
+  assert.equal(day('2026-10-27', 20).distance!.plan?.overCapRead, 'well');
+});
