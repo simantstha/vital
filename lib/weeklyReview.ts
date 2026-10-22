@@ -19,7 +19,7 @@
  */
 
 import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
-import { KG_TO_LB, isRunningWorkoutType, mixedReturnLead, raceLabel } from './goalProgress';
+import { KG_TO_LB, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, raceLabel, rebuildLineWithFurthest } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { dayNumber, meanOver, rawPlateau } from './weightPace';
@@ -398,6 +398,8 @@ interface Week {
   set: Set<string>;
   /** Days on/after signup only (== set when no signupDay). */
   eligible: Set<string>;
+  /** Muscle: the session already logged on the review's own Monday, if any (wave 23s; see `readMondaySession`). */
+  monday?: { lifts: string[] } | null;
 }
 
 function makeWeek(weekStart: string, signupDay?: string | null): Week {
@@ -547,8 +549,9 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
     else if (deltaKg <= -0.05) tone = isTooFastWeek(input) ? 'watch' : 'good';
     else if (deltaKg >= 0.2) tone = isTooSlowWeek(input) ? 'watch' : 'neutral';
   } else if (input.goal === 'muscle') {
-    // Weight gain is a win for a lifter who trained that week; in a week without a session it is only a number.
-    if (deltaKg > 0.05) tone = weekSessionCount(input, week) > 0 ? 'good' : 'neutral';
+    // Weight gain is a win for a lifter who trained that week; in a week without a session, or a slack one (half the planned sessions or
+    // fewer), it is only a number - the scale moved, the training did not.
+    if (deltaKg > 0.05) tone = weekSessionCount(input, week) > 0 && !slackMuscleWeek(input, week) ? 'good' : 'neutral';
     else if (deltaKg <= -0.2) tone = 'watch';
   }
   const cand: Candidate = {
@@ -1706,14 +1709,15 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
  * ("Squat back above pre-break; deadlift at 98%"); "back above" is said of the
  * headline lift alone only when every lift is.
  */
-function returnHeadlinePart(input: WeeklyReviewInput): string {
+function returnHeadlinePart(input: WeeklyReviewInput, prefix = ''): string {
   const rets = returnsOf(input);
   const mixed = mixedReturnLead(rets, input.exerciseDisplay, isImperial(input));
   if (mixed) return mixed.text;
   const ret = rets[0];
   const { pre, recent, unit } = liftReturnDisplay(ret, isImperial(input));
   const name = liftDisplayName(ret.exercise, input.exerciseDisplay);
-  if (furthestBehindReturn(rets) != null) return `${name} est. 1RM ${recent} of ${withUnit(pre, unit)} pre-break`;
+  // Every lift still rebuilding: say which one is furthest behind when it is not the headline lift ("deadlift furthest at 94%") if it fits.
+  if (furthestBehindReturn(rets) != null) return rebuildLineWithFurthest(`${name} est. 1RM ${recent} of ${withUnit(pre, unit)}`, furthestBehindNote(rets, input.exerciseDisplay), prefix, REVIEW_HEADLINE_MAX_CHARS);
   const above = rets.every(r => { const n = liftReturnDisplay(r, isImperial(input)); return n.recent > n.pre; });
   return above ? `${name} est. 1RM back above pre-break ${withUnit(pre, unit)}` : `${name} est. 1RM back at pre-break best`;
 }
@@ -1771,10 +1775,10 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     const lift = cands.find(x => x.stat.label.endsWith('est. 1RM'))?.stat;
     const protein = by('Protein days hit');
     // A slack week leads with the week: no lift gain it did not produce, no weight or protein filler after the count.
-    if (slackMuscleWeek(input, week) && !input.liftReturn && !(lift && lift.tone === 'good') && parts.length === 1) return clipHeadline(`${parts[0]} — a short week`);
+    if (slackMuscleWeek(input, week) && !input.liftReturn && !(lift && lift.tone === 'good') && parts.length === 1) return clipHeadline(`${parts[0]} last week — a short week`);
     if (lift && input.liftReturn) {
       // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
-      parts.push(returnHeadlinePart(input));
+      parts.push(returnHeadlinePart(input, `${parts.join(', ')}, `));
     } else if (lift && lift.tone === 'good') {
       // The lift change is a 4-week number inside a one-week sentence: say so.
       const cmp = lift.comparison ?? '';
@@ -2499,12 +2503,69 @@ function easedLoadsText(input: WeeklyReviewInput, week: Week): string | null {
 }
 
 /**
+ * The session already logged on the review's own Monday (the day after the reviewed week). The loader reads her sets relative to the real
+ * clock and the review is recomputed when it is opened, so a lifter who trained that morning is in `strengthDays` and in the next week's
+ * bucket of `progression`: a "starting today" or "book one easy session today" is then stale (wave 23s, lifter day 70: "book one easy
+ * session today at ~90% (Squat ~102.5 kg)" on the Monday she had squatted 110 kg). `lifts` names the heaviest sets of up to two main
+ * lifts ("110 kg squat"), only while Monday is her only session of that week (a bucket also holding later days would misdate the loads).
+ * Read from the raw input, before `progression` is cut at the reviewed week (`computeWeeklyReview`).
+ */
+function readMondaySession(input: WeeklyReviewInput, week: Week): { lifts: string[] } | null {
+  const monday = liftAnchor(week);
+  const days = sessionDays(input).filter(d => d >= monday && d <= addDays(monday, 6));
+  if (!days.includes(monday)) return null;
+  const unit = isImperial(input) ? 'lb' : 'kg';
+  const lifts: string[] = [];
+  if (new Set(days).size === 1) {
+    for (const key of rankLifts(input.progression, addDays(monday, 7)).filter(isMainLift)) {
+      const top = input.progression[key]?.find(w => w.weekStart === monday)?.topLoadKg;
+      if (top == null || top <= 0 || lifts.length >= 2) continue;
+      lifts.push(`${withUnit(isImperial(input) ? Math.round(top * KG_TO_LB) : round1(top), unit)} ${liftShortName(key, input.exerciseDisplay)}`);
+    }
+  }
+  return { lifts };
+}
+
+/** The one-time explainer for the term the lifter meets first in the review (wave 23s). */
+export const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
+
+/**
+ * The first weekly review that shows an est. 1RM stat explains the term, once: the Next-week row carries it as a closing sentence (the iOS
+ * row shows the text verbatim, with no line limit; a stat tile's comparison is capped at two lines and the card at three reasons, and the card
+ * is read daily). "First" is the lifter's second week of lift data (a week-over-week comparison needs two): a stateless test that fires for
+ * exactly one review. Muscle goal only.
+ */
+function needsEst1rmExplainer(input: WeeklyReviewInput, week: Week, cands: Candidate[]): boolean {
+  if (input.goal !== 'muscle' || !cands.some(x => x.stat.label.endsWith('est. 1RM'))) return false;
+  const withData = new Set<string>();
+  for (const weeks of Object.values(input.progression)) for (const w of weeks) if (w.bestEstimatedOneRepMaxKg != null && w.weekStart <= week.days[0]) withData.add(w.weekStart);
+  return withData.size === 2;
+}
+
+/** The lift data of the reviewed week and before: a set logged after it (that Monday) is not its lifting and must not move the comparisons (wave 23s). */
+function progressionUpTo(progression: ProgressionSummary, weekStart: string): ProgressionSummary {
+  return Object.fromEntries(Object.entries(progression).map(([key, weeks]) => [key, weeks.filter(w => w.weekStart <= weekStart)]));
+}
+
+/** "You're already back — Monday's 110 kg squat was your first session" (two lifts: "… and 85 kg bench were …"; none known: "Monday's session"). */
+function alreadyBackLead(back: { lifts: string[] }): string {
+  if (back.lifts.length === 0) return "You're already back — Monday's session was your first session";
+  return `You're already back — Monday's ${back.lifts.join(' and ')} ${back.lifts.length === 1 ? 'was' : 'were'} your first session`;
+}
+
+/**
  * A week without a single session: ease in at ~90% of the last working weights
  * (every main lift), starting today — the review is read on Monday, so it is
  * never "starting Monday" — and never "lock in the missed ones". A second week
  * off asks for one easy session first.
  */
 function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number): string {
+  // She is already back (a session on the review's own Monday): nothing to "book today" - say so, and name it.
+  const back = week.monday ?? null;
+  if (back != null) {
+    const off = weeksOffRunning(input, week);
+    return `${alreadyBackLead(back)}; ${off >= 2 ? `build back toward ${target} a week` : `make it ${target} this week`}, adding load only when every set feels solid.`;
+  }
   const loads = easedLoadsText(input, week);
   const weights = loads ? ` (${loads})` : '';
   const off = weeksOffRunning(input, week);
@@ -2522,8 +2583,10 @@ function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number
  */
 function shortWeekNextWeek(input: WeeklyReviewInput, week: Week, target: number): string {
   const head = `Back to ${target} this week — don't make up the missed ones`;
+  // "starting today" is stale once she has lifted on the review's Monday (wave 23s).
+  const starting = week.monday != null ? '' : ', starting today';
   const cues = shortWeekLoadCues(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: stillRebuilding(input) });
-  if (cues.length === 0) return `${head}, starting today.`;
+  if (cues.length === 0) return `${head}${starting}.`;
   // The lifts that repeat their planned step come first, with the one note; the rest follow in the usual "110 → 112.5 kg" form.
   const repeat = cues.filter(c => c.kind === 'skipped');
   const rest = cues.filter(c => c.kind !== 'skipped');
@@ -2538,7 +2601,7 @@ function shortWeekNextWeek(input: WeeklyReviewInput, week: Week, target: number)
     const name = names[repeat.length + i];
     parts.push(c.kind === 'hold' ? `${name} hold at ${withUnit(c.load.from, c.load.unit)}` : `${name} ${loadPairText(c.load)}`);
   });
-  return `${head}. ${parts.join(', ')}, starting today.`;
+  return `${head}. ${parts.join(', ')}${starting}.`;
 }
 
 /** "Next week" for a mixed / tough week: the concrete action that closes the gap the Slip names. */
@@ -2736,8 +2799,14 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
   };
 }
 
-export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
-  const week = makeWeek(input.weekStart, input.signupDay);
+export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
+  const week = makeWeek(rawInput.weekStart, rawInput.signupDay);
+  // A session logged on the review's own Monday (the loader reads relative to the real clock; the review is recomputed when opened) is kept apart
+  // for "You're already back", and the lift data is cut at the reviewed week so that Monday never moves the review's lift comparisons (wave 23s).
+  week.monday = rawInput.goal === 'muscle' ? readMondaySession(rawInput, week) : null;
+  const input = rawInput.goal === 'muscle' && Object.values(rawInput.progression).some(ws => ws.some(w => w.weekStart > week.days[0]))
+    ? { ...rawInput, progression: progressionUpTo(rawInput.progression, week.days[0]) }
+    : rawInput;
   const prevWeek = makeWeek(addDays(input.weekStart, -7), input.signupDay);
   const daysWithData = countDataDays(input, week);
   const cands = buildCandidates(input, week, prevWeek);
@@ -2766,7 +2835,7 @@ export function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
     stats: cands.map(x => x.stat),
     win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? deloadWin(input, week) : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (cands.find(x => x.win)?.win ?? null)),
     slip,
-    nextWeek: buildNextWeek(input, cands, week, prevWeek, assessment, slip),
+    nextWeek: `${buildNextWeek(input, cands, week, prevWeek, assessment, slip)}${needsEst1rmExplainer(input, week, cands) ? ` ${EST_1RM_EXPLAINER}` : ''}`,
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },
   };
 }
