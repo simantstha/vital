@@ -342,6 +342,13 @@ export interface GoalWeekPlan {
   skippedCutback?: boolean;
   /** Additive (wave 22e): on a break, the restart number "if you restart tomorrow" when it differs from the week's own `targetKm` (a lower band past two weeks off). */
   restartKm?: number;
+  /** Additive (wave 23e): this week's long run is still to come (a Sunday morning is not "Behind"; the card waits for it before it judges the week). */
+  longRunAhead?: boolean;
+  /**
+   * Additive (wave 23e): the km already run plus the planned long run would carry the week past 110% of its number, so `longRunKm` is cut to
+   * what is left (or null when `weekDone`: under 3 km / 2 mi remain, skip the long run). `fullKm` is the long run the week would plan otherwise.
+   */
+  longRunTrim?: { fullKm: number; remainingKm: number; weekDone: boolean; today: boolean };
 }
 
 export interface GoalRaceProgress {
@@ -2596,6 +2603,8 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.longRun.held ? { longRunHeld: true } : {}),
             ...(plan.upTo ? { upTo: true } : {}),
             ...(plan.hold?.skippedCutback ? { skippedCutback: true } : {}),
+            ...(plan.longRunAhead ? { longRunAhead: true } : {}),
+            ...(plan.longRunTrim != null ? { longRunTrim: { fullKm: plan.longRunTrim.fullKm, remainingKm: plan.longRunTrim.remainingKm, weekDone: plan.longRunTrim.weekDone, today: plan.longRunTrim.today } } : {}),
             ...(plan.last?.overCap ? { overCap: true, ...(plan.last.capRead != null ? { overCapRead: plan.last.capRead } : {}) } : {}),
           },
         }
@@ -2892,9 +2901,6 @@ function changeClause(changePct: number | null, asPlanned = false): string {
 /** On a break: if the break was an illness, the restart waits for the body. */
 const ILLNESS_GUARD = "If you were ill, wait until you've been symptom-free for 24–48 h first";
 
-/** From this share of the week's target (not yet run) the card says what is left: "keep the rest to one short easy run". */
-const STEP_NEAR_FRACTION = 0.7;
-
 /** Last week more than this share over its step is "above the step" (still under the spike line), not "on plan". */
 const ABOVE_STEP_FRACTION = 1.15;
 
@@ -2921,8 +2927,10 @@ function windDownLine(
   // The days of the race's own calendar week after race day are recovery days, whatever the week's Monday said.
   const label = postRace || phase === 'recovery' ? 'Recovery' : phase === 'taper' ? 'Taper' : 'Race week';
   const progress = `${distanceNum(input, doneKm)} of ~${fmtDistance(input, target)}`;
-  // The last day of a taper week: the week is done, whatever it held ("rest or a very easy jog from here" has no day left).
-  if (phase === 'taper' && !postRace && !raceDoneToday && weekdayOf(input.todayKey) === 0) {
+  // The last day of a taper week: the week is done, whatever it held ("rest or a very easy jog from here" has no day left) - unless the
+  // taper's long run is still to come (wave 23e): a Sunday morning is not the end of the week.
+  const longRunPending = weekdayOf(input.todayKey) === 0 && plan.longRunAhead === true && plan.longRunKm != null;
+  if (phase === 'taper' && !postRace && !raceDoneToday && weekdayOf(input.todayKey) === 0 && !longRunPending) {
     const nextPhase = racePhaseInfo(race.date, addDays(mondayOfDay(input.todayKey), 7), race.distanceKm)?.phase;
     return {
       kind: 'race_phase',
@@ -2932,6 +2940,10 @@ function windDownLine(
   }
   if (over) {
     return { kind: 'race_phase', text: `${label}: ${progress} — over the plan; rest or a very easy jog from here`, tone: 'watch' };
+  }
+  // Wave 23e: the taper's km are run before its long run - no long run is left to plan, the line says so (the plan line and the coach say the same).
+  if (phase === 'taper' && !postRace && !raceDoneToday && plan.longRunTrim?.weekDone === true) {
+    return { kind: 'race_phase', text: `${label}: ${progress} — this week's km are done; skip the long run (rest or a 20-min jog)`, tone: 'neutral' };
   }
   if (raceDoneToday) {
     return { kind: 'race_phase', text: 'Walk it off, eat and rest; easy running only from here', tone: 'neutral' };
@@ -3216,11 +3228,15 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   // A jump over this week's safe step: the headline is the warning, and no "distance up X%" praise is given for it.
   const current = plan.kind === 'baseline' ? null : gradeEnduranceWeek(plan, doneKm, { unitsPerKm: u });
   if (current?.gap === 'spike') {
-    // On Sunday the week is over: the advice is about the days after it.
-    const advice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and hold next week's step" : 'keep the rest of the week easy';
+    // On Sunday the week is over: the advice is about the days after it. Before that (wave 23e): the week's km are all but run, so the advice is the
+    // plan's own - the long run is skipped, rest or a short jog - not a number-less "easy".
+    const restOfWeek = plan.longRunTrim?.weekDone === true
+      ? (plan.longRunAhead ? "this week's km are done — skip the long run (rest or a 20-min jog)" : "this week's km are done — rest or an easy 20-min jog")
+      : 'keep the rest of the week easy';
+    const advice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and hold next week's step" : restOfWeek;
     // A comeback week far past its "up to" ceiling (wave 22e): the same read as the Monday card and the review - next week stays AT the ceiling.
     if (plan.upTo) {
-      const ceilingAdvice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and stay at the ceiling next week" : 'keep the rest of the week easy';
+      const ceilingAdvice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and stay at the ceiling next week" : restOfWeek;
       return finish('holding', `Well over the ceiling — ${done} of up to ~${fmt(target)}. Stay at ~${fmt(target)} next week`, body(
         { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's ceiling; big jumps raise injury risk — ${ceilingAdvice}`, tone: 'watch' },
       ));
@@ -3237,8 +3253,14 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     return finish('holding', `Light week — ${done} of ${stepped ? '~' : ''}${fmt(target)} so far`, withRace(enduranceReasons(planLine, [sessions, ...vitals])));
   }
 
+  // Wave 23e: the last day of the week with the long run still to come and able to make the week is not the end of the week yet: the card says
+  // what the long run is for (the plan line) and judges nothing - "Behind" / "a bit under the step" on a Sunday morning, before the long run, was
+  // read by a runner who was doing exactly what the plan said. The Monday review grades the finished week.
+  const longRunPending = weekdayOf(input.todayKey) === 0 && plan.longRunAhead === true && plan.longRunKm != null
+    && plan.longRunTrim?.weekDone !== true && doneKm + plan.longRunKm >= plan.band.goodFromKm - 1e-9;
+
   // The last day of the week before a taper: the headline judges THIS week - short of its target, "Eased off early" - and it is fine.
-  if (plan.preTaper != null && weekdayOf(input.todayKey) === 0 && doneKm > 0 && (plan.easingOff != null || current?.gap === 'short')) {
+  if (plan.preTaper != null && weekdayOf(input.todayKey) === 0 && doneKm > 0 && !longRunPending && (plan.easingOff != null || current?.gap === 'short')) {
     const tomorrow = plan.preTaper.nextPhase === 'race_week' ? 'race week starts tomorrow' : 'taper starts tomorrow';
     return finish('on_track', `Eased off early — ${done} of ${target < plan.goalKm - 1e-9 ? '~' : ''}${fmt(target)}; ${tomorrow}`, withRace(enduranceReasons(planLine, [shareNote, lrReason, sessions, ...vitals])));
   }
@@ -3247,11 +3269,21 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     return finish('on_track', `Easing off before ${plan.preTaper?.nextPhase === 'race_week' ? 'race week' : 'your taper'} — ${done} of ${target < plan.goalKm - 1e-9 ? '~' : ''}${fmt(target)} so far`, withRace(enduranceReasons(planLine, [sessions, ...vitals])));
   }
 
-  // The week's step (or goal) is already run: say so while there is still a day left to go over it. A watch
-  // reason, not a spike verdict — that only fires once the jump itself is a jump.
+  // The week's step (or goal) is already run, or the planned long run would carry it past 110% of its number (wave 23e): ONE remaining-km line
+  // with a number, the same number the plan line, the coach and the headline say ("14 of ~20 km - keep Sunday's long run to ~6 km", or, with under
+  // 3 km left, "this week's km are done; skip the long run"). It used to fire from a flat 70% of the target and told a runner with the long run
+  // still ahead to "keep the rest to one short easy run" next to a plan line that said "long run 10 km".
   let stepDone: GoalProgressReason | null = null;
-  if ((plan.kind === 'build' || plan.kind === 'maintain' || plan.kind === 'hold') && doneKm > 0
+  const trim = plan.longRunTrim;
+  if (trim != null && doneKm > 0 && ['build', 'maintain', 'hold', 'rebuild', 'restart'].includes(plan.kind)) {
+    const stepped = target < plan.goalKm - 1e-9;
+    const lead = `${done} of ${plan.upTo ? 'up to ~' : stepped ? '~' : ''}${fmt(target)}`;
+    stepDone = trim.weekDone
+      ? { kind: 'volume', text: `${lead} — this week's km are done; ${plan.longRunAhead ? 'skip the long run (rest or a 20-min jog)' : 'rest or an easy 20-min jog'}`, tone: doneKm > target * PHASE_CEILING_TOLERANCE ? 'watch' : 'neutral' }
+      : { kind: 'volume', text: `${lead} — keep ${trim.today ? "today's" : "Sunday's"} ${longRunWord(plan.longRunKm as number, u)} to ~${formatTargetLongRun(plan.longRunKm as number, u)}`, tone: 'neutral' };
+  } else if ((plan.kind === 'build' || plan.kind === 'maintain' || plan.kind === 'hold') && doneKm > 0
     && done >= distanceNum(input, target) && weekdayOf(input.todayKey) !== 0) {
+    // No long run left to trim (it is run, or none is planned): the older line, the week's step is run.
     const when = weekdayOf(input.todayKey) === 6 ? 'Sunday' : 'the rest of the week';
     const stepped = target < plan.goalKm - 1e-9;
     stepDone = {
@@ -3260,16 +3292,8 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       tone: 'watch',
     };
   }
-  // Wave 22e: before the spike, not after it. From 70% of the week's target, with the target not yet run, the card says what is left
-  // ("18.7 of ~20 km — keep the rest to one short easy run"), the way the taper's remaining-budget line does.
-  let stepNear: GoalProgressReason | null = null;
-  if (stepDone == null && ['build', 'maintain', 'hold', 'rebuild'].includes(plan.kind) && doneKm > 0
-    && done >= distanceNum(input, target) * STEP_NEAR_FRACTION && done < distanceNum(input, target) && weekdayOf(input.todayKey) !== 0) {
-    const stepped = target < plan.goalKm - 1e-9;
-    stepNear = { kind: 'volume', text: `${done} of ${plan.upTo ? 'up to ~' : stepped ? '~' : ''}${fmt(target)} — keep the rest to one short easy run`, tone: 'neutral' };
-  }
-  /** The week's lead warning: the step-done one when it applies, else the near-the-step one; the plan line then follows. */
-  const stepWarn = stepDone ?? stepNear;
+  /** The week's lead warning (the remaining-km line); the plan line then follows. */
+  const stepWarn = stepDone;
   /** The week's lead reason: the warning when there is one (the plan line then follows), else the plan line. */
   const planBody = (): GoalProgressReason[] => (stepWarn != null ? body(stepWarn, [planLine]) : body(planLine));
 
@@ -3284,7 +3308,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     case 'hold': {
       const hold = plan.hold as NonNullable<EnduranceWeekPlan['hold']>;
       // The last day of a hold week: the week is done, so the headline judges THIS week (not the jump two weeks back), as in a build week.
-      if (weekdayOf(input.todayKey) === 0 && doneKm > 0 && current != null && current.level !== 'light') {
+      if (weekdayOf(input.todayKey) === 0 && doneKm > 0 && !longRunPending && current != null && current.level !== 'light') {
         const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody);
         if (thisWeek != null) return thisWeek;
       }
@@ -3317,7 +3341,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
 
   // Build and maintain: the verdict is how last week went against its own plan - except on the week's LAST day (wave 22e), when the week is
   // done and the headline judges THIS week, the one the Monday review will grade (the same words, the same grade).
-  if (weekdayOf(input.todayKey) === 0 && (plan.kind === 'build' || plan.kind === 'maintain') && doneKm > 0 && current != null && current.level !== 'light') {
+  if (weekdayOf(input.todayKey) === 0 && (plan.kind === 'build' || plan.kind === 'maintain') && doneKm > 0 && !longRunPending && current != null && current.level !== 'light') {
     const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody);
     if (thisWeek != null) return thisWeek;
   }

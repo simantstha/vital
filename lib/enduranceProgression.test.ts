@@ -920,14 +920,15 @@ test('strides: the last 2 build weeks before a taper carry "plus 4–6 strides a
   assert.equal(planFor(runs.filter(r => r.day < weekOf(7)), 7).strides, false);
 });
 
-test('light week: 4+ days without a run in the week (or, from Thursday, well behind the runner\'s own pace with the rest out of reach) says "don\'t make it up", with a capped long run', () => {
+test('light week: 4+ days without a run in the week (or, from Friday, well behind the runner\'s own pace with the rest out of reach) says "don\'t make it up", with a capped long run', () => {
   const runs = runsFor([15, 17, 19, 21, 23, 25, 28, 30], 1);
   // Week 9 (Mon weekOf(9)): one 6 km run on Tuesday, then nothing.
   const week9 = [...runs, { day: addDayKey(weekOf(9), 1), km: 6 }];
   const at = (offset: number) => enduranceWeekPlan({ runs: week9.filter(r => r.day <= addDayKey(weekOf(9), offset)), weekStart: weekOf(9), goalKm: 30, today: addDayKey(weekOf(9), offset) });
   assert.equal(at(2).lightWeek, null); // Wednesday: too early to say
-  // Thursday (wave 22e): 6 km against ~10.8 km by this weekday in the weeks before, and the ~24 km left cannot fit in Saturday and Sunday.
-  assert.equal(at(3).lightWeek?.reason, 'late_week');
+  // Thursday (wave 23e): the Thursday run is still to come - a runner who did exactly what the plan said on Tuesday has the same week so far. Not light yet.
+  assert.equal(at(3).lightWeek, null);
+  // Friday (wave 22e): 6 km against ~10.8 km by Thursday in the weeks before, and the ~24 km left cannot fit in Saturday and Sunday.
   const fri = at(4);
   assert.equal(fri.lightWeek?.reason, 'late_week'); // Friday, 6 km of ~33... well behind the usual pace
   const sat = at(5);

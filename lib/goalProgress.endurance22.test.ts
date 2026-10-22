@@ -69,15 +69,20 @@ test('light week (22e): a runner exactly on pace on a Friday - the long run is S
   assert.match(card.headline, /^Building — 15 km last week/);
 });
 
-test('light week (22e): an ill runner is light from the Thursday, when the rest of the week cannot fit', () => {
-  const thu = '2026-10-08';
-  const card = computeGoalProgress(input(weeks(thu, [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: thu }));
+test('light week (22e, wave 23e): an ill runner is light from the Friday, when the rest of the week cannot fit - not on the Thursday, when his Thursday run is still ahead', () => {
+  const fri = '2026-10-09';
+  const card = computeGoalProgress(input(weeks(fri, [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: fri }));
   assert.equal(card.verdict, 'holding');
   assert.equal(card.headline, 'Light week — 6 of 30 km so far');
-  // ... but not on the Wednesday (too early to say).
-  const wed = '2026-10-07';
-  const early = computeGoalProgress(input(weeks(wed, [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: wed }));
+  // ... but not on the Thursday (wave 23e): a runner who did exactly what the plan said on Tuesday has the same week so far on Thursday morning,
+  // with Thursday's run still to come - he is never "behind" before it.
+  const thu = '2026-10-08';
+  const early = computeGoalProgress(input(weeks(thu, [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: thu }));
   assert.doesNotMatch(early.headline, /^Light week/);
+  // And not on the Wednesday either (too early to say).
+  const wed = '2026-10-07';
+  const earlier = computeGoalProgress(input(weeks(wed, [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: wed }));
+  assert.doesNotMatch(earlier.headline, /^Light week/);
 });
 
 // ── P1-B: the week before a taper ───────────────────────────────────────────
@@ -185,19 +190,27 @@ test('race day shows the race, not the week: "Race done — 21.1 km", no "N of ~
 
 // ── P2.6: a warning before the spike ───────────────────────────────────────
 
-test('from 70% of the week\'s target, not yet run, the card says "keep the rest to one short easy run" (22e)', () => {
-  // A cutback week (~20 km, 2026-10-19) read on its Thursday with 18.7 km in: the next two runs are where it becomes a 25 km week.
+test('the remaining-km line says a NUMBER (wave 23e; it was "keep the rest to one short easy run" from a flat 70% of the target, next to a plan line that still said "long run 10 km")', () => {
+  // A cutback week (~20 km, 2026-10-19, long run 10 km) read on its Thursday with 18.7 km in two 9 km runs: the long run is behind, 1.3 km are left.
   const thu = '2026-10-22';
   const card = computeGoalProgress(input(weeks(thu, [[[1, 9.4], [3, 9.3]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
   assert.equal(card.distance!.plan?.cutback, true);
   assert.equal(card.distance!.text, '18.7 of ~20 km running this week · goal 30 km');
-  assert.equal(card.reasons[0].text, '18.7 of ~20 km — keep the rest to one short easy run');
+  assert.equal(card.reasons[0].text, "18.7 of ~20 km — this week's km are done; rest or an easy 20-min jog");
   assert.equal(card.reasons[0].tone, 'neutral');
-  // Below 70% there is nothing to say yet; at the target the existing "step is done" warning speaks.
-  const early = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
-  assert.ok(!early.reasons.some(r => /one short easy run|step is done|goal is done/.test(r.text)), texts(early));
-  const done = computeGoalProgress(input(weeks(thu, [[[1, 10], [3, 10.5]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
-  assert.match(done.reasons[0].text, /the week's step is done/);
+  assert.equal(card.distance!.plan?.longRunKm, null);
+  assert.equal(card.distance!.plan?.purpose, 'Cutback week: ~20 km this week, done — no long run (rest or a 20-min jog)');
+  // 14 km in two 7 km runs with the 10 km long run still ahead would be 24 km (110% of 20 is 22): the long run is cut to what is left, ONE number everywhere.
+  const trimmed = computeGoalProgress(input(weeks(thu, [[[1, 7], [3, 7]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
+  assert.equal(trimmed.reasons[0].text, "14 of ~20 km — keep Sunday's long run to ~6 km");
+  assert.equal(trimmed.distance!.plan?.longRunKm, 6);
+  assert.equal(trimmed.longRun?.nextKm, 6);
+  assert.equal(trimmed.distance!.plan?.purpose, 'Cutback week: ~20 km, long run 6 km — absorb the last three weeks');
+  assert.doesNotMatch(texts(trimmed), /one short easy run/);
+  // With room for the full long run (12 + 10 = 22, exactly 110%) there is nothing to say.
+  const fits = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thu }));
+  assert.ok(!fits.reasons.some(r => /one short easy run|km are done|long run to/.test(r.text)), texts(fits));
+  assert.equal(fits.distance!.plan?.longRunTrim, undefined);
 });
 
 // ── P2.7: "peak reached" is not praise for a long run that broke the plan ──

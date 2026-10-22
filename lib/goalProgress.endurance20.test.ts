@@ -144,10 +144,13 @@ test('build week: once the step is run the card warns while a day is left (a wat
   assert.equal(sat.distance!.plan?.kind, 'build');
   assert.equal(sat.verdict, 'building');
   assert.match(sat.headline, /^Building — 23 km last week/);
-  assert.deepEqual(sat.reasons[0], { kind: 'volume', text: "28 of ~25 km — the week's step is done; keep Sunday easy and short", tone: 'watch' });
-  // Mid-week it is "the rest of the week".
+  // Wave 23e: the long run is still ahead and would carry the week past 110% of its number - ONE instruction with a number (skip it), the same on the plan line.
+  assert.deepEqual(sat.reasons[0], { kind: 'volume', text: "28 of ~25 km — this week's km are done; skip the long run (rest or a 20-min jog)", tone: 'watch' });
+  assert.equal(sat.distance!.plan?.longRunKm, null);
+  assert.equal(sat.distance!.plan?.longRunTrim?.weekDone, true);
+  // Mid-week, with a big run already in (the long run is behind), the same: the week's km are done, rest or an easy jog.
   const thu = computeGoalProgress(input(weeks('2026-10-08', [[[0, 14], [1, 14]], ...lastWeeks]), { todayKey: '2026-10-08' }));
-  assert.match(thu.reasons[0].text, /^28 of ~25 km — the week's step is done; keep the rest of the week easy and short$/);
+  assert.match(thu.reasons[0].text, /^28 of ~25 km — this week's km are done; rest or an easy 20-min jog$/);
   // Under the step: no warning.
   const under = computeGoalProgress(input(weeks(saturday, [[[1, 9], [3, 9], [5, 5]], ...lastWeeks]), { todayKey: saturday }));
   assert.equal(under.reasons.some(r => /step is done/.test(r.text)), false);
@@ -161,7 +164,7 @@ test('build week: once the step is run the card warns while a day is left (a wat
   // A maintain week that reached its goal says "goal".
   const maintain = computeGoalProgress(input(weeks(saturday, [[[1, 10], [3, 10], [5, 10]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: saturday }));
   assert.equal(maintain.distance!.plan?.kind, 'maintain');
-  assert.equal(maintain.reasons[0].text, "30 of 30 km — the week's goal is done; keep Sunday easy and short");
+  assert.equal(maintain.reasons[0].text, "30 of 30 km — this week's km are done; skip the long run (rest or a 20-min jog)");
 });
 
 test('a break is 7 days, not 5: the target does not drop mid-week, and the card says it once the 7th day is reached', () => {

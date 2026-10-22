@@ -182,11 +182,12 @@ test('cutback week on the card: ~80% of the step, the long run held, named "Cutb
   assert.match(p.reasons.find(r => r.kind === 'plan')!.text, /^Cutback week: ~20 km, long run [\d.]+ km — absorb the last three weeks$/);
   assert.equal(p.distance!.plan?.longRunHeld, true);
   assert.match(p.headline, /^Building — 23 km last week/);
-  // Running the full ~25 km instead says "step is done" while a day is left - not a spike: 25 is the week it replaces.
+  // Running the full ~25 km instead says "the week's km are done" while a day is left (wave 23e) - not a spike: 25 is the week it replaces.
   const thursday = '2026-10-22';
   const ran = computeGoalProgress(input(weeks(thursday, [[[0, 13], [1, 12]], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: thursday }));
   assert.equal(ran.verdict, 'building');
-  assert.match(ran.reasons[0].text, /^25 of ~20 km — the week's step is done; keep the rest of the week easy and short$/);
+  assert.match(ran.reasons[0].text, /^25 of ~20 km — this week's km are done; rest or an easy 20-min jog$/);
+  assert.equal(ran.reasons[0].tone, 'watch'); // 25 of ~20 km is past the cutback
 });
 
 test('strides: the last 2 build weeks before a taper add "plus 4–6 strides after one easy run" to the plan line', () => {

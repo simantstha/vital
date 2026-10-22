@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, STRIDES_COPY, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
+import { RACE_EVE_LINE, STRIDES_COPY, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunWord, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -67,6 +67,10 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
   const rep = plainSpaces(racePaceReps(units === 'imperial' ? 1 / KM_PER_MILE : 1));
   switch (race.phase) {
     case 'taper':
+      // Wave 23e: the taper's km are run before its long run: skip it (the card says the same).
+      if (gp.distance?.plan?.longRunTrim?.weekDone === true) {
+        return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; the week's km are done: skip the long run (rest or a 20-min jog), plus ${rep} at race pace midweek if not yet run — do not push volume`;
+      }
       return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; cut volume, ${longRun != null ? `long run ${longRunText(longRun, units)} easy, ` : 'keep the long run easy, '}plus ${rep} at race pace midweek — do not push volume or build the long run`;
     case 'race_week':
       if (race.daysToGo === 0) {
@@ -98,6 +102,23 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
  * taper / race week / recovery (the race phase line owns those).
  */
 function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
+  const line = weekTargetBase(gp, units);
+  const trim = gp.distance?.plan?.longRunTrim;
+  if (line == null || trim == null) return line;
+  // Wave 23e: the week's km plus the planned long run were over the week's number: the long run is cut to what is left (or skipped), the ONE number
+  // the card's plan line and remaining-km line say too.
+  const plan = gp.distance?.plan;
+  const lr = plan?.longRunKm != null ? longRunText(plan.longRunKm, units) : null;
+  const word = plan?.longRunKm != null ? longRunWord(plan.longRunKm, units === 'imperial' ? 1 / KM_PER_MILE : 1) : 'long run';
+  const note = trim.weekDone
+    ? plan?.longRunAhead === true
+      ? " — the week's km are done: skip the long run (rest or a 20-min jog), no catch-up volume"
+      : " — the week's km are done: rest or an easy 20-min jog, no catch-up volume"
+    : ` — keep ${trim.today ? "today's" : "Sunday's"} ${word} to ~${lr} so the week stays at ~${plan?.targetKm != null ? distKm(plan.targetKm, units) : distKm(gp.distance?.stepTargetKm ?? 0, units)}`;
+  return `${line}${note}`;
+}
+
+function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
   const d = gp.distance;
   if (!d || isWindDownPhase(gp.race?.phase)) return null;
   const plan = d.plan;
@@ -109,7 +130,9 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
       : null;
   }
   const t = plan.targetKm != null ? distKm(plan.targetKm, units) : null;
-  const lr = plan.longRunKm != null ? `long run ${longRunText(plan.longRunKm, units)}` : null;
+  // (A trimmed long run is said once, by the note `weekTargetLine` adds - "keep Sunday's long run to ~6 km" - not also as "long run 6 km held / eased".)
+  const trimmed = plan.longRunTrim != null;
+  const lr = plan.longRunKm != null && !trimmed ? `long run ${longRunText(plan.longRunKm, units)}` : null;
   const back = plan.comebackKm != null ? distKm(plan.comebackKm, units) : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
   // Days off in the week (or well behind its pace from Friday): the same line the card shows, as an instruction.
@@ -128,7 +151,7 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
     const last = gp.longRun?.lastKm;
     const unitsPerKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
     const eased = plan.longRunKm != null && last != null && (last - plan.longRunKm) * unitsPerKm >= 0.5 - 1e-9;
-    const longPart = plan.longRunKm == null ? '' : eased ? `; long run eased to ${longRunText(plan.longRunKm, units)} (half the week)` : `; ${lr} held`;
+    const longPart = plan.longRunKm == null || trimmed ? '' : eased ? `; long run eased to ${longRunText(plan.longRunKm, units)} (half the week)` : `; ${lr} held`;
     return `- This week's target: a cutback week, ~${t}${longPart} — absorb the last three weeks; do not push past it${strides}`;
   }
   switch (plan.kind) {

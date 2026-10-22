@@ -1557,8 +1557,9 @@ test('long run: no reason without a race, a race distance or after the race; the
 
 test('long run: once the peak date has passed inside the build phase it reads "peak target"; marathon target is 32', () => {
   // Sunday 2026-10-11, race Thursday 2026-10-22: the week began 17 days out (still build), the peak long run was due Oct 8.
-  // (This week has its runs: a Sunday with four days off and the week barely started is a light week, which has its own test.)
-  const thisWeekRuns = [{ day: '2026-10-08', durationMin: 25, distanceKm: 4, type: 'Running' }, { day: '2026-10-10', durationMin: 25, distanceKm: 4, type: 'Running' }];
+  // (This week has its runs: a Sunday with four days off and the week barely started is a light week, which has its own test. And Sunday's own run is in
+  // (wave 23e): before it the long run is still ahead and the card says what that run is for instead of the long-run status line.)
+  const thisWeekRuns = [{ day: '2026-10-08', durationMin: 25, distanceKm: 4, type: 'Running' }, { day: '2026-10-10', durationMin: 25, distanceKm: 4, type: 'Running' }, { day: '2026-10-11', durationMin: 50, distanceKm: 9, type: 'Running' }];
   const sundayBase = longRunInput([14, 12, 16, 10], { todayKey: '2026-10-11', race: { date: '2026-10-22', distanceKm: 21.1 } });
   const p = computeGoalProgress({ ...sundayBase, workouts: [...sundayBase.workouts, ...thisWeekRuns], trainingDays: [...sundayBase.trainingDays, ...thisWeekRuns.map(w => w.day)] });
   assert.equal(p.race?.phase, 'build');

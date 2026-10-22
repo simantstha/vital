@@ -14,6 +14,7 @@ import {
   recoveryWeek,
   weekStepOrGoalKm,
 } from '../enduranceProgression';
+import { obedientDayByDay } from './obedient';
 import { addDays, type IntakeRow, type Scenario, type SetRow, type WeighIn, type WorkoutRow } from './types';
 
 const DAY0 = '2026-03-02'; // a Monday
@@ -569,22 +570,27 @@ function obedientRuns(opts: {
 }
 
 /**
- * S1: the same half-marathon goal as runner_on_plan, but the runner follows the APP: the cutback weeks run their lowered km with
- * the long run held, long runs stay at the plan's number, the taper is the planned one. (runner_on_plan builds with the plain
- * 10% step and so skips every cutback; this one walks the "Cutback week done" path.)
+ * S1 (wave 23e / G1): the same half-marathon goal as runner_on_plan, but the runner follows the APP DAY BY DAY. Every run day it reads
+ * that morning's real card (lib/timeline/obedient.ts): the week plan, every daily cap ("keep the rest to ...", "keep Sunday's run
+ * <= N", "keep tomorrow's run <= 3 km", the race-week shape, the race-eve shakeout), and runs what it implies - the plan's remaining km
+ * spread over the run days still ahead, the long run on its day. (Before wave 23 it read only Monday's numbers and ran them whatever
+ * the daily lines said.)
  */
 export function runnerOnPlanObedient(): Scenario {
   const base = runnerOnPlan();
-  const race = { date: base.user.raceDate as string, distanceKm: HALF };
-  const { workouts, kinds } = obedientRuns({ weeks: 21, baselineKm: 15, race });
+  const { workouts, kinds } = obedientDayByDay('runner_on_plan_obedient', {
+    base,
+    lastDay: base.lastDay,
+    scripted: { 1: 3, 3: 3, 5: 3, 6: 6 }, // the baseline week: nothing to read yet, 15 km as the other scenarios start
+  });
   return {
     ...base,
     name: 'runner_on_plan_obedient',
-    title: 'Runner who does exactly what the app says (half marathon, cutback weeks run, taper as planned)',
+    title: 'Runner who does exactly what the app says, day by day (half marathon, cutback weeks run, daily caps kept, taper as planned)',
     workouts,
     inputNotes: [
-      'Same goal/race as runner_on_plan (30 km/wk, half marathon day 111). Every Monday the runner reads the real week plan and runs its target km and long run on Tue/Thu/Sat/Sun (race week and recovery: Tue/Thu/Sat).',
-      `Week kinds the plan gave, week 1 first: ${kinds.join(', ')}.`,
+      'Same goal/race as runner_on_plan (30 km/wk, half marathon day 111). Week 1 is a 15 km baseline (3/3/3/6). From then on, every run day (Tue/Thu/Sat/Sun; race week and recovery: Tue/Thu/Sat) the runner reads that morning\'s real card and runs what it implies: the plan\'s remaining km spread over the run days still ahead, the long run on Sunday, every daily cap kept, a 15-min shakeout on the race eve, the race on race day.',
+      `Week kinds the plan gave on each Monday, week 1 first: ${kinds.join(', ')}.`,
     ],
   };
 }
@@ -621,6 +627,35 @@ export function runnerComebackSpike(): Scenario {
   };
 }
 
+/** The days the comeback_obedient runner is ill: Wednesday of week 9 to Wednesday of week 10 (day 58-65), back on the Thursday. */
+export const COMEBACK_OBEDIENT_ILL_DAYS: ReadonlySet<number> = new Set([58, 59, 60, 61, 62, 63, 64, 65]);
+
+/**
+ * S3 (wave 23e / G1): a no-race runner who follows the app day by day, falls ill (8 days without a run), and on coming back follows
+ * every comeback ceiling EXACTLY (restart number, then each "up to ~N km" rung, the long run on Sunday).
+ */
+export function runnerComebackObedient(): Scenario {
+  const noRace = runnerNoRace();
+  const { workouts, kinds } = obedientDayByDay('runner_comeback_obedient', {
+    base: noRace,
+    lastDay: 15 * 7,
+    scripted: { 1: 6, 3: 6, 5: 6, 6: 6 }, // the baseline week: 24 km, the level the other no-race comeback scenario starts from
+    illDays: COMEBACK_OBEDIENT_ILL_DAYS,
+  });
+  return {
+    ...noRace,
+    name: 'runner_comeback_obedient',
+    title: 'Runner who does exactly what the app says day by day, is ill for 8 days, and follows every comeback ceiling exactly (no race)',
+    lastDay: 15 * 7,
+    workouts,
+    inputNotes: [
+      'Goal: endurance, weekly distance target 30 km, no race. Week 1 is a 24 km baseline (6/6/6/6); from then on the runner reads the real card each run day and runs what it implies, daily caps included.',
+      'ILL from Wednesday day 58 to Wednesday day 65 (8 days without a run, the Tuesday run before it was done); back on Thursday day 66, where the card says "On a break ... restart at ~N km" and the runner restarts at exactly that number, then follows every comeback ceiling ("up to ~N km") exactly.',
+      `Week kinds the plan gave on each Monday, week 1 first: ${kinds.join(', ')}.`,
+    ],
+  };
+}
+
 // ── registry ────────────────────────────────────────────────────────────────
 
 export const SCENARIO_NAMES = [
@@ -636,6 +671,7 @@ export const SCENARIO_NAMES = [
   'runner_no_race',
   'runner_on_plan_obedient',
   'runner_comeback_spike',
+  'runner_comeback_obedient',
 ] as const;
 
 export type ScenarioName = (typeof SCENARIO_NAMES)[number];
@@ -668,5 +704,6 @@ export function buildScenario(name: ScenarioName): Scenario {
     case 'runner_no_race': return runnerNoRace();
     case 'runner_on_plan_obedient': return runnerOnPlanObedient();
     case 'runner_comeback_spike': return runnerComebackSpike();
+    case 'runner_comeback_obedient': return runnerComebackObedient();
   }
 }
