@@ -983,7 +983,9 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   // The rate is measured over the history that exists: under 4 weeks of
   // weigh-ins says the real span ("over 9 days").
   const span = windowSpanText(w.rateSpanDays ?? RATE_WINDOW_DAYS);
-  let text = `Trend weight ${dir} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk (${abs}% of bodyweight) over ${span}`;
+  // A lifter's slow lean gain is "about 0.4 lb/wk", not a two-decimal "0.37" that reads like a measurement (wave 23s); a flat rate keeps its figure.
+  const perWeek = input.goal === 'muscle' && !flat ? `about ${fmtWeight(input, Math.abs(w.rateKg), 1)}` : fmtWeight(input, Math.abs(w.rateKg), 2);
+  let text = `Trend weight ${dir} ${perWeek}/wk (${abs}% of bodyweight) over ${span}`;
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;
@@ -2058,6 +2060,32 @@ export function mixedReturnLead(
 }
 
 /**
+ * While EVERY lift is still rebuilding, the lift furthest under its pre-break best when it is not the headline lift: "deadlift furthest
+ * at 94%". The percentage is of whole kg whatever the display unit, so a lb and a kg lifter read the same number. Null with one lift,
+ * when any lift is back (the mixed sentence names the lift furthest behind itself) or when the headline lift is the furthest.
+ */
+export function furthestBehindNote(rets: readonly GoalLiftReturn[], exerciseDisplay?: Record<string, string>): { short: string; pct: number } | null {
+  if (rets.length < 2 || rets.some(r => r.regained)) return null;
+  const worst = furthestBehindReturn(rets);
+  if (worst == null || worst.exercise === rets[0].exercise) return null;
+  return { short: liftShortName(worst.exercise, exerciseDisplay), pct: liftReturnDisplay(worst, false).pct };
+}
+
+/**
+ * "Building back — Squat est. 1RM 136 of 142 kg pre-break", with the furthest-behind lift named when it fits in `max` characters after
+ * `prefix`: "… pre-break (deadlift furthest at 94%)", else without "pre-break", else the shortest form "(deadlift furthest, 94%)"; else the
+ * plain line. Shared by the goal card and the weekly review.
+ */
+export function rebuildLineWithFurthest(lead: string, note: { short: string; pct: number } | null, prefix: string, max: number): string {
+  if (note) {
+    for (const text of [`${lead} pre-break (${note.short} furthest at ${note.pct}%)`, `${lead} (${note.short} furthest at ${note.pct}%)`, `${lead} (${note.short} furthest, ${note.pct}%)`]) {
+      if (prefix.length + text.length <= max) return text;
+    }
+  }
+  return `${lead} pre-break`;
+}
+
+/**
  * Verdict + headline for a return from a break, across every lift that has a
  * return (the headline lift first):
  *  - one lift, or none back yet: the headline lift's own line — "Building back —
@@ -2087,7 +2115,8 @@ function liftReturnOutcome(rets: GoalLiftReturn[], input: GoalProgressInput): { 
   }
   if (furthestBehindReturn(rets) != null) {
     // The 142 is an estimated 1RM, not a bodyweight or a load: say so ("Squat est. 1RM 136 of 142 kg pre-break").
-    return { verdict: 'building', headline: clip(`Building back — ${r.name} est. 1RM ${recent} of ${withUnit(pre, unit)} pre-break`) };
+    const lead = `Building back — ${r.name} est. 1RM ${recent} of ${withUnit(pre, unit)}`;
+    return { verdict: 'building', headline: clip(rebuildLineWithFurthest(lead, furthestBehindNote(rets, input.exerciseDisplay), '', HEADLINE_MAX_CHARS)) };
   }
   const above = rets.every(x => { const n = returnNumbers(x, input); return n.recent > n.pre; });
   if (!above) {
@@ -2111,8 +2140,10 @@ function liftReturnReasons(rets: GoalLiftReturn[], input: GoalProgressInput, unp
   const back = rets.find(r => r.regained);
   if (behind != null && back == null && rets.length > 1) {
     const others = rets.slice(1);
-    const standing = others.map(r => `${r.name} ${returnNumbers(r, input).pct}%`).join(', ');
-    return [liftReturnReason(rets[0], input), { kind: 'lift', text: `${standing} of ${others.length === 1 ? 'its pre-break best' : 'their pre-break bests'}`, tone: 'neutral' }];
+    // No numbers on this line, so the share is of whole kg whatever the unit (a lb lifter reads the same 95% as a kg one); a list is lowercase
+    // ("bench 95%, deadlift 94% of pre-break est. 1RM"), one lift keeps its sentence-case name.
+    const standing = others.map(r => `${others.length > 1 ? liftShortName(r.exercise, input.exerciseDisplay) : r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ');
+    return [liftReturnReason(rets[0], input), { kind: 'lift', text: `${standing} ${others.length === 1 ? 'of its' : 'of'} pre-break est. 1RM`, tone: 'neutral' }];
   }
   let picked: GoalLiftReturn[];
   if (behind != null && back != null) picked = [behind, back];
@@ -2219,7 +2250,7 @@ function lapseRateReason(input: GoalProgressInput, w: WeightBlock, rate: GoalPro
   const tail = lapseDays < RATE_WINDOW_DAYS / 2 ? ', mostly from before the break' : ' with no training';
   const text = flat
     ? `Trend weight flat${tail}`
-    : `Trend weight ${w.rateKg < 0 ? 'down' : 'up'} ${fmtWeight(input, Math.abs(w.rateKg), 2)}/wk${tail}`;
+    : `Trend weight ${w.rateKg < 0 ? 'down' : 'up'} about ${fmtWeight(input, Math.abs(w.rateKg), 1)}/wk${tail}`;
   return { kind: 'rate', text, tone: 'neutral' };
 }
 

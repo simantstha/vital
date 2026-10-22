@@ -1768,7 +1768,7 @@ test('wave 21 copy glues numbers to units with U+00A0 in kg and lb: the lift-by-
     assert.ok(!new RegExp(`\\d (kg|lb)\\b`).test(`${raw.headline} ${raw.reasons.map(r => r.text).join(' ')}`), 'no number is followed by a breaking space + unit');
     const lapse = computeGoalProgressRaw(lapseInput(14, { weightReadings: ramp(30, 80, 0.03), unitSystem }));
     const rate = lapse.reasons.find(r => r.kind === 'rate')!;
-    assert.match(rate.text, new RegExp(`^Trend weight up \\d\\.\\d+${NBSP}${unit}/wk with no training$`));
+    assert.match(rate.text, new RegExp(`^Trend weight up about \\d\\.\\d${NBSP}${unit}/wk with no training$`));
   }
 });
 
@@ -2218,12 +2218,13 @@ test('return from a break: "Building back", not "Stalled" — verdict building, 
     'bench press': [lw('2026-08-17', 100), lw('2026-08-24', 102), lw('2026-08-31', 104), lw('2026-09-07', 106), lw('2026-09-28', 100), lw('2026-10-05', 100)],
   }));
   assert.equal(p.verdict, 'building');
-  assert.equal(p.headline, 'Building back — Squat est. 1RM 136 of 142 kg pre-break');
+  // Every lift is rebuilding and the bench is furthest behind the headline squat: the headline says so (wave 23s).
+  assert.equal(p.headline, 'Building back — Squat est. 1RM 136 of 142 kg (bench furthest at 94%)');
   assert.ok(p.reasons.every(r => r.tone !== 'watch'), JSON.stringify(p.reasons));
   assert.equal(p.reasons[0].kind, 'lift');
   assert.equal(p.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best'); // 136 / 142 rounds to 96 (wave 21: not floored)
   // Bench is rebuilding too (wave 22s): its standing is its own line, always (no 3-point hide rule), and takes the break line's room.
-  assert.equal(p.reasons[1].text, 'Bench Press 94% of its pre-break best');
+  assert.equal(p.reasons[1].text, 'Bench Press 94% of its pre-break est. 1RM');
   assert.doesNotMatch(JSON.stringify(p), /Stalled|stalled|vs 4 weeks ago/);
   assert.deepEqual(p.liftReturn, {
     exercise: 'squat', name: 'Squat', breakDays: 15, endedOn: '2026-09-27', preBreakKg: 142, recentKg: 136, pct: 95, regained: false,
@@ -2329,12 +2330,19 @@ test('return from a break, lift by lift: several lifts back and one behind, and 
   // Nothing back yet: the headline lift's own "Building back" line, then where every other rebuilding lift stands (wave 22s: whatever the gap).
   const none = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(140, 142) }));
   assert.equal(none.verdict, 'building');
-  assert.equal(none.headline, 'Building back — Squat est. 1RM 136 of 142 kg pre-break');
+  assert.equal(none.headline, 'Building back — Squat est. 1RM 136 of 142 kg (deadlift furthest, 90%)');
   assert.equal(none.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best');
-  assert.equal(none.reasons[1].text, 'Deadlift 90% of its pre-break best');
+  assert.equal(none.reasons[1].text, 'Deadlift 90% of its pre-break est. 1RM');
   // Only 2 points apart (96% / 94%) it is still there: the line no longer comes and goes with a session (days 71-78).
   const close = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(147, 149) }));
-  assert.equal(close.reasons[1].text, 'Deadlift 94% of its pre-break best');
+  assert.equal(close.reasons[1].text, 'Deadlift 94% of its pre-break est. 1RM');
+  // Two other lifts: one lowercase list line, "of pre-break est. 1RM"; the headline names the furthest (wave 23s).
+  const three = computeGoalProgress(longBreakInput({
+    squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(147, 149),
+    'bench press': [lw('2026-08-03', 100), lw('2026-08-10', 102), lw('2026-08-17', 104), lw('2026-08-24', 106), lw('2026-09-21', 99), lw('2026-09-28', 100)],
+  }));
+  assert.equal(three.reasons[1].text, 'bench 94%, deadlift 94% of pre-break est. 1RM');
+  assert.match(three.headline, /^Building back — Squat est\. 1RM 136 of 142 kg \((?:bench|deadlift) furthest(?: at|,) 94%\)$/);
   // An accessory never holds the claim back: lat pulldown at 90% does not stop "Back above".
   const accessory = computeGoalProgress(longBreakInput({ squat: LONG_BREAK_SQUAT, 'lat pulldown': [lw('2026-08-17', 80), lw('2026-08-24', 85), lw('2026-09-21', 70)] }));
   assert.equal(accessory.headline, 'Back above your pre-break best — Squat est. 1RM 145 kg (was 142 kg)');
@@ -3050,16 +3058,16 @@ test('a lapse is not a time to praise the scale: the weight line is neutral and 
   assert.match(praised.text, /on pace for lean gain \(0\.1–0\.5% of bodyweight a week\)/);
   // The first two weeks of a lapse: most of the 28-day rate is from before the break, so the line says so (wave 22s) - no blame.
   const early = computeGoalProgress(lapseInput(8, { weightReadings }));
-  assert.match(early.reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up 0\.\d+\skg\/wk, mostly from before the break$/);
+  assert.match(early.reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up about 0\.\d\skg\/wk, mostly from before the break$/);
   assert.doesNotMatch(JSON.stringify(early), /with no training/);
   const lapsed = computeGoalProgress(lapseInput(14, { weightReadings }));
   assert.equal(lapsed.verdict, 'holding');
   const rate = lapsed.reasons.find(r => r.kind === 'rate')!;
-  assert.match(rate.text, /^Trend weight up 0\.\d+ kg\/wk with no training$/);
+  assert.match(rate.text, /^Trend weight up about 0\.\d kg\/wk with no training$/);
   assert.equal(rate.tone, 'neutral');
   assert.doesNotMatch(JSON.stringify(lapsed), /safe band|lean gain/);
   // Pounds.
-  assert.match(computeGoalProgress(lapseInput(14, { weightReadings, unitSystem: 'imperial' })).reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up 0\.\d+ lb\/wk with no training$/);
+  assert.match(computeGoalProgress(lapseInput(14, { weightReadings, unitSystem: 'imperial' })).reasons.find(r => r.kind === 'rate')!.text, /^Trend weight up about 0\.\d lb\/wk with no training$/);
   // A rate that is already a warning keeps its amber line.
   const fast = computeGoalProgress(lapseInput(14, { weightReadings: ramp(30, 80, 0.12) }));
   assert.equal(fast.reasons.find(r => r.kind === 'rate')?.tone, 'watch');

@@ -19,7 +19,7 @@
  */
 
 import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
-import { KG_TO_LB, isRunningWorkoutType, mixedReturnLead, raceLabel } from './goalProgress';
+import { KG_TO_LB, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, raceLabel, rebuildLineWithFurthest } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { dayNumber, meanOver, rawPlateau } from './weightPace';
@@ -1707,14 +1707,15 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
  * ("Squat back above pre-break; deadlift at 98%"); "back above" is said of the
  * headline lift alone only when every lift is.
  */
-function returnHeadlinePart(input: WeeklyReviewInput): string {
+function returnHeadlinePart(input: WeeklyReviewInput, prefix = ''): string {
   const rets = returnsOf(input);
   const mixed = mixedReturnLead(rets, input.exerciseDisplay, isImperial(input));
   if (mixed) return mixed.text;
   const ret = rets[0];
   const { pre, recent, unit } = liftReturnDisplay(ret, isImperial(input));
   const name = liftDisplayName(ret.exercise, input.exerciseDisplay);
-  if (furthestBehindReturn(rets) != null) return `${name} est. 1RM ${recent} of ${withUnit(pre, unit)} pre-break`;
+  // Every lift still rebuilding: say which one is furthest behind when it is not the headline lift ("deadlift furthest at 94%") if it fits.
+  if (furthestBehindReturn(rets) != null) return rebuildLineWithFurthest(`${name} est. 1RM ${recent} of ${withUnit(pre, unit)}`, furthestBehindNote(rets, input.exerciseDisplay), prefix, REVIEW_HEADLINE_MAX_CHARS);
   const above = rets.every(r => { const n = liftReturnDisplay(r, isImperial(input)); return n.recent > n.pre; });
   return above ? `${name} est. 1RM back above pre-break ${withUnit(pre, unit)}` : `${name} est. 1RM back at pre-break best`;
 }
@@ -1775,7 +1776,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
     if (slackMuscleWeek(input, week) && !input.liftReturn && !(lift && lift.tone === 'good') && parts.length === 1) return clipHeadline(`${parts[0]} last week — a short week`);
     if (lift && input.liftReturn) {
       // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
-      parts.push(returnHeadlinePart(input));
+      parts.push(returnHeadlinePart(input, `${parts.join(', ')}, `));
     } else if (lift && lift.tone === 'good') {
       // The lift change is a 4-week number inside a one-week sentence: say so.
       const cmp = lift.comparison ?? '';

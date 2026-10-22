@@ -7,8 +7,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { TAPER_GOOD_MIN_FRACTION, racePhaseInfo } from '../enduranceProgression';
-import { weekFitsSessionTarget } from '../goalProgress';
-import { liftLapseMinDays } from '../liftChange';
+import { weekFitsSessionTarget, type GoalLiftReturn } from '../goalProgress';
+import { liftLapseMinDays, liftReturnDisplay, liftShortName } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline } from './engine';
@@ -1528,14 +1528,17 @@ invariant(LIFTERS, 'while every lift is rebuilding, the card reasons and the coa
     const imperial = buildScenario(name).profile.units === 'imperial';
     const card = plain(snap.card?.reasons.map(r => r.text).join(' | ') ?? '');
     const coach = plain((snap.coach ?? []).join(' | '));
-    for (const r of rets) {
+    for (const [i, r] of rets.entries()) {
+      // The headline lift's line prints its numbers, so its share is of THOSE (whole kg or lb); the standing line and the coach line print
+      // none, so their share is of whole kg whatever the unit (wave 23s: a lb lifter reads the same 95% as a kg one).
       const f = imperial ? 2.20462 : 1;
       const pre = Math.round(r.preBreakKg * f);
       const recent = Math.min(Math.round(r.recentKg * f), pre - 1);
-      const pct = Math.min(99, Math.round((recent / pre) * 100));
-      const label = r.name.toLowerCase();
-      if (!new RegExp(`${label}[^|]*\\b${pct}%`, 'i').test(card)) out.push({ snap, detail: `card reasons do not give ${r.name} at ${pct}%: "${visible(card)}"` });
-      if (!new RegExp(`${label} ${pct}% of its pre-break best`, 'i').test(coach)) out.push({ snap, detail: `coach lines do not give ${r.name} at ${pct}%: "${visible(coach)}"` });
+      const shownPct = Math.min(99, Math.round((recent / pre) * 100));
+      const kgPct = liftReturnDisplay(r, false).pct;
+      const label = liftShortName(r.exercise);
+      if (!new RegExp(`${i === 0 ? r.name.toLowerCase() : label}[^|]*\\b${i === 0 ? shownPct : kgPct}%`, 'i').test(card)) out.push({ snap, detail: `card reasons do not give ${r.name} at ${i === 0 ? shownPct : kgPct}%: "${visible(card)}"` });
+      if (!new RegExp(`${r.name.toLowerCase()} ${kgPct}% of its pre-break best`, 'i').test(coach)) out.push({ snap, detail: `coach lines do not give ${r.name} at ${kgPct}%: "${visible(coach)}"` });
     }
   }
   if (name === 'lifter') assert.ok(days > 0, `${name}: no day had two or more lifts all rebuilding, so this invariant checked nothing`);
@@ -2634,5 +2637,96 @@ invariant(LIFTERS, 'in a slack-week REVIEW the headline names the week, the weig
     if (plain(rv.alert.body) !== plain(r.headline)) out.push({ snap, detail: `push body "${visible(rv.alert.body)}" does not follow the headline "${visible(r.headline)}"` });
   }
   if (name === 'lifter_short_week' || name === 'lifter_obedient') assert.ok(checked > 0, `${name}: no slack week was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P3 copy. "(last: Apr 16)" on Apr 16 is "(last: today)" (and "yesterday" the day after); the rate is "about 0.4 lb/wk"; a rebuild's
+// standing line is a lowercase list of est. 1RM shares, the same in kg and lb (no numbers on the line, so the % comes from kg); and
+// when every lift is rebuilding the headline says which one is furthest behind.
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const shortDateOf = (day: string): string => `${MONTH_NAMES[Number(day.slice(5, 7)) - 1]} ${Number(day.slice(8, 10))}`;
+
+invariant(LIFTERS, 'a "(last: …)" never names today or yesterday by its date', (snaps, name) => {
+  const out: Violation[] = [];
+  let lasts = 0;
+  for (const snap of snaps) {
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const m = /\(last: ([A-Z][a-z]{2} \d{1,2})\)/.exec(plain(t.text));
+      if (!m) continue;
+      lasts++;
+      if (m[1] === shortDateOf(snap.date)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" should say "(last: today)"` });
+      if (m[1] === shortDateOf(addDays(snap.date, -1))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" should say "(last: yesterday)"` });
+    }
+  }
+  if (name === 'lifter_short_week') assert.ok(lasts > 0, `${name}: no "(last: …)" appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(LIFTERS, 'a lean-gain weight rate is "about 0.4 kg/wk" (one decimal), not 0.37 lb/wk', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'rate') continue;
+      const text = plain(r.text);
+      if (/^Trend weight (?:up|down) /.test(text) && !/^Trend weight (?:up|down) about \d+(?:\.\d)? (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `card.reasons (rate): "${visible(r.text)}"` });
+    }
+  }
+  return out;
+});
+
+/** The lifts' standing line: lowercase short names, whole-kg percentages (unit-independent, the line shows no numbers). */
+function standingLine(snap: DaySnapshot): string | null {
+  const rets = snap.card?.liftReturns;
+  if (!rets || rets.length < 2 || rets.some(r => r.regained)) return null;
+  const others = rets.slice(1);
+  const list = others.map(r => `${others.length > 1 ? liftShortName(r.exercise) : r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ');
+  return others.length > 1 ? `${list} of pre-break est. 1RM` : `${list} of its pre-break est. 1RM`;
+}
+
+invariant(LIFTERS, 'while every lift is rebuilding the standing line is "bench 95%, deadlift 94% of pre-break est. 1RM": lowercase, est. 1RM, the same % in kg and lb', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  for (const snap of snaps) {
+    const want = standingLine(snap);
+    if (want == null) continue;
+    days++;
+    const has = (snap.card?.reasons ?? []).some(r => plain(r.text) === want);
+    if (!has) out.push({ snap, detail: `card.reasons has no "${want}": ${(snap.card?.reasons ?? []).map(r => `"${visible(r.text)}"`).join(' | ')}` });
+  }
+  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(days > 0, `${name}: no all-rebuilding day with two or more lifts, so this invariant checked nothing`);
+  return out;
+});
+
+test('lifter_imperial: a rebuild shows the same lift percentages as lifter on the same day (the line has no numbers, so they come from kg)', () => {
+  const kg = runTimeline('lifter');
+  const lb = runTimeline('lifter_imperial');
+  let compared = 0;
+  const bad: string[] = [];
+  for (const [i, k] of kg.entries()) {
+    const a = k.card?.reasons.find(r => / pre-break est\. 1RM$/.test(plain(r.text)))?.text;
+    const b = lb[i].card?.reasons.find(r => / pre-break est\. 1RM$/.test(plain(r.text)))?.text;
+    if (a == null && b == null) continue;
+    compared++;
+    if (a !== b) bad.push(`day ${i}: kg "${a}" vs lb "${b}"`);
+  }
+  assert.ok(compared > 0, 'no rebuild standing line was compared');
+  assert.deepEqual(bad.slice(0, 5), [], `${bad.length} day(s) differ`);
+});
+
+invariant(LIFTERS, 'while every lift is rebuilding the card and review headlines say which lift is furthest behind when it is not the headline lift', (snaps, name) => {
+  const out: Violation[] = [];
+  let days = 0;
+  const check = (snap: DaySnapshot, where: string, headline: string | undefined, rets: readonly GoalLiftReturn[] | null | undefined): void => {
+    if (!rets || rets.length < 2 || rets.some(r => r.regained) || headline == null) return;
+    const worst = rets.reduce((w, r) => (r.recentKg / r.preBreakKg < w.recentKg / w.preBreakKg - 1e-9 ? r : w), rets[0]);
+    if (worst.exercise === rets[0].exercise) return;
+    days++;
+    if (!plain(headline).includes(`${liftShortName(worst.exercise)} furthest`)) out.push({ snap, detail: `${where} "${visible(headline)}" does not name ${worst.name} as furthest behind (${rets.map(r => `${r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ')})` });
+  };
+  for (const snap of snaps) {
+    check(snap, 'card.headline', snap.card?.headline, snap.card?.liftReturns);
+    check(snap, 'review.headline', snap.review?.review.headline, snap.review?.progress.liftReturns);
+  }
+  if (name === 'lifter') assert.ok(days > 0, `${name}: no all-rebuilding day with the furthest lift behind the headline lift, so this invariant checked nothing`);
   return out;
 });
