@@ -1463,7 +1463,8 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
           ...(plan.comeback != null ? { comebackFromKm: round1(rp.prevWeek.km) } : {}),
         };
   } else if (grade.gap === 'over' && plan.cutback != null) {
-    gap = { kind: 'cutback', doneKm: round1(km), targetKm: plan.targetKm as number, normalKm: plan.cutback.normalKm };
+    // Wave 23e: a cutback that became a normal week is a good week with no gap (the hold that follows and the owed cutback carry the caution).
+    gap = null;
   } else if (grade.gap === 'over' || grade.gap === 'under') {
     gap = { kind: 'phase', phase: plan.kind as 'taper' | 'race_week' | 'recovery', doneKm: round1(km), targetKm: plan.targetKm as number, over: grade.gap === 'over' };
   }
@@ -1571,7 +1572,7 @@ function distanceHeadline(
   // A cutback week is graded against its own lowered number, so a week that ran far past it says so before the weekly goal is looked at
   // ("30 of ~24 km — above the cutback", never "30 of 30 km" that hides the skipped cutback).
   if (opts.cutback && km > stepKm * CUTBACK_SKIPPED_FRACTION + 1e-9) {
-    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — above the cutback · goal ${distanceText(input, targetKm)}`;
+    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — a normal week, not the cutback · goal ${distanceText(input, targetKm)}`;
   }
   // Wave 23e: a hold week he built through says so before the weekly goal is looked at ("28 of ~25 km — above the hold").
   if (opts.holdOver) return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — above the hold · goal ${distanceText(input, targetKm)}`;
@@ -1582,7 +1583,7 @@ function distanceHeadline(
   if (opts.overCap) return `${distanceNumber(input, km)} of ${target} — ${overCapPhrase('touch')} · goal ${distanceText(input, targetKm)}`;
   const onPlan = distanceNumber(input, km) >= distanceNumber(input, stepKm);
   // Over the step but under the spike line is above the step, not "on plan" (a +33% week is not on a 10% plan).
-  const note = onPlan ? (km > stepKm * ABOVE_STEP_FRACTION ? (opts.cutback ? ' — above the cutback' : ' — above the step') : ' — on plan') : '';
+  const note = onPlan ? (km > stepKm * ABOVE_STEP_FRACTION ? (opts.cutback ? ' — a normal week' : ' — above the step') : ' — on plan') : '';
   return `${distanceNumber(input, km)} of ${target}${note} · goal ${distanceText(input, targetKm)}`;
 }
 
@@ -1707,7 +1708,8 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
   if (plan.cutback != null) {
     return rp.week.km <= (plan.targetKm as number) * PHASE_CEILING_TOLERANCE
       ? `Cutback week done: ${km} — the last three weeks have time to settle in.`
-      : null;
+      // Wave 23e: a cutback that became a normal week is fine, said as such (the week is rated good, with no slip).
+      : 'Your cutback became a normal week — fine.';
   }
   // A comeback week that went more than 10% over its "up to" ceiling is not praised for the extra (the headline says it).
   if (overUpToCap(plan, rp.week.km, unitsPerKmOf(input))) return null;
@@ -1889,7 +1891,8 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
         const comparison = volume.comparison?.replace(/ vs last week(, as planned \(cutback\))$/, '$1')
           .replace(/^([+−-]\d+%) on your last full week \([^)]*\), back on the build after the cutback$/, '$1 vs last full week')
           .replace(/^same as your last full week \([^)]*\), back after the cutback$/, 'same as last full week');
-        parts.push(!(spike || overCap || reviewPlans(input).holdBroken) && comparison && comparison.includes('%') ? `${value}, ${comparison}` : value);
+        const cutbackNormal = reviewed?.cutback != null && km != null && km > stepKm * CUTBACK_SKIPPED_FRACTION + 1e-9;
+        parts.push(!(spike || overCap || reviewPlans(input).holdBroken || cutbackNormal) && comparison && comparison.includes('%') ? `${value}, ${comparison}` : value);
       }
     }
   } else {
@@ -2380,8 +2383,8 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
       const windAfter = weekAfterNextWindDown(input);
       const thenBuild = windAfter != null ? thenWindDown(windAfter) : `then build ~${growth} a week toward ${goalText}`;
       text = next.hold?.skippedCutback === true
-        // A cutback week that ran more than 10% over its lowered number: no +10% on the skip.
-        ? `You skipped the cutback — hold ~${t} next week${lr ? `; ${lr}` : ''}, ${thenBuild}.`
+        // A cutback week that ran more than 10% over its lowered number: no +10% on it - an easier week before building again (wave 23e: no guilt).
+        ? `Hold ~${t} next week${lr ? `; ${lr}` : ''} — an easier week${windAfter != null ? `, ${thenWindDown(windAfter)}` : ' before building again'}.`
         : next.hold?.ceiling === true
         // A comeback week far past its ceiling: next week stays AT that ceiling.
         ? `Stay at ~${t} next week — don't build on last week's jump; ${thenBuild}.`

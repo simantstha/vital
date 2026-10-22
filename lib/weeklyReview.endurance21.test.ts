@@ -73,16 +73,16 @@ test('cutback: "Next week" names it, the cutback week itself is graded as its ow
   assert.equal(easy.weekRating, 'good');
   assert.equal(easy.weekGap, null);
   assert.equal(easy.slip, null);
-  // The full normal week instead of the cutback is no "jump" (25 km is the week it replaced) - but it is not a good cutback either (wave 22e):
-  // the cutback was skipped, so the week is mixed with its own gap and slip, nothing is praised, and next week holds at the week it replaced.
+  // The full normal week instead of the cutback is no "jump" (25 km is the week it replaced). Wave 22e rated it mixed with a "Cutback skipped" slip;
+  // wave 23e: it is no failure - a good week, no slip - the cutback simply became a normal week (still owed), and next week holds at the week it replaced.
   const normal = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25], { weekStart: '2026-10-19' }));
-  assert.deepEqual(normal.weekGap, { kind: 'cutback', doneKm: 25, targetKm: 20, normalKm: 25 });
-  assert.equal(normal.weekRating, 'mixed');
-  assert.equal(normal.win, null); // no praise for skipping the cutback
-  assert.equal(normal.slip, 'Cutback skipped: 25 km vs ~20 km planned');
-  assert.match(normal.headline, /^4 sessions, 25 of ~20 km — above the cutback · goal 30 km/);
-  assert.equal(normal.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
-  assert.equal(normal.nextWeek, 'You skipped the cutback — hold ~25 km next week; long run 10 km, then build ~10% a week toward 30 km.');
+  assert.equal(normal.weekGap, null);
+  assert.equal(normal.weekRating, 'good');
+  assert.equal(normal.win, 'Your cutback became a normal week — fine.');
+  assert.equal(normal.slip, null);
+  assert.match(normal.headline, /^4 sessions, 25 of ~20 km — a normal week, not the cutback · goal 30 km/);
+  assert.equal(normal.stats.find(st => st.label === 'Volume')!.tone, 'good');
+  assert.equal(normal.nextWeek, 'Hold ~25 km next week; long run 10 km — an easier week before building again.');
 });
 
 test('strides: the last 2 build weeks before the taper say "plus 4–6 strides after one easy run" in "Next week"', () => {

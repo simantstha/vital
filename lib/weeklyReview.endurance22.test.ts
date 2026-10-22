@@ -55,10 +55,10 @@ function planReview(weeks: number[], over: Partial<WeeklyReviewInput> = {}): Wee
 
 // ── P1-C: the skipped cutback ───────────────────────────────────────────────
 
-test('a cutback week that ran far past its lowered number reads "above the cutback" in the headline - not "30 of 30 km"', () => {
+test('a cutback week that ran far past its lowered number reads "a normal week, not the cutback" in the headline - not "30 of 30 km"', () => {
   // The cutback week is Mon 2026-10-19 (20 km after 15 17 19 21 23). 24 km is 20% over it and under the spike line.
   const skipped = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 24], { weekStart: '2026-10-19' }));
-  assert.match(skipped.headline, /^4 sessions, 24 of ~20 km — above the cutback · goal 30 km/);
+  assert.match(skipped.headline, /^4 sessions, 24 of ~20 km — a normal week, not the cutback · goal 30 km/);
   // Even a week that reached the weekly goal itself in a cutback week is read against the cutback (the goal is not the bar that week).
   const atGoal = computeWeeklyReview(planReview([15, 17, 19, 21, 25, 30], { weekStart: '2026-10-19' }));
   assert.doesNotMatch(atGoal.headline, /30 of 30/);

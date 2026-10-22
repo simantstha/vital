@@ -191,7 +191,7 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
     case 'hold':
       // A cutback week that ran more than 10% over its lowered number: hold at the week it replaced.
       if (plan.skippedCutback) {
-        return `- This week's target: hold ~${t} — last week skipped the cutback (ran well over its lowered number); do not build 10% on the skip, and do not praise it${strides}`;
+        return `- This week's target: hold ~${t} — last week's cutback ran as a normal week (fine, not a failure); an easier week before building again, so do not build 10% on it, and do not scold${strides}`;
       }
       // A comeback week far past its "up to" ceiling: stay at that ceiling.
       if (plan.overCapRead === 'well') {

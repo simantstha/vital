@@ -844,10 +844,11 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   // measured against it (30% and 3 km over ~20 km); the normal 25 km week it replaced is 25% over it, no spike. A week with no run is a rest week.
   assert.deepEqual(gradeEnduranceWeek(cut, 8), { level: 'good', gap: null });
   assert.deepEqual(gradeEnduranceWeek(cut, 22), { level: 'good', gap: null }); // inside the 10% ceiling slack
-  // More than 10% over the lowered number is a SKIPPED cutback (wave 22e): mixed, not good - the normal 25 km week it replaced is no cutback.
-  assert.deepEqual(gradeEnduranceWeek(cut, 22.1), { level: 'mixed', gap: 'over' });
-  assert.deepEqual(gradeEnduranceWeek(cut, 25), { level: 'mixed', gap: 'over' });
-  assert.deepEqual(gradeEnduranceWeek(cut, 26), { level: 'mixed', gap: 'over' });
+  // More than 10% over the lowered number is a cutback that became a normal week (wave 22e "skipped": mixed; wave 23e: a good week, no failure, but the gap 'over'
+  // stays so the next week holds and the cutback is still owed).
+  assert.deepEqual(gradeEnduranceWeek(cut, 22.1), { level: 'good', gap: 'over' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 25), { level: 'good', gap: 'over' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 26), { level: 'good', gap: 'over' });
   assert.deepEqual(gradeEnduranceWeek(cut, 27), { level: 'mixed', gap: 'spike' });
   assert.deepEqual(gradeEnduranceWeek(cut, 40), { level: 'mixed', gap: 'spike' });
   assert.equal(gradeEnduranceWeek(cut, 0).level, 'light');
@@ -862,9 +863,10 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   assert.equal(skipped.kind, 'hold');
   assert.equal(skipped.targetKm, 25);
   assert.deepEqual(skipped.hold, { spikeKm: 25, spikeStepKm: 20, skippedCutback: true });
-  assert.equal(nbsp(skipped.purpose).split(';')[0], 'You skipped the cutback — hold ~25~km this week');
+  assert.equal(nbsp(skipped.purpose), 'Your cutback became a normal week — fine. Hold ~25~km this week, long run 10~km — an easier week before building again');
   assert.equal(skipped.last?.cutback, true);
-  assert.equal(skipped.last?.grade?.gap, 'over');
+  assert.equal(skipped.last?.grade?.gap, 'over'); // (wave 23e: a good week - no failure - that still owes the cutback)
+  assert.equal(skipped.last?.grade?.level, 'good');
   // ... and the week after the hold builds on the held week (25 -> 28), as any hold.
   assert.equal(planFor(runsFor([15, 17, 19, 21, 23, 25, 25]), 8).targetKm, 28);
   // A cutback week that ended in days off short of its lowered number is a rest week, not a good cutback.

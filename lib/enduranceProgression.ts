@@ -1381,7 +1381,8 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
         : `${verb} ${formatKm(plan.goalKm, u)} this week, the rest of the runs easy${strides}`;
     }
     case 'hold':
-      if (plan.hold?.skippedCutback) return `You skipped the cutback — hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
+      // Wave 23e: no guilt - the cutback became a normal week, which is fine; this week is the easier one.
+      if (plan.hold?.skippedCutback) return `Your cutback became a normal week — fine. Hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `, ${lrPart}` : ''} — an easier week before building again${strides}`;
       return `Hold ~${formatKm(t ?? plan.goalKm, u)} this week, no step up after last week's jump${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
     case 'restart':
       if (plan.restartLong) return `Two weeks off — restart a bit lower, ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
@@ -2058,8 +2059,9 @@ export function gradeEnduranceWeek(
   if (plan.band.overKm != null && isSpikeWeek(km, target, plan.goalKm, units) && km > medianGuard) {
     return { level: 'mixed', gap: 'spike' };
   }
-  // A cutback week that ran more than 10% over its lowered number skipped the cutback (wave 22e): not a good week, and not a spike either.
-  if (plan.cutback != null && km > target * CUTBACK_SKIPPED_FRACTION + 1e-9) return { level: 'mixed', gap: 'over' };
+  // A cutback week that ran more than 10% over its lowered number became a normal week (wave 22e: the cutback was "skipped"). Wave 23e: that is no failure - a
+  // good week, not a spike - but the gap 'over' stays so the next week holds at the week the cutback replaced and the cutback is still owed.
+  if (plan.cutback != null && km > target * CUTBACK_SKIPPED_FRACTION + 1e-9) return { level: 'good', gap: 'over' };
   // A cutback week that ended in days off before it reached even its (lowered) number is a rest week, not a good cutback.
   if (plan.cutback != null && plan.endedOff && km < target) return { level: 'light', gap: null };
   if (km >= plan.band.goodFromKm - 1e-9) return { level: 'good', gap: null };

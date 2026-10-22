@@ -3289,7 +3289,7 @@ function thisWeekDoneOutcome(
   const note = holdOver ? 'above the hold'
     : read !== 'within' ? overCapPhrase(read)
     : grade.level === 'mixed' ? 'a bit under the step'
-    : doneKm > target * ABOVE_STEP_FRACTION ? (plan.cutback != null ? 'above the cutback' : 'above the step')
+    : doneKm > target * ABOVE_STEP_FRACTION ? (plan.cutback != null ? 'a normal week' : 'above the step')
     : 'on plan';
   return finish('building', `Week done — ${done} of ${ceiling}${fmt(target)}, ${note}`, planBody());
 }
@@ -3454,8 +3454,9 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       }
       // A cutback week that ran more than 10% over its lowered number: no +10% build on the skip - hold at the week it replaced.
       if (hold.skippedCutback === true) {
-        const skippedInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was above the ~${fmt(hold.spikeStepKm)} cutback — the week it replaced stays the bar`, tone: 'watch' };
-        return finish('holding', `You skipped the cutback — hold ~${fmt(target)} this week`, stepWarn != null
+        // (Wave 23e: no guilt. The cutback became a normal week, which is fine; the bar stays where it was.)
+        const skippedInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} ran as a normal week, not the ~${fmt(hold.spikeStepKm)} cutback — your bar stays ~${fmt(target)}`, tone: 'neutral' };
+        return finish('holding', `Your cutback became a normal week — hold ~${fmt(target)} this week`, stepWarn != null
           ? body(stepWarn, [skippedInfo, planLine])
           : body(skippedInfo, [planLine]));
       }
@@ -3500,7 +3501,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       // A cutback week that ran past its lowered number says so, whatever the week's last-week read ("30 of ~24 km" is no on-plan cutback).
       const aboveCutback = plan.cutback != null && doneKm > target * CUTBACK_SKIPPED_FRACTION;
       const lead = aboveCutback ? fmt(doneKm) : long ?? `${goalText} a week`;
-      const tail = aboveCutback ? `, above the ~${fmt(target)} cutback` : '';
+      const tail = aboveCutback ? `, your cutback ran as a normal week` : '';
       const headline = race != null
         ? `On track for the ${raceWord(race.label)} — ${lead}${tail}`
         : `On track — ${lead}${tail}`;
@@ -3513,9 +3514,9 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   if (level === 'tough') {
     return finish('behind', `Behind — ${fmt(lastKm)} last week${lastPlanKm != null ? `, ~${fmt(lastPlanKm)} was the step` : ''}`, planBody());
   }
-  // A cutback week that ran well past its lowered number says so ("Cutback week - 25 of ~20 km, above the cutback"), not last week's read.
+  // A cutback week that ran well past its lowered number says what happened ("Cutback week - 25 of ~20 km, ran as a normal week"), not last week's read.
   if (plan.cutback != null && doneKm > target * CUTBACK_SKIPPED_FRACTION) {
-    return finish('building', `Cutback week — ${done} of ~${fmt(target)}, above the cutback`, planBody());
+    return finish('building', `Cutback week — ${done} of ~${fmt(target)}, ran as a normal week`, planBody());
   }
   const above = level === 'good' && lastPlanKm != null && lastKm > lastPlanKm * ABOVE_STEP_FRACTION;
   // A comeback week's "up to ~18 km" is a ceiling: more than 10% over it (but not far) is "a touch over, fine" - said neutrally and once,

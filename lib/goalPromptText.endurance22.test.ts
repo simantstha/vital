@@ -72,10 +72,10 @@ test('comeback ceiling (22e): a touch over is "fine, said once"; far over is a h
   assert.match(well, /^- This week's target: stay at ~15\.0 km — last week was well over its comeback ceiling \(a spike\); do not build on the jump/);
 });
 
-test('skipped cutback (22e): the coach is told to hold at the week the cutback replaced and not to praise the skip', () => {
+test('skipped cutback (22e, wave 23e: no guilt): the coach is told to hold at the week the cutback replaced, as an easier week, without scolding', () => {
   const monday = '2026-10-26';
   const gp = computeGoalProgress(input(weeks(monday, [[], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }));
-  assert.match(targetLine(coach(gp)), /^- This week's target: hold ~25\.0 km — last week skipped the cutback \(ran well over its lowered number\); do not build 10% on the skip, and do not praise it/);
+  assert.match(targetLine(coach(gp)), /^- This week's target: hold ~25\.0 km — last week's cutback ran as a normal week \(fine, not a failure\); an easier week before building again, so do not build 10% on it, and do not scold/);
 });
 
 test('cutback coach line (22e): a long run the lowered week cannot carry is "eased to N km (half the week)", not "held"', () => {
