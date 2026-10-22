@@ -1844,6 +1844,54 @@ test('a week with no sessions: no lift win, "Ease back in" at ~90% of the last w
   assert.equal(noLoad.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights, starting today.');
 });
 
+test('a review read on a Monday she has already lifted does not tell her to start today: "You\'re already back — Monday\'s 110 kg squat was your first session; …" (wave 23s)', () => {
+  const monday = addDays(WEEK_START, 7);
+  const weeks = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'];
+  const squat = (monthly: Array<ReturnType<typeof lwk>>) => [...weeks.map(w => lwk(w, 141.8, 115)), ...monthly];
+  // First week off, squatted 110 kg this Monday: the "Ease back in … starting today" is replaced.
+  const first = computeWeeklyReview(liftReview({
+    trainingDays: [], strengthDays: [monday], progression: { squat: squat([lwk(monday, 128.3, 110, 1, 1650)]) }, signupDay: '2026-06-01',
+  }));
+  assert.equal(first.nextWeek, "You're already back — Monday's 110 kg squat was your first session; make it 4 this week, adding load only when every set feels solid.");
+  // Second week off (nothing in the week before either): she did the easy session the review asked for; build back from it.
+  const second = computeWeeklyReview(liftReview({
+    trainingDays: [], strengthDays: [monday], signupDay: '2026-06-01',
+    progression: { squat: [...weeks.slice(0, 4).map(w => lwk(w, 141.8, 115)), lwk(monday, 128.3, 110, 1, 1650)] },
+  }));
+  assert.equal(second.headline, 'No sessions last week (2nd week off)');
+  assert.equal(second.nextWeek, "You're already back — Monday's 110 kg squat was your first session; build back toward 4 a week, adding load only when every set feels solid.");
+  // Two main lifts, in the lift ranking's order; pounds are whole pounds of the top set (110 kg = 243 lb).
+  const two = computeWeeklyReview(liftReview({
+    unitSystem: 'imperial', trainingDays: [], strengthDays: [monday], signupDay: '2026-06-01',
+    progression: { squat: squat([lwk(monday, 128.3, 110, 1, 1650)]), 'bench press': [...weeks.map(w => lwk(w, 100, 80)), lwk(monday, 96, 85, 1, 1275)] },
+  }));
+  assert.match(two.nextWeek, /^You're already back — Monday's 243 lb squat and 187 lb bench were your first session; /);
+  // No load known for that Monday (a HealthKit strength workout): the session is still acknowledged, without a number.
+  const none = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [monday], progression: { squat: squat([]) }, signupDay: '2026-06-01' }));
+  assert.match(none.nextWeek, /^You're already back — Monday's session was your first session; make it 4 this week/);
+  // More days trained since (the review opened midweek): the Monday loads can no longer be told from the week's, so no number.
+  const later = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [monday, addDays(monday, 2)], progression: { squat: squat([lwk(monday, 128.3, 110, 2, 1650)]) }, signupDay: '2026-06-01' }));
+  assert.match(later.nextWeek, /^You're already back — Monday's session was your first session; /);
+  // No session on Monday: the review is unchanged.
+  const quiet = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: { squat: squat([]) }, signupDay: '2026-06-01' }));
+  assert.equal(quiet.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg), starting today.');
+  // A short week (some sessions, not all): "starting today" goes once she has lifted on the review's Monday, the loads stay.
+  const shortWeek = computeWeeklyReview(liftReview({ trainingDays: [WEEK[3]], strengthDays: [WEEK[3], monday], progression: { squat: squat([lwk(monday, 128.3, 110, 1, 1650)]) } }));
+  assert.doesNotMatch(shortWeek.nextWeek, /today/);
+  assert.match(shortWeek.nextWeek, /^Back to 4 this week — don't make up the missed ones\. /);
+});
+
+test('a session on the review\'s Monday never moves the review\'s lift comparisons (the lift data is cut at the reviewed week) (wave 23s)', () => {
+  const monday = addDays(WEEK_START, 7);
+  const weeks = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', WEEK_START];
+  const squat = weeks.map((w, i) => lwk(w, 130 + i * 3, 105 + i * 2.5));
+  const without = computeWeeklyReview(liftReview({ strengthDays: SESSIONS_4, progression: { squat } }));
+  const withMonday = computeWeeklyReview(liftReview({ strengthDays: [...SESSIONS_4, monday], progression: { squat: [...squat, lwk(monday, 160, 120, 1, 1800)] } }));
+  assert.deepEqual(withMonday.stats, without.stats);
+  assert.equal(withMonday.headline, without.headline);
+  assert.equal(withMonday.nextWeek, without.nextWeek);
+});
+
 test('a muscle week 1-3 sessions short is never made up: "Back to 4 this week — don\'t make up the missed ones", starting today, whatever the weekdays trained', () => {
   const back = "Back to 4 this week — don't make up the missed ones, starting today.";
   // Two sessions short (trained Mon + Thu in both weeks), one short (Tue/Thu/Sat): no weekday suggested, no "Book", no "lock in".

@@ -1302,7 +1302,7 @@ invariant(LIFTERS, 'a muscle review never asks to make up, catch up or lock in t
 });
 
 // The same week, the other way round: a muscle week with 1..target-1 sessions says "Back to N this week" + "don't make up", ends with
-// "starting today" (the review is read on its Monday) and cues the planned load of every main lift she did NOT train that week: the
+// "starting today" (the review is read on its Monday, unless she has lifted that day) and cues the planned load of every main lift she did NOT train that week: the
 // step the previous week's cue already gave ("Squat 112.5 kg"), taken from the scenario's own rows so a wrong load cannot excuse itself.
 invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week", not to make up the missed ones, and repeats the planned load of each lift skipped', (snaps, name) => {
   const scn = buildScenario(name);
@@ -1319,7 +1319,9 @@ invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week"
     checked++;
     const text = plain(r.nextWeek);
     if (!new RegExp(`^Back to ${target} this week — don't make up the missed ones\\.`).test(text)) out.push({ snap, detail: `review.nextWeek does not open with the no-makeup line: "${visible(r.nextWeek)}"` });
-    if (!/, starting today\.$/.test(text)) out.push({ snap, detail: `review.nextWeek does not end "starting today.": "${visible(r.nextWeek)}"` });
+    // (Wave 23s: not once she has already lifted on the review's own Monday - "starting today" is then stale.)
+    const liftedMonday = scn.sets.some(x => !x.isWarmup && x.day === snap.date);
+    if (liftedMonday ? /\btoday\b/.test(text) : !/, starting today\.$/.test(text)) out.push({ snap, detail: `review.nextWeek ${liftedMonday ? 'says "today" after a session on its Monday' : 'does not end "starting today."'}: "${visible(r.nextWeek)}"` });
     const weekStart = r.weekStart;
     const prevStart = addDays(weekStart, -7);
     for (const ex of ['squat', 'deadlift']) {
@@ -2759,5 +2761,30 @@ invariant(['lifter_imperial'], 'every lb next-load cue starts at the grid below 
     }
   }
   assert.ok(cues > 5, `${name}: only ${cues} lb next-load cues appeared, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// ── Day 70: the Monday review said "2nd week off — book one easy session today at ~90% … (Squat ~102.5 kg)" on the Monday she had already
+// squatted 110 kg. A review read on a day she has already lifted (the loader reads her sets relative to the real clock, and the review is
+// recomputed when opened) never tells her to start today; after a week without a session it says she is already back, and names the session.
+invariant(LIFTERS, 'a review read on a Monday she has already lifted does not say "today" (a week off: "You\'re already back — Monday\'s 110 kg squat was your first session; …")', (snaps, name) => {
+  const scn = buildScenario(name);
+  const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
+  const out: Violation[] = [];
+  let weeksOff = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || !trained.has(snap.date)) continue;
+    if (/\btoday\b/i.test(plain(r.nextWeek))) out.push({ snap, detail: `she lifted on ${snap.date}, but review.nextWeek says "${visible(r.nextWeek)}"` });
+    if (r.weekGap?.kind === 'sessions' && r.weekGap.done === 0) {
+      weeksOff++;
+      const imperial = scn.profile.units === 'imperial';
+      const lifted = scn.sets.filter(x => !x.isWarmup && x.day === snap.date && x.loadKg != null).map(x => (imperial ? Math.round((x.loadKg as number) * 2.20462) : (x.loadKg as number)));
+      const head = /^You're already back — Monday's (\d+(?:\.\d+)?)\s(?:kg|lb) \w+(?: and \d+(?:\.\d+)?\s(?:kg|lb) [\w ]+)? (?:was|were) your first session; /.exec(plain(r.nextWeek));
+      if (!head) out.push({ snap, detail: `a week off, then a session on the review's Monday: review.nextWeek "${visible(r.nextWeek)}" should open "You're already back — Monday's … was your first session; …"` });
+      else if (!lifted.includes(Number(head[1]))) out.push({ snap, detail: `review.nextWeek names ${head[1]} but she lifted ${lifted.join(', ')} that Monday` });
+    }
+  }
+  if (name === 'lifter') assert.ok(weeksOff > 0, `${name}: no week off was followed by a session on the review's Monday, so this invariant checked nothing`);
   return out;
 });
