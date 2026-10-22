@@ -185,6 +185,21 @@ test('the week after a cutback quotes its % against the last full week before th
   assert.equal(afterCut.distance!.plan?.stepBaseKm, 23);
 });
 
+test('the taper week\'s own long run is no yardstick: a 14 km peak run on the taper Sunday (the taper plans ~9) reads "Peak long run 14 km - done", not "longer than the 9 km plan" (23e P3-e)', () => {
+  const race = { date: '2026-10-25', distanceKm: 21.1 }; // Monday 10-12 is the taper week (13 days out), Sunday 10-18 its last day; the peak target is 15 km
+  const sun = '2026-10-18';
+  const ignored = computeGoalProgress(input(weeks(sun, [[[1, 5], [3, 5], [5, 4], [6, 14]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race, racePeakWeekKm: 30 }));
+  assert.equal(ignored.race?.phase, 'taper');
+  const planned = ignored.distance!.plan!.longRunKm;
+  assert.ok(planned != null && planned < 12, `the taper plans a short long run, got ${planned}`);
+  const line = ignored.reasons.find(r => r.kind === 'long_run')!;
+  assert.equal(line.text, 'Peak long run 14 km — done');
+  assert.equal(line.tone, 'good');
+  // Past the PEAK TARGET (15 km + 0.5) it is still a reproach, against that number.
+  const big = computeGoalProgress(input(weeks(sun, [[[1, 5], [3, 5], [5, 4], [6, 18]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: sun, race, racePeakWeekKm: 30 }));
+  assert.equal(big.reasons.find(r => r.kind === 'long_run')!.text, 'Long-run peak done — 18 km, longer than the 15 km plan');
+});
+
 test('"Hold 30 km" only after a week that ran the goal: after 28 km (or a cutback week) a maintain week is "Build to 30 km" (23e P3-c)', () => {
   // Weeks of 15..23 km, a 40 km spike, then the hold week ran 28 km: this Monday is at the 30 km goal, which he has run before - but not last week.
   const monday = '2026-04-20';

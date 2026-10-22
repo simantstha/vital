@@ -2986,9 +2986,12 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
     ? (planKm != null ? `longer than the ${fmtLongRunPeak(input, planKm)} plan` : 'over half of your week')
     : null;
   if (isWindDownPhase(race.phase)) {
-    return brokePlan != null
-      ? { kind: 'long_run', text: `Long-run peak done — ${fmtLongRunPeak(input, lr.peakKm)}, ${brokePlan}`, tone: 'neutral' }
-      : { kind: 'long_run', text: `Peak long run ${fmtLongRunPeak(input, lr.peakKm)} — done`, tone: praise };
+    // Wave 23e P3-e: in the taper and race week the peak is judged against the PEAK TARGET (+0.5 km) or the share of its week - never against the taper
+    // week's own long run (a 14 km peak "longer than the 9 km plan" reproached a build-phase peak with the number of a week it was not part of).
+    const windBroke = overTarget ? `longer than the ${fmtLongRunPeak(input, lr.targetPeakKm)} plan` : lr.oversized === true ? 'over half of your week' : null;
+    return windBroke != null
+      ? { kind: 'long_run', text: `Long-run peak done — ${fmtLongRunPeak(input, lr.peakKm)}, ${windBroke}`, tone: 'neutral' }
+      : { kind: 'long_run', text: `Peak long run ${fmtLongRunPeak(input, lr.peakKm)} — done`, tone: 'good' };
   }
   // When the weekly goal cannot carry the race's peak long run, say so - in the first build week, then at most every 4th.
   const goalKm = input.target.weeklyDistanceKm ?? null;

@@ -2281,7 +2281,11 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', '
     }
     if (peakDay == null) continue;
     const monday = mondayOfDate(peakDay);
-    const planKm = byDate.get(addDays(monday, 6))?.card?.distance?.plan?.longRunKm ?? byDate.get(monday)?.card?.distance?.plan?.longRunKm ?? null;
+    // (Wave 23e P3-e: in the taper and race week a "done" peak is judged against the PEAK TARGET, never the taper week's own long run - see P3-e below.)
+    const windDown = snap.card?.race?.phase === 'taper' || snap.card?.race?.phase === 'race_week';
+    const planKm = windDown
+      ? snap.card?.longRun?.targetPeakKm ?? null
+      : byDate.get(addDays(monday, 6))?.card?.distance?.plan?.longRunKm ?? byDate.get(monday)?.card?.distance?.plan?.longRunKm ?? null;
     const stepTarget = byDate.get(monday)?.card?.distance?.stepTargetKm ?? 0;
     const weekKm = Math.max(kmThrough(runKm, monday, addDays(monday, 6)), addDays(monday, 6) > snap.date ? stepTarget : 0);
     const tol = 0.5;
@@ -3680,5 +3684,31 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
     }
   }
   if (['runner_messy', 'runner_comeback_spike', 'runner_comeback_obedient', 'runner_on_plan_obedient'].includes(name)) assert.ok(maintainWeeks > 0, `${name}: no maintain week was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P3-e: no race-week reproach about the taper week's own long run ──────────
+
+invariant(RUNNERS, 'P3-e: in the taper and race week the long-run line never reproaches the runner against the taper week\'s own long run ("Long-run peak done - 14 km, longer than the 9 km plan"): it is said only against the peak target, otherwise "Peak long run 14 km - done"', (snaps, name) => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const phase = snap.card?.race?.phase;
+    if (phase !== 'taper' && phase !== 'race_week') continue;
+    const lr = snap.card?.longRun;
+    for (const t of cardTexts(snap)) {
+      const m = /Long-run peak done — ([\d.]+)\s?(km|mi), longer than the ([\d.]+)\s?(?:km|mi) plan/.exec(plain(t.text));
+      if (m == null) continue;
+      const target = lr?.targetPeakKm;
+      if (target == null || lr == null || !(lr.peakKm > target + 0.5) || Math.abs(Number(m[3]) - inDisplayUnit(target, m[2])) > 0.55) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" (peak target ${target ?? 'none'} km, 28-day peak ${lr?.peakKm} km)` });
+    }
+  }
+  if (name === 'runner_messy') {
+    // The messy runner ignores the taper (a 14 km Sunday against a 9 km taper long run): the line stays "done", no reproach, all week.
+    for (const idx of [104, 105, 108, 109]) {
+      const s = snaps.find(x => x.idx === idx) as DaySnapshot;
+      const line = s.card?.reasons.find(r => r.kind === 'long_run');
+      if (plain(line?.text ?? '') !== 'Peak long run 14 km — done') out.push({ snap: s, detail: `long-run line "${visible(line?.text ?? '')}"` });
+    }
+  }
   return out;
 });
