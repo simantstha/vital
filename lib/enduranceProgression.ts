@@ -804,8 +804,16 @@ export interface EnduranceWeekPlan {
    * it (never "short"). Null otherwise.
    */
   cutback: { normalKm: number } | null;
-  /** Consecutive plain build / maintain weeks up to and including this one (a cutback, hold, restart... resets it to 0). */
+  /**
+   * Consecutive build weeks up to and including this one: plain build / maintain weeks and (wave 23e) hold weeks - a hold is a pause in the
+   * step, not a down week. A cutback, restart, rebuild, comeback rung or wind-down week resets it to 0.
+   */
   buildWeeks: number;
+  /**
+   * Wave 23e: a cutback is OWED - the last cutback week was run as a normal week (a skipped cutback) and no down week has come since. The next
+   * cutback fires at the first eligible week after 2 build weeks (the skip-hold counts as one), not at the end of the 4-week cycle.
+   */
+  cutbackOwed: boolean;
   /** One of the last 2 build weeks before a taper: the plan copy adds `STRIDES_COPY` so race-pace work is not new in the taper. */
   strides: boolean;
   /**
@@ -905,6 +913,8 @@ const TAPER_LONG_RUN_SHARE = 0.65;
 /** Every 4th plain build / maintain week is a cutback at ~80% of the week it replaces (long run held). */
 export const CUTBACK_EVERY_WEEKS = 4;
 export const CUTBACK_FRACTION = 0.8;
+/** Wave 23e: an owed cutback (the last one was skipped) comes after this many build weeks, the skip-hold counting as one. */
+export const OWED_CUTBACK_AFTER_BUILD_WEEKS = 2;
 /** A cutback week that ran more than this multiple of its lowered number skipped the cutback (the shared 10% ceiling slack). */
 export const CUTBACK_SKIPPED_FRACTION = PHASE_CEILING_TOLERANCE;
 /** The last 2 build weeks before a taper carry a few strides, so race-pace work is not brand new in the taper. */
@@ -1705,7 +1715,12 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       // Every 4th plain build / maintain week is a cutback: ~80% of the week it replaces, the long run held.
       // Not in the last build week before a taper / race week: the taper is the easing off, and the peak long run belongs there.
       const beforeWindDown = isWindDownPhase(phaseAt(ctx, addDayKey(w, 7))?.phase);
-      if ((kind === 'build' || kind === 'maintain') && comeback == null && cutbackWeek && prevBuildWeeks >= CUTBACK_EVERY_WEEKS - 1 && target >= compareMin && !beforeWindDown) {
+      // Wave 23e: the calendar's 4th week still carries the cutback, after 3 build weeks - or after 2 when one is OWED (the last was skipped; the
+      // skip-hold counts as a build week). Only on the calendar's own weeks, so the plan of a past week read from a later Monday (the chain is
+      // cut off after `MAX_PLAN_DEPTH` weeks) is the plan that week showed.
+      const owed = prevPlan?.cutbackOwed === true && prevIsTraining;
+      const cutbackDue = cutbackWeek && prevBuildWeeks >= (owed ? OWED_CUTBACK_AFTER_BUILD_WEEKS : CUTBACK_EVERY_WEEKS - 1);
+      if ((kind === 'build' || kind === 'maintain') && comeback == null && cutbackDue && target >= compareMin && !beforeWindDown) {
         const cut = roundWeekTargetKm(target * CUTBACK_FRACTION, ctx.units);
         if (cut < target - 1e-9) {
           cutback = { normalKm: target };
@@ -1734,7 +1749,12 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 
   const buildLike = kind === 'build' || kind === 'maintain' || kind === 'hold';
   const plain = (kind === 'build' || kind === 'maintain') && comeback == null && rebuild == null && cutback == null;
-  const buildWeeks = plain ? prevBuildWeeks + 1 : 0;
+  // Wave 23e: a hold week (a skipped cutback's, or a spike's) is a build week for the count - it paused the step, it did not rest the legs. Except a spike
+  // hold that lands ON the calendar's cutback week after 3 build weeks: it is the cut after the jump (a 40 km week, then ~22), and it takes the cutback's place.
+  const slotHold = kind === 'hold' && hold?.skippedCutback !== true && cutbackWeek && prevBuildWeeks >= CUTBACK_EVERY_WEEKS - 1;
+  const buildWeeks = plain || (kind === 'hold' && !slotHold) ? prevBuildWeeks + 1 : 0;
+  // A skipped cutback is owed until a cutback is taken (or a restart, wind-down or rebuild week rests the runner anyway).
+  const cutbackOwed = cutback == null && (hold?.skippedCutback === true || (prevPlan?.cutbackOwed === true && (kind === 'build' || kind === 'maintain' || kind === 'hold') && comeback == null));
 
   // The last 2 build weeks before a taper carry a few strides: race-pace work must not be brand new in the taper.
   const strides = buildLike && comeback == null && info != null && info.phase === 'build' && raceClass(ctx.raceKm) !== 'short'
@@ -1943,6 +1963,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     rebuild,
     cutback,
     buildWeeks,
+    cutbackOwed,
     strides,
     lightWeek,
     preTaper,

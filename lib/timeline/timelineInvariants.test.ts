@@ -2289,7 +2289,9 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_on_plan_imperial', '
     if (planKm != null && peakKm > planKm + tol + 1e-9) out.push({ snap, detail: `${praise.where}: "${visible(praise.text)}" but the ${Math.round(peakKm * 10) / 10} km peak run (${peakDay}) was longer than that week's planned ${planKm} km` });
     else if (peakKm > weekKm * 0.5 + 1e-9) out.push({ snap, detail: `${praise.where}: "${visible(praise.text)}" but the ${Math.round(peakKm * 10) / 10} km peak run (${peakDay}) was ${Math.round((peakKm / weekKm) * 100)}% of its ${Math.round(weekKm * 10) / 10} km week` });
   }
-  assert.ok(praised > 0 || scn.user.raceDate == null || name === 'runner_on_plan_imperial', `${name}: the peak was never praised, so this invariant checked nothing`);
+  // (Wave 23e: the static on-plan runners add 1 km of long run a week from 6 km; with the owed cutback back in the cycle their long runs always outrun the plan's
+  // held / +2 km long run, so their peak is - correctly - never praised. The obedient runner and the messy one still prove the praise exists.)
+  assert.ok(praised > 0 || scn.user.raceDate == null || name === 'runner_on_plan_imperial' || name === 'runner_on_plan' || name === 'runner_on_plan_half', `${name}: the peak was never praised, so this invariant checked nothing`);
   return out;
 });
 
@@ -3076,5 +3078,53 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_messy', 'runner_come
   }
   assert.ok(broken + kept > 0, `${name}: no hold week was stepped, so this invariant checked nothing`);
   if (name === 'runner_on_plan' || name === 'runner_on_plan_half') assert.ok(broken > 0, `${name}: no hold week was broken, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P2-3: a skipped cutback is OWED - no runner goes more than 4 build weeks without a down week ─────────────
+
+/** The week's kind for the down-week count, from the Monday card: 'down' (cutback, taper, race week, recovery, restart, rebuild), 'build' (a plain build / maintain week or any hold) or 'ramp' (a comeback rung, neutral). */
+function weekShape(s: DaySnapshot): 'down' | 'build' | 'ramp' | null {
+  const plan = s.card?.distance?.plan;
+  if (!plan) return null;
+  if (plan.cutback || ['taper', 'race_week', 'recovery', 'restart', 'rebuild', 'baseline'].includes(plan.kind)) return 'down';
+  if (plan.kind === 'hold') return 'build';
+  if ((plan.kind === 'build' || plan.kind === 'maintain') && plan.comebackKm != null) return 'ramp';
+  return plan.kind === 'build' || plan.kind === 'maintain' ? 'build' : null;
+}
+
+invariant(RUNNERS, 'P2-3: between two down weeks (cutback / taper / race / recovery / restart / rebuild) there are at most 4 build or hold weeks', (snaps, name) => {
+  const out: Violation[] = [];
+  let streak = 0;
+  let longest = 0;
+  const mondays = snaps.filter(s => weekdayOf(s.date) === 'Mon');
+  for (const m of mondays) {
+    const plan = m.card?.distance?.plan;
+    // A spike hold on the calendar's cutback week (the 4th, after 3+ build weeks) takes the cutback's place: the cut after the jump.
+    const slotHold = plan?.kind === 'hold' && !plan.skippedCutback && Math.round(dayDiff(m.date, '1970-01-05') / 7) % 4 === 3 && streak >= 3;
+    const shape = slotHold ? 'down' : weekShape(m);
+    if (shape === 'down') streak = 0;
+    else if (shape === 'build') {
+      streak++;
+      longest = Math.max(longest, streak);
+      if (streak > 4) out.push({ snap: m, detail: `${streak} build / hold weeks in a row without a down week (this one: ${m.card?.distance?.plan?.kind} ~${m.card?.distance?.plan?.targetKm} km, "${visible(m.card?.distance?.plan?.purpose ?? '')}")` });
+    }
+  }
+  if (name !== 'runner_on_plan_imperial') assert.ok(longest >= 2, `${name}: no build streak was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-3: a cutback that was skipped is owed - the next down week comes within 3 weeks of the hold that followed it, not at the end of a 4-week cycle', (snaps) => {
+  const out: Violation[] = [];
+  const mondays = snaps.filter(s => weekdayOf(s.date) === 'Mon');
+  let sinceHold = -1;
+  for (const m of mondays) {
+    const plan = m.card?.distance?.plan;
+    if (plan?.skippedCutback) { sinceHold = 0; continue; }
+    if (sinceHold < 0) continue;
+    sinceHold++;
+    if (weekShape(m) === 'down') { sinceHold = -1; continue; }
+    if (sinceHold > 3) { out.push({ snap: m, detail: `${sinceHold} weeks after the skip-hold with no down week yet` }); sinceHold = -1; }
+  }
   return out;
 });
