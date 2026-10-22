@@ -995,14 +995,14 @@ invariant(WEIGHT, '"Holding at 84.0 kg, within 1 kg of 84 kg" is never said when
   return out;
 });
 
-invariant(WEIGHT, 'the opener that asks about a new target celebrates the reach (P3)', (snaps, name) => {
+invariant(WEIGHT, 'the opener that asks about a new target names the reach (P3; it congratulates on the reach day and the Monday after - wave 23w)', (snaps, name) => {
   const out: Violation[] = [];
   let seen = 0;
   for (const snap of snaps) {
     const line = snap.opener?.required ?? '';
     if (!/set a new target or switch to maintenance/i.test(line) || snap.card?.verdict !== 'reached') continue;
     seen++;
-    if (!/Congratulations/.test(line)) out.push({ snap, detail: `"${visible(line)}"` });
+    if (!/Congratulations|You've reached/.test(line)) out.push({ snap, detail: `"${visible(line)}"` });
   }
   assert.ok(seen > 0, `${name}: the reached opener never asked, so this invariant checked nothing`);
   return out;
@@ -2717,3 +2717,52 @@ invariant(WEIGHT, 'P3-E: once the new-target question is over, the reached opene
   assert.ok(seen > 0, `${name}: no reached opener after the question, so this invariant checked nothing`);
   return out;
 });
+
+// F: precision. "about 0.6 kg a week" in the opener and the headline (the card's rate line keeps its decimals); "7.8 kg down", never "8 kg down" next to -7.8;
+// the congratulation on the reach day and the following Monday only.
+invariant(WEIGHT, 'P3-F: the headline and the opener say "about 0.6 kg a week" (one decimal), the same figure', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    for (const t of [{ where: 'card.headline', text: snap.card?.headline ?? '' }, { where: 'opener.required', text: snap.opener?.required ?? '' }]) {
+      const m = /about ([\d.]+) (?:kg|lb) a week/.exec(plain(t.text));
+      if (m == null) continue;
+      seen++;
+      if (!/^\d+(?:\.\d)?$/.test(m[1])) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no rate was quoted in a headline or opener, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-F: the reach opener says how far down the weekly average is ("7.8 kg down"), the figure the card prints, not the size of the goal', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const m = /\(([\d.]+) kg down/.exec(plain(snap.opener?.required ?? ''));
+    const change = snap.card?.current.changeKg;
+    if (m == null || change == null) continue;
+    seen++;
+    if (Math.abs(Number(m[1]) + change) > 0.05) out.push({ snap, detail: `opener "${visible(snap.opener?.required ?? '')}" vs card changeKg ${change}` });
+  }
+  assert.ok(seen > 0, `${name}: no reach opener named an amount, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-F: "Congratulations" is said on the reach day and on the following Monday, not every day of the question', (snaps, name) => {
+  const out: Violation[] = [];
+  let said = 0;
+  for (const snap of snaps) {
+    if (!/Congratulations/.test(plain(snap.opener?.required ?? ''))) continue;
+    said++;
+    const reachedAt = snap.card?.reachedAt;
+    const ok = reachedAt != null && (snap.date === reachedAt || (snap.weekday === 'Mon' && dayDiff(snap.date, reachedAt) > 0 && dayDiff(snap.date, reachedAt) <= 6));
+    if (!ok) out.push({ snap, detail: `reached ${reachedAt}: "${visible(snap.opener?.required ?? '')}"` });
+  }
+  assert.ok(said > 0, `${name}: the reach was never congratulated, so this invariant checked nothing`);
+  return out;
+});
+
+// G: the scale can read 88.9 / 88.8 while "the scale has been flat for 3 weeks"; the plateau is a statement about the weekly average.
+invariant(WEIGHT, 'P3-G: the opener says "your weekly average has been flat", not "the scale has been flat"', snaps =>
+  textMatches(snaps, s => coachTexts(s), /the scale has been flat/i));

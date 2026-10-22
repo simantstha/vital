@@ -1897,7 +1897,8 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
   if (!plan.confirmed) {
     return {
       verdict: 'progressing',
-      headline: clip(`Progressing — losing about ${fmtWeight(input, Math.abs(p.kgPerWeek), 2)} a week`),
+      // "About" and one decimal (wave 23w): the 2-decimal rate stays on the rate line below, where it is the measurement.
+      headline: clip(`Progressing — losing about ${fmtWeight(input, Math.abs(p.kgPerWeek))} a week`),
       reasons: build(rate, action),
     };
   }

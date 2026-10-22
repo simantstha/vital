@@ -36,9 +36,9 @@ function weightAmount(kg: number, units: UnitSystem): string {
   return trimmed(Math.abs(units === 'imperial' ? kg * LB_PER_KG : kg));
 }
 
-/** A weekly rate to two decimals, trailing zeros dropped ("0.58", "0.6") - the very figure the card's headline prints, so it is never rounded twice. */
+/** A weekly rate to one decimal, "about 0.6 kg a week" (wave 23w) - the very figure the card's headline prints; the rate line keeps its two decimals. */
 function rateAmount(kgPerWeek: number, units: UnitSystem): string {
-  return String(Math.round(Math.abs(units === 'imperial' ? kgPerWeek * LB_PER_KG : kgPerWeek) * 100) / 100);
+  return weightAmount(Math.abs(kgPerWeek), units);
 }
 
 /** One fixed decimal ("84.0"), for the weight a reached goal holds at. */
@@ -107,7 +107,9 @@ function averageAgainstStart(gp: GoalProgress, done: number, base: string, units
 function reachCelebration(gp: GoalProgress, target: number, units: UnitSystem): string {
   const parts: string[] = [];
   const start = gp.current.startWeightKg;
-  if (start != null && start - target > 0) parts.push(`${weightAmount(start - target, units)} ${units === 'imperial' ? 'lb' : 'kg'} down`);
+  // How far down the weekly average really is (the figure the card prints as "-7.8 kg since start"), never the size of the goal (wave 23w).
+  const down = gp.current.changeKg != null && gp.current.changeKg < 0 ? -gp.current.changeKg : start != null ? start - target : 0;
+  if (down > 0) parts.push(`${weightAmount(down, units)} ${units === 'imperial' ? 'lb' : 'kg'} down`);
   const reached = ymdToUtc(gp.reachedAt);
   const dated = ymdToUtc(gp.target.date);
   const early = reached != null && dated != null ? Math.round((dated - reached) / DAY_MS / 7) : 0;
@@ -144,6 +146,19 @@ function reachedAsks(gp: GoalProgress | null | undefined): boolean {
 function kcalRange(lo: number, hi: number): string {
   const f = (n: number): string => Math.round(n).toLocaleString('en-US');
   return lo === hi ? `${f(hi)} kcal` : `${f(lo)}–${f(hi)} kcal`;
+}
+
+/**
+ * The reach is congratulated on the day it happens and on the Monday after it (wave 23w) - the question stays open all week, the
+ * confetti does not. The payload has no date of its own: today is the reach day plus `reachedDaysAgo`.
+ */
+function celebratesReach(gp: GoalProgress): boolean {
+  const reachedAt = ymdToUtc(gp.reachedAt);
+  const daysAgo = gp.weightRead?.reachedDaysAgo;
+  if (reachedAt == null || daysAgo == null) return true; // a payload from before the date: the plain celebration it always had
+  if (daysAgo === 0) return true;
+  const weekday = new Date(reachedAt + daysAgo * DAY_MS).getUTCDay();
+  return weekday === 1 && daysAgo <= 6;
 }
 
 /** The question a lapse check-in ends in. */
@@ -192,8 +207,9 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
   // Goal reached: congratulate and move on — never "0 of 0 down" or a pace clause.
   if (gp.verdict === 'reached' && target != null) {
     if (reachedAsks(gp)) {
-      // A fat-loss reach is celebrated, with how far it came (wave 22w); other goals' weight targets keep the plain ask.
-      if (gp.goal === 'weight_loss') {
+      // A fat-loss reach is celebrated, with how far it came (wave 22w) - on the reach day and the Monday after it, not every day of the
+      // question (wave 23w); the other days it is the plain ask, as for other goals' weight targets.
+      if (gp.goal === 'weight_loss' && celebratesReach(gp)) {
         return `Congratulations — you've reached ${weightAmount(target, units)} ${unit}${reachCelebration(gp, target, units)}. Want to set a new target or switch to maintenance?`;
       }
       return `You've reached ${weightAmount(target, units)} ${unit} — want to set a new target or switch to maintenance?`;
@@ -251,9 +267,10 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
         if (read?.state === 'early' || read?.state === 'returning') return `${averageAgainstStart(gp, done, base, units)}; ${paceWaitClause(gp)}.`;
         if (read?.state === 'plateau') {
           // Two flat weeks after a confirmed loss (wave 22w) are common and not yet a plateau.
+          // It is the weekly average that is flat (wave 23w): the scale itself still wiggles by a few hundred grams.
           return read.plan?.flatWeeks === 2
-            ? `${base}; the scale has been flat for 2 weeks, which is common.`
-            : `${base}, though the scale has been flat for 3 weeks.`;
+            ? `${base}; your weekly average has been flat for 2 weeks, which is common.`
+            : `${base}, though your weekly average has been flat for 3 weeks.`;
         }
         // The week's plan (lib/weightWeekPlan.ts) says what the scale is doing; the opener only repeats it.
         if (read?.state === 'moving_again') return `${base}, and your weekly average is moving down again.`;

@@ -2634,7 +2634,7 @@ test('A. a pace nothing has confirmed yet makes no call: with only today\'s pace
   assert.equal(p.verdict, 'progressing');
   assert.equal(p.eta, null);
   assert.equal(p.weightRead?.weeksVsTarget, null);
-  assert.match(p.headline, /^Progressing — losing about 0\.49 kg a week$/);
+  assert.match(p.headline, /^Progressing — losing about 0\.5 kg a week$/);
 });
 
 test('A. one margin: ±7 days is on pace in the card, the same figure the opener and iOS use; weeks are whole and at least 1', () => {
