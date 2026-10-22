@@ -9,7 +9,7 @@ records what the REAL pure server functions return: goal card, coach goal lines,
 - `types.ts` shared types and calendar helpers.
 
 **Scenarios:** `lifter` (+ `lifter_imperial`: lb copy and the 5 lb step; `lifter_short_week`: one bad week where the week alone, not a
-lapse, must hold "Progressing" back), `weight_loss` (+ `_logged`: plateau, a 12-day gap, trims; `_obedient`: reads the real card every day and does exactly what it says - eats the stated kcal, adds the walks, logs when asked, takes the maintenance step and holds it; built once per process, it runs the card ~110 times), `runner_on_plan` (+ `_half`, `_imperial`),
+lapse, must hold "Progressing" back; `lifter_obedient`: lifts exactly the loads the reviews prescribe, one ill week), `weight_loss` (+ `_logged`: plateau, a 12-day gap, trims; `_obedient`: reads the real card every day and does exactly what it says - eats the stated kcal, adds the walks, logs when asked, takes the maintenance step and holds it; built once per process, it runs the card ~110 times), `runner_on_plan` (+ `_half`, `_imperial`),
 `runner_messy` (spike, illness = light week, ignored taper), `runner_no_race`, `runner_on_plan_obedient` (does exactly what the app says: the cutback weeks, the taper) and `runner_comeback_spike` (an illness, then a comeback week that overshoots its ceiling: 15 km, then 29 km).
 
 **Add a scenario:** write a builder returning a `Scenario` (rows only, never inputs) in `scenarios.ts`, add its name to `SCENARIO_NAMES`
@@ -22,7 +22,7 @@ string) and register it with `invariant([scenarios], 'title', find)`: one `test`
 `lib/weeklyReviewLoader.ts`, `lib/racePeakLoader.ts` and `lib/runHistoryLoader.ts` line by line. When a loader's row -> input mapping
 changes, change the matching block here, or the suite tests inputs production no longer builds. Wave 21 added three such blocks:
 `intakeHistoryDays` (weight loss reads 70 days of intake), the review's SECOND goal-progress read for weight loss (the coming week's
-plan becomes `weightPlan`, the review's "Next week" and verdict) and `liftReturns` (every lift's return) in the review input.
+plan becomes `weightPlan`, the review's "Next week" and verdict) and `liftReturns` (every lift's return) in the review input. Wave 23s added a fourth: the review's `progression` and `strengthDays` are read to the review's own Monday (the loader reads sets relative to the real clock), so a session logged that Monday is visible; the review cuts its lift data at the reviewed week.
 Not simulated: single UTC timezone, no sleep/HRV/resting HR, static diet budget, no model sentence after the opener, no 2-minute
 goal-progress cache, and the coach's weight-trend section (`formatWeightSignalsSection`, covered by its own unit tests).
 

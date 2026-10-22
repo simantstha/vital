@@ -312,8 +312,12 @@ struct CoachView: View {
             .onChange(of: vm.isStreaming) {
                 scrollToBottomIfPinned(proxy)
             }
-            .onChange(of: vm.isOpening) {
-                scrollToBottomIfPinned(proxy)
+            .onChange(of: vm.isOpening) { _, isOpening in
+                // Unanimated and only once opening finishes: an animated
+                // scrollTo on an overflowing transcript moves the LazyVStack
+                // while the first UI queries are running.
+                guard !isOpening, isScrolledNearBottom else { return }
+                proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
     }

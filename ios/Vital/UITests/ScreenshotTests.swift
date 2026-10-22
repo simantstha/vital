@@ -38,6 +38,11 @@ final class ScreenshotTests: XCTestCase {
     /// re-reading `app.frame` inside their polling and scroll loops.
     private var screenFrame: CGRect = .zero
 
+    /// The harness step most recently started (screen activity, tab switch,
+    /// Coach query). A snapshot-query timeout names only the XCUI query, not
+    /// where the harness was, so `tearDownWithError` reports this on failure.
+    private var lastStep = ""
+
     override func setUpWithError() throws {
         // Keep going past an assertion failure — a missed screen shouldn't
         // abort the rest of the scenario, and the screenshot right after a
@@ -63,6 +68,13 @@ final class ScreenshotTests: XCTestCase {
             }
             return false
         }
+    }
+
+    override func tearDownWithError() throws {
+        if let run = testRun, !run.hasSucceeded {
+            XCTFail("Last harness step: \(lastStep)")
+        }
+        try super.tearDownWithError()
     }
 
     /// Simulator notification banners (e.g. "Apple Intelligence") draw over
@@ -122,40 +134,52 @@ final class ScreenshotTests: XCTestCase {
             // return Void and are non-escaping, so control flow is unchanged.
             if scenario == "onboarding" {
                 XCTContext.runActivity(named: "\(scenario) \(appearance) onboarding") { _ in
+                    lastStep = "\(scenario) \(appearance) onboarding"
                     captureOnboarding(app, scenario: scenario, appearance: appearance)
                 }
             } else {
                 XCTContext.runActivity(named: "\(scenario) \(appearance) today") { _ in
+                    lastStep = "\(scenario) \(appearance) today"
                     captureToday(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) dietSheet") { _ in
+                    lastStep = "\(scenario) \(appearance) dietSheet"
                     captureDietSheet(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) liftLogger") { _ in
+                    lastStep = "\(scenario) \(appearance) liftLogger"
                     captureLiftLogger(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) coach") { _ in
+                    lastStep = "\(scenario) \(appearance) coach"
                     captureCoach(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) trends") { _ in
+                    lastStep = "\(scenario) \(appearance) trends"
                     captureTrends(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) goalProgress") { _ in
+                    lastStep = "\(scenario) \(appearance) goalProgress"
                     captureGoalProgress(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) weeklyReview") { _ in
+                    lastStep = "\(scenario) \(appearance) weeklyReview"
                     captureWeeklyReview(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) logs") { _ in
+                    lastStep = "\(scenario) \(appearance) logs"
                     captureLogs(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) profile") { _ in
+                    lastStep = "\(scenario) \(appearance) profile"
                     captureProfile(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) memory") { _ in
+                    lastStep = "\(scenario) \(appearance) memory"
                     captureMemory(app, scenario: scenario, appearance: appearance)
                 }
                 XCTContext.runActivity(named: "\(scenario) \(appearance) devices") { _ in
+                    lastStep = "\(scenario) \(appearance) devices"
                     captureDevices(app, scenario: scenario, appearance: appearance)
                 }
             }
@@ -422,6 +446,7 @@ final class ScreenshotTests: XCTestCase {
     /// scenario/appearance) if it still isn't selected.
     private func switchToTab(_ name: String, app: XCUIApplication, scenario: String, appearance: String) {
         let tab = app.tabBars.buttons[name]
+        lastStep = "\(scenario) \(appearance) switchToTab(\(name)) wait"
         guard tab.waitForExistence(timeout: 10) else {
             XCTFail("\(name) tab bar button never appeared [\(scenario)/\(appearance)]")
             return
@@ -435,12 +460,14 @@ final class ScreenshotTests: XCTestCase {
             return XCTWaiter().wait(for: [selected], timeout: 5) == .completed
         }
 
+        lastStep = "\(scenario) \(appearance) switchToTab(\(name)) tap 1"
         tab.tap()
         if waitUntilSelected() { return }
 
         // The first tap may have been absorbed by something still animating
         // off screen (a dismissing sheet, a transition) — one retry covers
         // that without masking a real failure to switch tabs at all.
+        lastStep = "\(scenario) \(appearance) switchToTab(\(name)) tap 2"
         tab.tap()
         guard waitUntilSelected() else {
             XCTFail("\(name) tab never became selected after tapping it twice [\(scenario)/\(appearance)]")
@@ -738,13 +765,17 @@ final class ScreenshotTests: XCTestCase {
         // history yet to praise. Either way the Coach tab never stays empty
         // once its `.task` resolves, so this is fixture-driven either way.
         if scenario == "server_error" {
+            lastStep = "\(scenario) \(appearance) captureCoach waitForText(hardcoded opener)"
             XCTAssertTrue(waitForText(app, containing: "Ask me anything about your health trends"),
                            "Coach should fall back to its hardcoded opener when every endpoint 500s [\(appearance)]")
+            lastStep = "\(scenario) \(appearance) captureCoach waitForText(Coach is offline)"
             XCTAssertTrue(waitForText(app, containing: "Coach is offline"),
                            "Coach should say it is offline when its load failed [\(appearance)]")
         } else if scenario == "new_user" {
+            lastStep = "\(scenario) \(appearance) captureCoach waitForText(new-user opener)"
             XCTAssertTrue(waitForText(app, containing: "Your goal is to lose weight"),
                            "Coach should show the new-user opener, not returning-user praise [\(appearance)]")
+            lastStep = "\(scenario) \(appearance) captureCoach staticTexts(Nice work staying consistent)"
             XCTAssertFalse(app.staticTexts.matching(
                 NSPredicate(format: "label CONTAINS[c] %@", "Nice work staying consistent")
             ).firstMatch.exists,
@@ -752,9 +783,11 @@ final class ScreenshotTests: XCTestCase {
             // The centered empty-state anchor (§3 of the coach-first-impression
             // fix) — shown only while the transcript is nothing but the
             // opener, which is exactly new_user's state here.
+            lastStep = "\(scenario) \(appearance) captureCoach waitForText(Tap the mic and just talk)"
             XCTAssertTrue(waitForText(app, containing: "Tap the mic and just talk"),
                            "Coach's empty state should show its calm mic-prompt line [\(appearance)]")
         } else {
+            lastStep = "\(scenario) \(appearance) captureCoach waitForText(restored message)"
             XCTAssertTrue(waitForText(app, containing: "what would you like to dig into"),
                            "Coach should show the fixture-seeded restored message [\(scenario)/\(appearance)]")
             // The fixture's first exchange ("Why am I so tired this week?")
@@ -768,10 +801,12 @@ final class ScreenshotTests: XCTestCase {
             // `descendants(matching: .any)` form snapshots every element of every type
             // and is the query that timed out on a loaded runner. The any-type query
             // stays as a fallback (5s + 10s = the same 15s budget as before).
+            lastStep = "\(scenario) \(appearance) captureCoach receiptPill typed query"
             let typedPill = app.buttons.matching(identifier: "coach.receiptPill").firstMatch
             let pill = typedPill.waitForExistence(timeout: 5)
                 ? typedPill
                 : app.descendants(matching: .any).matching(identifier: "coach.receiptPill").firstMatch
+            lastStep = "\(scenario) \(appearance) captureCoach receiptPill any-type fallback"
             XCTAssertTrue(pill.waitForExistence(timeout: 10),
                            "Coach should show a receipt pill for the fixture's tool-call activity [\(scenario)/\(appearance)]")
             captureCoachReceipt(app, pill: pill, scenario: scenario, appearance: appearance)
@@ -875,6 +910,27 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+    /// Waits for the weekly review detail sheet's `title`. If it never shows,
+    /// the first `weeklyReview.open` tap was probably absorbed (Today's layout
+    /// shifted under it, as with `captureDietSheet`'s fuel strip): re-resolve
+    /// the button, tap it once more when it is safely hittable, then wait again.
+    /// Returns whether the sheet opened; the caller still owns the `XCTFail`.
+    private func waitForWeeklyReviewSheet(_ title: XCUIElement, app: XCUIApplication) -> Bool {
+        if title.waitForExistence(timeout: 10) { return true }
+
+        let retryOpen = app.descendants(matching: .any).matching(identifier: "weeklyReview.open").firstMatch
+        if retryOpen.waitForExistence(timeout: 5) {
+            // Poll instead of an `isHittable == true` predicate expectation:
+            // that predicate re-reads `isHittable` on an invalid frame mid-animation.
+            let deadline = Date().addingTimeInterval(5)
+            while !isSafelyHittable(retryOpen, app: app) && Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            if isSafelyHittable(retryOpen, app: app) { tapAvoidingFab(retryOpen) }
+        }
+        return title.waitForExistence(timeout: 10)
+    }
+
     /// Weekly review (v5 Wave 3): the unseen-review card on Today (fixtures
     /// bypass the Mon-Wed window) and its detail sheet. Screen names
     /// `weeklyReviewCard` (Today) and `weeklyReview` (detail sheet). Only
@@ -919,7 +975,7 @@ final class ScreenshotTests: XCTestCase {
         tapWhenHittable(open, app: app, maxSwipes: 8, description: "weeklyReview.open [\(scenario)/\(appearance)]")
 
         let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
-        guard title.waitForExistence(timeout: 10) else {
+        guard waitForWeeklyReviewSheet(title, app: app) else {
             XCTFail("Weekly review detail sheet never opened [\(scenario)/\(appearance)]")
             return
         }
@@ -963,7 +1019,7 @@ final class ScreenshotTests: XCTestCase {
         tapWhenHittable(openButton, app: app, maxSwipes: 8, description: "weeklyReview.open [\(scenario)/\(appearance)]")
 
         let title = app.descendants(matching: .any).matching(identifier: "weeklyReview.detail.title").firstMatch
-        guard title.waitForExistence(timeout: 10) else {
+        guard waitForWeeklyReviewSheet(title, app: app) else {
             XCTFail("Weekly review detail sheet never opened [\(scenario)/\(appearance)]")
             return
         }

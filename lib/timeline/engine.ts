@@ -255,8 +255,12 @@ function computeReviewForUncached(scn: Scenario, runDay: string): ReviewResult {
   const dayKeys = [...weekDayKeys(addDays(weekStart, -7)), ...weekDayKeys(weekStart)];
   const daySet = new Set(dayKeys);
 
-  const progression = summarizeProgression(setsAsOf(scn, asOf, 84));
-  const sets = setsAsOf(scn, asOf, 30 + 2);
+  // MIRRORS lib/weeklyReviewLoader.ts (wave 23s): getProgressionSummary(84) and getSetsSince(32) read relative to the REAL clock, so a set logged on
+  // the review's own Monday (the review is recomputed when opened) is in `progression` (the next week's bucket) and in `strengthDays`.
+  // EMULATION: the end-of-day view of that Monday, like the weight-loss second read below. Only logged sets are affected (no scenario
+  // carries both sets and HealthKit strength workouts), and `trainingDays` below is filtered to the two reviewed weeks as in the loader.
+  const progression = summarizeProgression(setsAsOf(scn, runDay, 84));
+  const sets = setsAsOf(scn, runDay, 30 + 2);
   const workoutEntries = workoutEntriesAsOf(scn, asOf, 30);
   const displayRows = setsAsOf(scn, asOf, 84).map(s => ({ exercise: s.exercise, exercise_display: s.exercise_display }));
 

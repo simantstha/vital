@@ -457,6 +457,20 @@ jobs:
               ${ONLY_TESTING}
           fi
 
+      # The full result bundle (activity names, query timings, failure
+      # screenshots) is the only way to see where a snapshot-query timeout hit.
+      # Only on failure: the PNGs a passing run produces go out via the
+      # `ios-screenshots` artifact below. `uses:` paths are repo-root relative
+      # (the `working-directory: ios` default applies to `run:` steps only).
+      - name: Upload xcresult on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshots-xcresult
+          path: ios/build/Screens.xcresult
+          retention-days: 7
+
       # Best-effort from here down: only the test step above should fail this
       # job (or the whole `pr-checks` aggregate) — exporting/publishing
       # screenshots is a nice-to-have, not a correctness signal.
