@@ -2730,3 +2730,34 @@ invariant(LIFTERS, 'while every lift is rebuilding the card and review headlines
   if (name === 'lifter') assert.ok(days > 0, `${name}: no all-rebuilding day with the furthest lift behind the headline lift, so this invariant checked nothing`);
   return out;
 });
+
+// ── Imperial "~": a next-load cue says "~" exactly when its start is not the load she logged, and the start rounds DOWN to the grid, so the
+// real step from her load is never more than 5 lb. lifter_imperial read "bench ~195 → 200" for a 193 lb bench (+7 from what she lifted).
+// The logged load is one of that lift's weekly top sets (lb, to the whole pound) of the reviewed weeks.
+invariant(['lifter_imperial'], 'every lb next-load cue starts at the grid below the load she logged, says "~" when it moved, and is at most 5 lb above what she lifted', (snaps, name) => {
+  const scn = buildScenario(name);
+  const exerciseOf: Record<string, string> = { squat: 'squat', bench: 'bench press', deadlift: 'deadlift' };
+  const toLb = (kg: number): number => Math.round(kg * 2.20462);
+  const out: Violation[] = [];
+  let cues = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    for (const m of plain(r.nextWeek).matchAll(/\b(squat|bench|deadlift)\s+(~?)(\d+)\s?→\s?(\d+)\s?lb\b/gi)) {
+      const exercise = exerciseOf[liftWord(m[1])];
+      const tops = new Set<number>();
+      for (let w = 0; w < 5; w++) {
+        const from = addDays(r.weekStart, -7 * w);
+        const loads = scn.sets.filter(x => x.exercise === exercise && !x.isWarmup && x.day >= from && x.day <= addDays(from, 6) && x.loadKg != null).map(x => toLb(x.loadKg as number));
+        if (loads.length > 0) tops.add(Math.max(...loads));
+      }
+      const start = Number(m[3]);
+      const to = Number(m[4]);
+      cues++;
+      const fits = [...tops].some(l => Math.floor(l / 5) * 5 === start && (l !== start) === (m[2] === '~') && to - l > 0 && to - l <= 5);
+      if (!fits) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}": ${m[0]} does not start at the grid below a logged load (${[...tops].join(', ')} lb), with "~" only when it moved, and at most 5 lb above it` });
+    }
+  }
+  assert.ok(cues > 5, `${name}: only ${cues} lb next-load cues appeared, so this invariant checked (almost) nothing`);
+  return out;
+});
