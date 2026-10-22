@@ -179,7 +179,8 @@ test('week plan: the coach is told the week\'s ONE target for every plan kind', 
   // He has never run the goal: it is "build to", not "hold".
   assert.match(lines(d({ kind: 'maintain', targetKm: 30, longRunKm: 15, goalReachedBefore: false }, 30)), /- This week's target: build to the 30\.0 km\/week goal; long run 15 km, the rest easy — the first week at the goal, do not go past it/);
   assert.match(lines(d({ kind: 'hold', targetKm: 28, longRunKm: 12 }, 28)), /- This week's target: hold ~28\.0 km — last week was over the safe step; do not push higher or step up from the jump/);
-  assert.match(lines(d({ kind: 'restart', targetKm: 15, longRunKm: 7 }, 15)), /- This week's target: restart at ~15\.0 km with easy runs; long run 7 km — the runner is coming back from a break; do not push toward the 30\.0 km\/week goal yet/);
+  // (Wave 23e P3-h: the long run quoted with a restart number is at most 40% of it - 15 km restart, 7 km plan long run: 6 km.)
+  assert.match(lines(d({ kind: 'restart', targetKm: 15, longRunKm: 7 }, 15)), /- This week's target: restart at ~15\.0 km with easy runs; long run 6 km — the runner is coming back from a break; do not push toward the 30\.0 km\/week goal yet/);
   assert.match(lines(d({ kind: 'rebuild', targetKm: 14, longRunKm: null }, 14)), /- This week's target: rebuilding after the race, ~14\.0 km, easy runs; add about 10% a week/);
   // At the goal there is no "add about 10% a week".
   assert.doesNotMatch(lines(d({ kind: 'rebuild', targetKm: 30, longRunKm: null }, 30)), /add about 10%/);

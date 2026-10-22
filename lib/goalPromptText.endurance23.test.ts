@@ -96,6 +96,23 @@ test('the week after a cutback: the coach quotes the step against the last full 
   assert.match(targetLine(coach(plain)), /step on last week/);
 });
 
+test('a long run quoted next to the restart number is at most 40% of it: past two weeks off the restart is the lower band and so is the long run (23e P3-h)', () => {
+  // Sunday, 14 days after the last run: "Two weeks off now - restart a bit lower"; the plan's own long run was worked out from the higher week number.
+  const sun = '2026-10-25';
+  const gp = computeGoalProgress(input(weeks(sun, [[], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: sun }));
+  const restartKm = gp.distance!.plan!.restartKm ?? gp.distance!.plan!.targetKm!;
+  const line = targetLine(coach(gp));
+  const m = /restart at ~(\d+(?:\.\d+)?) km with easy runs; long run (\d+(?:\.\d+)?) km/.exec(line);
+  assert.ok(m != null, line);
+  assert.equal(Number(m[1]), restartKm);
+  assert.ok(Number(m[2]) <= restartKm * 0.4 + 1e-9, `${m[2]} km is over 40% of the ${restartKm} km restart`);
+  assert.equal(Number(m[2]) % 0.5, 0); // floored to the half km
+  // A restart whose long run was already under 40% keeps it.
+  const first = computeGoalProgress(input(weeks('2026-10-22', [[], [], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-22' }));
+  const keep = /restart at ~(\d+(?:\.\d+)?) km with easy runs; long run (\d+(?:\.\d+)?) km/.exec(targetLine(coach(first)));
+  if (keep) assert.ok(Number(keep[2]) <= Number(keep[1]) * 0.4 + 1e-9);
+});
+
 test('the coach never says "hold the goal" after a week under it: it says build back to it, and do not go past it (23e P3-c)', () => {
   const monday = '2026-04-20';
   const after28 = targetLine(coach(computeGoalProgress(input(weeks(monday, [[], wk(28), wk(40), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }))));

@@ -880,6 +880,8 @@ export const RESTART_HOLD_GAP_DAYS = 7;
 export const RESTART_MID_FRACTION = 0.75;
 export const RESTART_LONG_GAP_DAYS = 14;
 export const RESTART_LONG_FRACTION = 0.55;
+/** Wave 23e P3-h: a long run quoted next to a restart number is at most this share of it (floored to the half km / mile): 12 km restart -> 4.5 km, never 6.5 (54%). */
+export const RESTART_LONG_RUN_MAX_SHARE = 0.4;
 /**
  * After a restart the comeback climbs back to the pre-break median in rungs
  * (restart -> 80% -> 100% of the median), for this many weeks. A rung is climbed

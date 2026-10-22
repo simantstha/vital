@@ -3687,6 +3687,28 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
   return out;
 });
 
+// ── P3-h: a restart's long run is at most 40% of the restart number it is quoted with ──
+
+invariant(RUNNERS, 'P3-h: a long run quoted next to a restart number ("restart at ~12 km ...; long run 6.5 km") is at most 40% of that restart number', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    for (const t of [...cardTexts(snap), ...coachTexts(snap), ...reviewTexts(snap)]) {
+      const m = /restart at ~(\d+(?:\.\d+)?)\s?(?:km|mi)\b[^;]*; long run (\d+(?:\.\d+)?)\s?(?:km|mi)/i.exec(plain(t.text));
+      if (!m) continue;
+      seen++;
+      if (Number(m[2]) > Number(m[1]) * 0.4 + 0.01) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" - a ${m[2]} long run is ${Math.round((Number(m[2]) / Number(m[1])) * 100)}% of the ${m[1]} restart` });
+    }
+  }
+  if (name === 'runner_no_race') {
+    assert.ok(seen > 0, `${name}: no restart line quoted a long run, so this invariant checked nothing`);
+    const d55 = snaps.find(s => s.idx === 55) as DaySnapshot;
+    const line = (d55.coach ?? []).find(l => l.startsWith("- This week's target")) ?? '';
+    if (!/restart at ~12\.0 km with easy runs; long run 4\.5 km — /.test(plain(line))) out.push({ snap: d55, detail: `coach target line "${visible(line)}"` });
+  }
+  return out;
+});
+
 // ── P3-g: a cutback week's spike is over the cutback, not "the safe step" ───────
 
 invariant(RUNNERS, 'P3-g: when the week over its number is a cutback week (or the hold week right after one), the spike reason calls the number "this week\'s cutback" / "its cutback", never "the safe step"', (snaps, name) => {

@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, STRIDES_COPY, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunWord, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
+import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunWord, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -203,8 +203,17 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
         return `- This week's target: stay at ~${t} — last week was well over its comeback ceiling (a spike); do not build on the jump, and do not praise the extra distance${strides}`;
       }
       return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump${strides}`;
-    case 'restart':
-      return `- This week's target: restart at ~${plan.restartKm != null ? distKm(plan.restartKm, units) : t} with easy runs${lr ? `; ${lr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
+    case 'restart': {
+      // Wave 23e P3-h: on a break the plan's long run comes from the week's own number, but the line quotes the RESTART number (a lower band past two weeks
+      // off): the long run shown with it is at most 40% of that number ("restart at ~12 km; long run 4.5 km", never 6.5 km = 54%).
+      const restartKm = plan.restartKm ?? plan.targetKm;
+      const unitsPerKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
+      const restartLongKm = plan.longRunKm != null && restartKm != null
+        ? Math.min(plan.longRunKm, floorLongRunKm(restartKm * RESTART_LONG_RUN_MAX_SHARE, unitsPerKm))
+        : plan.longRunKm;
+      const restartLr = restartLongKm != null && restartLongKm > 0 ? `long run ${longRunText(restartLongKm, units)}` : null;
+      return `- This week's target: restart at ~${plan.restartKm != null ? distKm(plan.restartKm, units) : t} with easy runs${restartLr ? `; ${restartLr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
+    }
     case 'rebuild': {
       const atGoal = plan.targetKm != null && plan.targetKm >= d.targetKm - 1e-9;
       return `- This week's target: rebuilding after the race, ~${t}, easy runs${atGoal ? '' : '; add about 10% a week'}`;
