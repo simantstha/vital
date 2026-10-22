@@ -1649,14 +1649,29 @@ private struct CoachEmptyStateAnchor: View {
 private struct TypingIndicatorView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Screenshot harness (`-VitalFixture`): same gate as
+    /// `AmbientAnimation.isFixtureStill` (Theme.swift). The indicator shows
+    /// while the Coach opener/transcript loads — exactly when XCUITest taps the
+    /// Coach tab and runs its first snapshot queries — and `.phaseAnimator`
+    /// loops forever, so the app never goes idle and a query on a loaded runner
+    /// can time out. DEBUG-only; always false in Release.
+    private var isFixtureStill: Bool {
+        #if DEBUG
+        return FixtureMode.isActive
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         HStack {
             Group {
-                if reduceMotion {
+                if reduceMotion || isFixtureStill {
                     // `.phaseAnimator` self-drives regardless of any
                     // `.animation`/`.ambient` gating applied to it, so Reduce
-                    // Motion must be handled by not attaching it at all —
-                    // render the three dots statically instead.
+                    // Motion (and the fixture harness, see `isFixtureStill`)
+                    // must be handled by not attaching it at all — render the
+                    // three dots statically instead.
                     dotsRow(activeIndex: nil)
                 } else {
                     Color.clear

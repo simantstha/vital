@@ -116,20 +116,48 @@ final class ScreenshotTests: XCTestCase {
         for appearance in ["light", "dark"] {
             let app = launch(scenario: scenario, dark: appearance == "dark")
 
+            // Each screen runs in its own named activity, so a failure or a
+            // snapshot-query timeout names the screen (`weight_loss dark coach`)
+            // in the result bundle instead of just the test method. The blocks
+            // return Void and are non-escaping, so control flow is unchanged.
             if scenario == "onboarding" {
-                captureOnboarding(app, scenario: scenario, appearance: appearance)
+                XCTContext.runActivity(named: "\(scenario) \(appearance) onboarding") { _ in
+                    captureOnboarding(app, scenario: scenario, appearance: appearance)
+                }
             } else {
-                captureToday(app, scenario: scenario, appearance: appearance)
-                captureDietSheet(app, scenario: scenario, appearance: appearance)
-                captureLiftLogger(app, scenario: scenario, appearance: appearance)
-                captureCoach(app, scenario: scenario, appearance: appearance)
-                captureTrends(app, scenario: scenario, appearance: appearance)
-                captureGoalProgress(app, scenario: scenario, appearance: appearance)
-                captureWeeklyReview(app, scenario: scenario, appearance: appearance)
-                captureLogs(app, scenario: scenario, appearance: appearance)
-                captureProfile(app, scenario: scenario, appearance: appearance)
-                captureMemory(app, scenario: scenario, appearance: appearance)
-                captureDevices(app, scenario: scenario, appearance: appearance)
+                XCTContext.runActivity(named: "\(scenario) \(appearance) today") { _ in
+                    captureToday(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) dietSheet") { _ in
+                    captureDietSheet(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) liftLogger") { _ in
+                    captureLiftLogger(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) coach") { _ in
+                    captureCoach(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) trends") { _ in
+                    captureTrends(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) goalProgress") { _ in
+                    captureGoalProgress(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) weeklyReview") { _ in
+                    captureWeeklyReview(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) logs") { _ in
+                    captureLogs(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) profile") { _ in
+                    captureProfile(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) memory") { _ in
+                    captureMemory(app, scenario: scenario, appearance: appearance)
+                }
+                XCTContext.runActivity(named: "\(scenario) \(appearance) devices") { _ in
+                    captureDevices(app, scenario: scenario, appearance: appearance)
+                }
             }
 
             app.terminate()
@@ -733,8 +761,18 @@ final class ScreenshotTests: XCTestCase {
             // carries an `activity` array (chat-activity-contract.md §3), so
             // its restored turn should render as a folded receipt pill —
             // `CoachReceiptPill`'s "coach.receiptPill" identifier.
-            let pill = app.descendants(matching: .any).matching(identifier: "coach.receiptPill").firstMatch
-            XCTAssertTrue(pill.waitForExistence(timeout: 15),
+            //
+            // `CoachReceiptPill` is a SwiftUI `Button` (`.buttonStyle(.plain)`) that
+            // carries the identifier itself, and no ancestor combines or hides it, so
+            // it is a `.button`. A typed query snapshots only buttons; the
+            // `descendants(matching: .any)` form snapshots every element of every type
+            // and is the query that timed out on a loaded runner. The any-type query
+            // stays as a fallback (5s + 10s = the same 15s budget as before).
+            let typedPill = app.buttons.matching(identifier: "coach.receiptPill").firstMatch
+            let pill = typedPill.waitForExistence(timeout: 5)
+                ? typedPill
+                : app.descendants(matching: .any).matching(identifier: "coach.receiptPill").firstMatch
+            XCTAssertTrue(pill.waitForExistence(timeout: 10),
                            "Coach should show a receipt pill for the fixture's tool-call activity [\(scenario)/\(appearance)]")
             captureCoachReceipt(app, pill: pill, scenario: scenario, appearance: appearance)
         }
