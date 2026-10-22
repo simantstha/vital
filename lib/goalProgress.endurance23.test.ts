@@ -170,3 +170,17 @@ test('the Sunday of a hold week he built through reads "above the hold", not "on
   const next = computeGoalProgress(input(weeks(monday, [[], [[1, 5.6], [3, 5.6], [5, 5.6], [6, 11.2]], ...history]), { todayKey: monday }));
   assert.equal(next.distance!.plan?.kind, 'maintain');
 });
+
+test('the week after a cutback quotes its % against the last full week before the cutback, and says so - card headline (23e P2-4)', () => {
+  // Cutback week Mon 2026-10-19 (20 km after 23), then 25 km. Monday 2026-11-02: last week's +25% against the cutback is +9% on the 23 km week.
+  const mon = '2026-11-02';
+  const card = computeGoalProgress(input(weeks(mon, [[], [[1, 5], [3, 5], [5, 5], [6, 10]], [[1, 4], [3, 4], [5, 4], [6, 8]], ...CUTBACK_HISTORY.slice(0, 4).map((_, i) => wk([23, 21, 19, 17][i]))]), { todayKey: mon }));
+  assert.equal(card.headline, 'Building — 25 km last week (+9% on last full week, 23 km), on plan');
+  assert.equal(card.distance!.plan?.stepAfterCutback, undefined); // this week's own step is from last week now
+  // The cutback week itself keeps "−13%, as planned" against the week before it.
+  const cutMon = '2026-10-26';
+  const afterCut = computeGoalProgress(input(weeks(cutMon, [[], [[1, 4], [3, 4], [5, 4], [6, 8]], wk(23), wk(21), wk(19), wk(17)]), { todayKey: cutMon }));
+  assert.match(afterCut.headline, /^Building — 20 km last week \(−13%, as planned\), your cutback week$/);
+  assert.equal(afterCut.distance!.plan?.stepAfterCutback, true);
+  assert.equal(afterCut.distance!.plan?.stepBaseKm, 23);
+});

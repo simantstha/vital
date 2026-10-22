@@ -1018,6 +1018,16 @@ function easeForWindDown(input: WeeklyReviewInput, week: Week, cand: Candidate, 
 }
 
 /**
+ * Wave 23e: the base the reviewed week's % is quoted against. Normally last week; the week after a cutback steps from the last full week before it
+ * (`plan.stepBaseKm`), so the card, the coach and the review all quote ONE base - and name it.
+ */
+function changeBase(rp: ReviewPlans): { baseKm: number; afterCutback: boolean } {
+  const plan = rp.plan;
+  const afterCutback = plan != null && plan.last?.cutback === true && plan.stepBaseKm > rp.prevWeek.km + 1e-9;
+  return { baseKm: afterCutback && plan != null ? plan.stepBaseKm : rp.prevWeek.km, afterCutback };
+}
+
+/**
  * The Volume stat of a week with a plan (endurance + a weekly distance target):
  * the running km the plan counts (the race itself left out, and said so), against
  * last week's — a percentage only when last week was a real week (5 km / 3 mi or
@@ -1048,10 +1058,13 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   else if (plan.kind === 'hold' && prevKm > 0 && !rp.holdBroken && grade.gap !== 'spike') comparison = `held after ${distanceText(input, prevKm)} last week`;
   else if (plan.kind === 'restart' && prevKm > 0) comparison = `back after ${distanceText(input, prevKm)} last week`;
   else if (prevKm >= compareMin) {
-    const pct = Math.round(((km - prevKm) / prevKm) * 100);
+    const { baseKm, afterCutback } = changeBase(rp);
+    const pct = Math.round(((km - baseKm) / baseKm) * 100);
     comparison = pct === 0 ? 'same as last week' : `${signed(pct, `${Math.abs(pct)}%`)} vs last week`;
     // A cutback week is a planned drop (wave 22e): said so, next to the number.
     if (plan.cutback != null && pct < 0) comparison = `${comparison}, as planned (cutback)`;
+    // The week after a cutback is measured against the last full week before it, said so (wave 23e): "+9% on your last full week (23 km), back on the build after the cutback".
+    if (afterCutback) comparison = pct === 0 ? `same as your last full week (${distanceText(input, baseKm)}), back after the cutback` : `${signed(pct, `${Math.abs(pct)}%`)} on your last full week (${distanceText(input, baseKm)}), back on the build after the cutback`;
   } else if (prevKm > 0) comparison = `vs ${distanceText(input, prevKm)} last week`;
   else comparison = 'for the week';
   // A comeback week more than 10% over its "up to" ceiling is neither a win nor a spike: neutral.
@@ -1686,7 +1699,9 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
   const km = distanceText(input, rp.week.km);
   const u = unitsPerKmOf(input);
   const compareMin = u < 1 ? MIN_COMPARE_MI / u : MIN_COMPARE_KM;
-  const pct = rp.prevWeek.km >= compareMin ? Math.round(((rp.week.km - rp.prevWeek.km) / rp.prevWeek.km) * 100) : null;
+  const { baseKm: changeBaseKm, afterCutback } = changeBase(rp);
+  const pct = rp.prevWeek.km >= compareMin ? Math.round(((rp.week.km - changeBaseKm) / changeBaseKm) * 100) : null;
+  const onWhat = afterCutback ? 'on your last full week' : 'on last week';
   // A cutback week is for absorbing the last three: done when the running stayed near its lowered number.
   if (plan.cutback != null) {
     return rp.week.km <= (plan.targetKm as number) * PHASE_CEILING_TOLERANCE
@@ -1734,7 +1749,7 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
         const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) ? ` — aim for ~${distanceNumber(input, target)} again` : '';
         return `Close to your step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${again}.`;
       }
-      return `You hit this week's step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${pct != null && pct !== 0 ? ` (${signed(pct, `${Math.abs(pct)}%`)} on last week)` : ''}.`;
+      return `You hit this week's step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${pct != null && pct !== 0 ? ` (${signed(pct, `${Math.abs(pct)}%`)} ${onWhat})` : ''}.`;
     }
   }
 }
@@ -1856,7 +1871,10 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
           : volume.value;
         // A spike's (or an over-the-cap week's) headline already says it is a jump: no "+186% vs last week" on top (and it would overrun the headline limit).
         // (A planned cutback drop is short: "-13%, as planned (cutback)".)
-        const comparison = volume.comparison?.replace(/ vs last week(, as planned \(cutback\))$/, '$1');
+        // (After a cutback the stat names the last full week; the headline keeps it short: "+9% vs last full week".)
+        const comparison = volume.comparison?.replace(/ vs last week(, as planned \(cutback\))$/, '$1')
+          .replace(/^([+−-]\d+%) on your last full week \([^)]*\), back on the build after the cutback$/, '$1 vs last full week')
+          .replace(/^same as your last full week \([^)]*\), back after the cutback$/, 'same as last full week');
         parts.push(!(spike || overCap || reviewPlans(input).holdBroken) && comparison && comparison.includes('%') ? `${value}, ${comparison}` : value);
       }
     }

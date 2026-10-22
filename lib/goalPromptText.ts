@@ -159,8 +159,10 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
       return "- This week's target: none yet — a baseline week; next week's step is built from this week's total";
     case 'build': {
       // The step the plan actually asks for, not a fixed "~10%": a comeback after a break climbs faster.
+      // Wave 23e: the week after a cutback steps from the last full week before it - said so, so the coach never quotes the % against the cutback.
+      const stepBase = plan.stepAfterCutback === true && plan.stepBaseKm != null ? distKm(plan.stepBaseKm, units) : null;
       const step = plan.stepPct != null
-        ? `a ${plan.stepPct > 0 ? '+' : plan.stepPct < 0 ? '−' : ''}${Math.abs(plan.stepPct)}% step on last week`
+        ? `a ${plan.stepPct > 0 ? '+' : plan.stepPct < 0 ? '−' : ''}${Math.abs(plan.stepPct)}% step on ${stepBase != null ? `your last full week (${stepBase}), back on the build after the cutback` : 'last week'}`
         : 'the next step over last week';
       const climb = back != null && plan.targetKm != null && plan.comebackKm != null && plan.targetKm < plan.comebackKm - 0.5
         ? `, climbing back toward the ~${back} week from before the break`

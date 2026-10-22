@@ -86,3 +86,12 @@ test('the trimmed taper long run: the race-phase line and the card keep one numb
   assert.match(phase, new RegExp(`long run ${left} km easy`));
   assert.match(card, new RegExp(`keep Sunday's run ≤ ${(gp.distance!.stepTargetKm - 18).toString().replace('.', '\\.')}`));
 });
+
+test('the week after a cutback: the coach quotes the step against the last full week and says so (23e P2-4)', () => {
+  const mon = '2026-10-26';
+  const gp = computeGoalProgress(input(weeks(mon, [[], [[1, 4], [3, 4], [5, 4], [6, 8]], wk(23), wk(21), wk(19), wk(17)]), { todayKey: mon }));
+  assert.match(targetLine(coach(gp)), /^- This week's target: build to ~25\.0 km \(a \+9% step on your last full week \(23\.0 km\), back on the build after the cutback; long run [\d.]+ km\)/);
+  // A week that did not follow a cutback keeps "on last week".
+  const plain = computeGoalProgress(input(weeks('2026-10-12', [[], wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-12' }));
+  assert.match(targetLine(coach(plain)), /step on last week/);
+});

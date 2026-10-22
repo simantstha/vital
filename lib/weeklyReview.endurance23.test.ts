@@ -110,3 +110,18 @@ test('the Volume stat of a hold week built through (or jumped again) is never "h
   assert.doesNotMatch(stat(jumped, 'Volume')!.comparison ?? '', /held after/);
   assert.equal(stat(jumped, 'Volume')!.tone, 'watch');
 });
+
+test('the week after a cutback is reviewed against the last full week before it: one base, named, on the stat, the headline and the win (23e P2-4)', () => {
+  // The calendar's cutback week Mon 2026-10-19 ran as planned (20 km after 23); the week of 10-26 ran 25 km: +25% on the cutback, +9% on the 23 km week.
+  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20, 25], { weekStart: '2026-10-26' }));
+  assert.equal(r.weekRating, 'good');
+  assert.equal(stat(r, 'Volume')!.comparison, '+9% on your last full week (23 km), back on the build after the cutback');
+  assert.equal(r.headline, '4 sessions, 25 of ~25 km — on plan · goal 30 km, +9% vs last full week');
+  assert.equal(r.win, "You hit this week's step: 25 of ~25 km (+9% on your last full week).");
+  // The cutback week itself is still measured against the week before it, as planned.
+  const cut = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20], { weekStart: '2026-10-19' }));
+  assert.equal(stat(cut, 'Volume')!.comparison, '−13% vs last week, as planned (cutback)');
+  // A week that did not follow a cutback is unchanged.
+  const plainWeek = computeWeeklyReview(planReview([15, 17, 19, 21, 23], { weekStart: '2026-10-12' }));
+  assert.equal(stat(plainWeek, 'Volume')!.comparison, '+10% vs last week');
+});

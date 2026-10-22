@@ -3128,3 +3128,35 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-3: a 
   }
   return out;
 });
+
+// ── P2-4: after a cutback every surface quotes the weekly % against the week before the cutback (one base, named) ──────────
+
+/** True for a plain build / maintain / hold week of a runner who is not coming back from a break (the weeks a "+N%" step is meant for). */
+const isPlainBuildPlan = (plan: NonNullable<NonNullable<DaySnapshot['card']>['distance']>['plan'] | undefined): boolean =>
+  plan != null && ['build', 'maintain', 'hold'].includes(plan.kind) && plan.comebackKm == null && plan.upTo !== true;
+
+invariant(OBEDIENT, 'P2-4: no build-week "+N%" over 15% on any surface (card, coach, review) for a runner who does what the app says - after a cutback the base is the last full week, named', (snaps, name) => {
+  const out: Violation[] = [];
+  const bySunday = new Map(snaps.filter(s => weekdayOf(s.date) === 'Sun').map(s => [s.date, s]));
+  const over = (t: string): RegExpMatchArray | null => {
+    for (const m of plain(t).matchAll(/\+(\d+)%/g)) if (Number(m[1]) > 15) return m;
+    return null;
+  };
+  let afterCutback = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.distance?.plan;
+    if (isPlainBuildPlan(plan)) {
+      for (const t of [...cardTexts(snap), ...coachTexts(snap)]) if (over(t.text)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+    const rv = snap.review;
+    if (rv) {
+      const sunday = bySunday.get(addDays(rv.weekStart, 6));
+      if (sunday && isPlainBuildPlan(sunday.card?.distance?.plan)) {
+        for (const t of reviewTexts(snap)) if (over(t.text)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+        if (sunday.card?.distance?.plan?.cutback !== true && snaps.find(s => s.date === addDays(rv.weekStart, -7))?.card?.distance?.plan?.cutback) afterCutback++;
+      }
+    }
+  }
+  assert.ok(afterCutback > 0, `${name}: no review of a week right after a cutback was stepped, so this invariant checked nothing`);
+  return out;
+});

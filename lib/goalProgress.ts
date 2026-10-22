@@ -344,6 +344,12 @@ export interface GoalWeekPlan {
   skippedCutback?: boolean;
   /** Additive (wave 22e): on a break, the restart number "if you restart tomorrow" when it differs from the week's own `targetKm` (a lower band past two weeks off). */
   restartKm?: number;
+  /**
+   * Additive (wave 23e): the week after a cutback steps from the last full week before it, not from the cutback: `stepPct` is against `stepBaseKm`
+   * ("+9% on your last full week (23 km)"). Absent otherwise.
+   */
+  stepBaseKm?: number;
+  stepAfterCutback?: boolean;
   /** Additive (wave 23e): this week's long run is still to come (a Sunday morning is not "Behind"; the card waits for it before it judges the week). */
   longRunAhead?: boolean;
   /**
@@ -2678,6 +2684,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.upTo ? { upTo: true } : {}),
             ...(plan.hold?.skippedCutback ? { skippedCutback: true } : {}),
             ...(plan.longRunAhead ? { longRunAhead: true } : {}),
+            ...(plan.last?.cutback === true && plan.stepBaseKm > (plan.last?.km ?? 0) + 1e-9 ? { stepBaseKm: plan.stepBaseKm, stepAfterCutback: true } : {}),
             ...(plan.longRunTrim != null ? { longRunTrim: { fullKm: plan.longRunTrim.fullKm, remainingKm: plan.longRunTrim.remainingKm, weekDone: plan.longRunTrim.weekDone, today: plan.longRunTrim.today } } : {}),
             ...(plan.last?.overCap ? { overCap: true, ...(plan.last.capRead != null ? { overCapRead: plan.last.capRead } : {}) } : {}),
           },
@@ -2965,9 +2972,11 @@ function enduranceReasons(lead: GoalProgressReason | null, rest: Array<GoalProgr
 // ── The endurance verdict from the week plan ────────────────────────────────
 
 /** "+11%" / "−5%" / "steady" — never "up 0%"; null when the earlier week was too small to compare with. */
-function changeClause(changePct: number | null, asPlanned = false): string {
+function changeClause(changePct: number | null, asPlanned = false, fullWeek: string | null = null): string {
   if (changePct == null) return '';
-  if (changePct === 0) return ' (steady)';
+  if (changePct === 0) return fullWeek != null ? ` (same as last full week, ${fullWeek})` : ' (steady)';
+  // Wave 23e: after a cutback week the % is against the last full week before it, and says so (one base on every surface).
+  if (fullWeek != null) return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}% on last full week, ${fullWeek})`;
   // A cutback week is a planned drop, not a lapse.
   return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}%${asPlanned && changePct < 0 ? ', as planned' : ''})`;
 }
@@ -3470,7 +3479,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     : level === 'good' ? ', on plan'
     : level === 'mixed' ? `, a bit under the ~${fmt(lastPlanKm ?? target)} step`
     : ', a lighter week';
-  return finish('building', `Building — ${fmt(lastKm)} last week${changeClause(last?.changePct ?? null, last?.cutback === true)}${how}`, planBody());
+  return finish('building', `Building — ${fmt(lastKm)} last week${changeClause(last?.changePct ?? null, last?.cutback === true, last?.changeAfterCutback && last.changeBaseKm != null ? fmt(last.changeBaseKm) : null)}${how}`, planBody());
 }
 
 function enduranceOutcome(input: GoalProgressInput): Outcome {

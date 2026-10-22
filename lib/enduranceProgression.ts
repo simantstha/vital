@@ -667,6 +667,13 @@ export interface PlanLastWeek {
   changePct: number | null;
   /** Wave 23e: that week was a hold week and he did not keep it (`holdOverrun`): the card and the review say "above the hold", not "on plan". */
   holdOver: boolean;
+  /**
+   * Wave 23e: the km `changePct` is measured against - the week before it, or, when THAT week was a cutback, the last full week before the cutback (the
+   * base that week's own step was taken from), so the % is ONE number on the card, the coach and the review. Null when `changePct` is.
+   */
+  changeBaseKm: number | null;
+  /** ... and the base is the last full week before a cutback (name it: "+9% on your last full week (23 km)"), not simply the week before. */
+  changeAfterCutback: boolean;
 }
 
 export interface PlanLongRun {
@@ -774,6 +781,11 @@ export interface EnduranceWeekPlan {
    * the median, the rung this week uses (share of the median) and how many weeks after the restart it is (1-3).
    */
   comeback: { medianKm: number; fraction: number; weeksSince: number } | null;
+  /**
+   * Wave 23e: the km this week's ~10% step was taken from: last week, or after a cutback week the bigger of the two weeks before it (the cutback
+   * was a pause, not a new base). `stepPct` is measured against it; every surface that quotes the weekly % uses it.
+   */
+  stepBaseKm: number;
   /** The restart target (km) the card quotes while the runner is on a break; equals `targetKm` in a restart week. */
   restartKm: number;
   /** The restart number is the lower band for a gap of more than two weeks (55% of the pre-break median): the copy says why it is lower. */
@@ -1549,6 +1561,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   const hasPrior = ctx.runs.some(r => r.day < w);
   const prevPlan = depth < MAX_PLAN_DEPTH && hasPrior ? planWeek(ctx, prevStart, depth + 1) : null;
   const prevGrade = prevPlan != null && hasPrior ? gradeEnduranceWeek(prevPlan, prev.km, { runDays: prev.days, unitsPerKm: ctx.units }) : null;
+  // Wave 23e: last week's change is measured against the base ITS step was taken from: after a cutback that is the last full week before it.
+  const lastChangeBase = prevPlan != null ? prevPlan.stepBaseKm : prevPrev.km;
   const last: PlanLastWeek | null = hasPrior && ctx.runs.some(r => r.day >= prevStart && r.day < w)
     ? {
         weekStart: prevStart,
@@ -1562,9 +1576,11 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         grade: prevGrade,
         // No % against a very small week, nor for the week that restarted after a break (that +150% is not growth).
         holdOver: prevPlan != null && prevGrade?.gap !== 'spike' && holdOverrun(prevPlan, prev.km, longestRunIn(ctx, prevStart)),
-        changePct: prevPrev.km >= compareMin && prevPlan?.restart == null && prevGrade?.level !== 'light' && prevPlan?.last?.grade?.gap !== 'spike'
-          ? Math.round(((prev.km - prevPrev.km) / prevPrev.km) * 100)
+        changePct: lastChangeBase != null && lastChangeBase >= compareMin && prevPlan?.restart == null && prevGrade?.level !== 'light' && prevPlan?.last?.grade?.gap !== 'spike'
+          ? Math.round(((prev.km - lastChangeBase) / lastChangeBase) * 100)
           : null,
+        changeBaseKm: lastChangeBase != null && lastChangeBase >= compareMin && prevPlan?.restart == null && prevGrade?.level !== 'light' && prevPlan?.last?.grade?.gap !== 'spike' ? round1(lastChangeBase) : null,
+        changeAfterCutback: prevPlan != null && prevPlan.stepBaseKm > prevPrev.km + 1e-9,
       }
     : null;
 
@@ -1958,6 +1974,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     goalReachedBefore: goalReachedBefore(ctx, w),
     raceDaysToGo,
     stepPct,
+    stepBaseKm,
     hold,
     wind: windInfo,
     rebuild,
