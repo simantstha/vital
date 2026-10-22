@@ -1072,7 +1072,8 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   else comparison = 'for the week';
   // A comeback week more than 10% over its "up to" ceiling is neither a win nor a spike: neutral.
   // (A hold week he built through is neutral: no praise for a hold that was not kept.)
-  const tone: ReviewTone = isWindDownKind(plan.kind) || rp.raceRun != null || grade.level === 'light' || overUpToCap(plan, km, u) || rp.holdBroken ? 'neutral'
+  // (Wave 23e P3-b: only "a touch over" is neutral; far over the ceiling is a spike and amber, like any other jump.)
+  const tone: ReviewTone = isWindDownKind(plan.kind) || rp.raceRun != null || grade.level === 'light' || comebackCapRead(plan, km, u) === 'touch' || rp.holdBroken ? 'neutral'
     : grade.gap === 'spike' || grade.level === 'tough' ? 'watch'
     : grade.level === 'good' ? 'good'
     : 'neutral';
@@ -2931,7 +2932,7 @@ export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
     weekGap: assessment.gap,
     headline: buildHeadline(input, cands, week),
     stats: cands.map(x => x.stat),
-    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? deloadWin(input, week) : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (cands.find(x => x.win)?.win ?? null)),
+    win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? deloadWin(input, week) : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (input.goal === 'endurance' && assessment.gap?.kind === 'spike' ? null : (cands.find(x => x.win)?.win ?? null))),
     slip,
     nextWeek: `${buildNextWeek(input, cands, week, prevWeek, assessment, slip)}${needsEst1rmExplainer(input, week, cands) ? ` ${EST_1RM_EXPLAINER}` : ''}`,
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },

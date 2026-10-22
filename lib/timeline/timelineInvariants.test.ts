@@ -3637,3 +3637,20 @@ invariant(RUNNERS, 'P3-a: "a touch over, fine" is said once - on the Sunday the 
   }
   return out;
 });
+
+// ── P3-b: a spike week is not praised ────────────────────────────────────────
+
+invariant(RUNNERS, 'P3-b: a week graded a spike (a jump over the step, or well over a comeback ceiling) has no win and an amber (watch) Volume stat', (snaps, name) => {
+  const out: Violation[] = [];
+  let spikes = 0;
+  for (const snap of snaps) {
+    const rv = snap.review?.review;
+    if (!rv || rv.weekGap?.kind !== 'spike') continue;
+    spikes++;
+    if (rv.win) out.push({ snap, detail: `win "${visible(rv.win)}" for a spike week: "${visible(rv.headline)}"` });
+    const volume = rv.stats.find(st => st.label === 'Volume');
+    if (volume?.tone !== 'watch') out.push({ snap, detail: `Volume "${visible(volume?.value ?? '')} — ${visible(volume?.comparison ?? '')}" is [${volume?.tone}] for a spike week: "${visible(rv.headline)}"` });
+  }
+  if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(spikes > 0, `${name}: no spike week was reviewed, so this invariant checked nothing`);
+  return out;
+});

@@ -135,6 +135,24 @@ test('a comeback week\'s "Next week" names the ladder it climbs (up to ~25% a we
   assert.doesNotMatch(r.nextWeek, /add ~10% a week/);
 });
 
+test('a comeback week far over its ceiling (a spike) has no win - not even "4 sessions, up from 3" - and an amber Volume stat; "a touch over" stays neutral (23e P3-b)', () => {
+  // Weeks 1-6 build, two weeks off, a restart week of 12 km in THREE runs (Thu 4.8 + Sat dropped), then the comeback week "up to ~15 km" in four runs.
+  const history = [15, 17, 19, 21, 23, 25, 0, 0, 12];
+  const withThreeRunRestart = (km: number): WeeklyReviewInput => {
+    const input = planReview([...history, km]);
+    const workouts = input.workouts.filter(w => w.day !== '2026-09-26').map(w => (w.day === '2026-09-24' ? { ...w, distanceKm: 4.8, durationMin: 29 } : w));
+    return { ...input, workouts, trainingDays: workouts.map(w => w.day) };
+  };
+  const well = computeWeeklyReview(withThreeRunRestart(21));
+  assert.equal(well.weekGap?.kind, 'spike');
+  assert.equal(stat(well, 'Sessions')!.comparison, '3 last week'); // the sessions stat WOULD be a win (4, up from 3) ...
+  assert.equal(well.win, null); // ... and a spike week gets none
+  assert.equal(stat(well, 'Volume')!.tone, 'watch');
+  const touch = computeWeeklyReview(withThreeRunRestart(18));
+  assert.equal(touch.weekGap, null);
+  assert.equal(stat(touch, 'Volume')!.tone, 'neutral');
+});
+
 test('a recovery / taper week quoting a % vs last week says "as planned (recovery)" / "as planned (taper)" (23e P2-7)', () => {
   // Half marathon on Sun 2026-09-20; recovery week 1 is Mon 09-21, recovery week 2 the reviewed week (Mon 09-28).
   const race = { raceDate: '2026-09-20', raceDistanceKm: 21.1 };
