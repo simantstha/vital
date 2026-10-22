@@ -417,11 +417,11 @@ test('muscle: the coach is told when the last strength session was; a week or mo
 
 // ── wave 20c: the coach plateau note leads with the logs, "since start" is the one progress weight, the pace window is honest ──
 
-test('coach plateau note: with logged days over target it leads with the logs and does not blame water', () => {
+test('coach plateau note: with logged days over target it leads with the logs (and does not rule water out outright)', () => {
   const intake = { avgKcal: 2157, targetKcal: 2000, loggedDays: 4, daysWithinTarget: 1, low: true };
   const over = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake } }), 'metric').join('\n');
-  assert.match(over, /Plateau on the raw weekly averages \(flat for 3 weeks\) while the logged days ran over target \(averaging ~2160 vs 2000 kcal\): lead with the logs — getting back to target is the first lever, do not blame water\./);
-  assert.doesNotMatch(over, /often water/);
+  assert.match(over, /Plateau on the raw weekly averages \(flat for 3 weeks\) while the logged days ran over target \(averaging ~2160 vs 2000 kcal\): lead with the logs — getting back to target is the first lever \(don't lead with water; the logged days over target are the clearer lever\)\./);
+  assert.doesNotMatch(over, /often water|do not blame water/);
   // On target (or no logs): the existing note, unchanged.
   const fine = formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake: { ...intake, avgKcal: 1950, daysWithinTarget: 4, low: false } } }), 'metric').join('\n');
   assert.match(fine, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water — not a failure/);
@@ -440,4 +440,23 @@ test('coach lines: "since start" for a fat-loss goal names its basis (the weekly
 test('coach lines: the pace window is 3 weeks, or 4 while a gap in weigh-ins is bridged', () => {
   assert.match(formatGoalProgressLines(gp({ weightRead: { ...WEIGHT_READ, paceWindowDays: 21 } }), 'metric').join('\n'), /over the last 3 weeks of weigh-ins/);
   assert.match(formatGoalProgressLines(gp({ weightRead: { ...WEIGHT_READ, paceWindowDays: 28 } }), 'metric').join('\n'), /over the last 4 weeks of weigh-ins/);
+});
+
+test('wave 23w: the coach says the two paces are "either side of the target date" only when they really are', () => {
+  const plan = (straddles: boolean) => ({ state: 'pace', weekStart: '2026-10-05', action: { kind: 'keep_going', text: 'Keep your routine — it is working' }, earlierPace: { kgPerWeek: -0.46, pctPerWeek: -0.51, windowDays: 21 }, earlierPaceStraddles: straddles }) as unknown as NonNullable<GoalProgress['weightRead']>['plan'];
+  const lines = (straddles: boolean) => formatGoalProgressLines(gp({ ratePerWeek: { kg: -0.54, pctBodyweight: -0.61 }, weightRead: { ...WEIGHT_READ, plan: plan(straddles) } }), 'metric').join('\n');
+  assert.match(lines(true), /rate -0\.46 to -0\.54 kg\/wk over the last 3 weeks of weigh-ins \(two weekly reads either side of the target date\)/);
+  // Both land before the date: the current pace, and what the pace was a week ago.
+  assert.match(lines(false), /rate -0\.54 kg\/wk \(-0\.61% bw\) over the last 3 weeks of weigh-ins \(a week ago the pace was 0\.46 kg\/wk\)/);
+  assert.doesNotMatch(lines(false), /either side/);
+});
+
+test('wave 23w: a card built on a stale read gives the coach no "moving again" or plateau rule', () => {
+  const stale = (state: 'moving_again' | 'plateau') => formatGoalProgressLines(gp({
+    eta: null,
+    weightRead: { ...WEIGHT_READ, state, plan: { state, weekStart: '2026-05-18', action: { kind: 'keep_weighing', text: 'No weigh-in since May 10 — step on the scale when you can; your plan picks up from there' }, staleSince: '2026-05-10', flatWeeks: 3, plateauCause: null } as unknown as NonNullable<GoalProgress['weightRead']>['plan'] },
+  }), 'metric').join('\n');
+  assert.match(stale('moving_again'), /No weigh-in since May 10: say so and ask for a weigh-in/);
+  assert.doesNotMatch(stale('moving_again'), /moving again after a plateau/);
+  assert.doesNotMatch(stale('plateau'), /Plateau on the raw weekly averages/);
 });

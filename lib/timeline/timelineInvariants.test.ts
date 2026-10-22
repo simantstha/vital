@@ -19,7 +19,7 @@ import { addDays, dayDiff, weekdayOf, type DaySnapshot } from './types';
 const ALL: readonly ScenarioName[] = SCENARIO_NAMES;
 const RUNNERS = ALL.filter(n => n.startsWith('runner_'));
 const LIFTERS = ALL.filter(n => n.startsWith('lifter'));
-const WEIGHT: readonly ScenarioName[] = ['weight_loss', 'weight_loss_logged'];
+const WEIGHT: readonly ScenarioName[] = ['weight_loss', 'weight_loss_logged', 'weight_loss_obedient'];
 
 // ── plumbing ────────────────────────────────────────────────────────────────
 
@@ -761,14 +761,15 @@ invariant(WEIGHT, 'easing toward maintenance and a reached goal\'s first 3 weeks
     for (const t of allTexts(snap)) {
       if (/easing calories toward maintenance/i.test(plain(t.text)) && /^(?:card\.reasons|review\.nextWeek|coach)/.test(t.where)) {
         easing++;
-        if (!KCAL_FIGURE.test(plain(t.text)) && !/This week's plan|Nearly there/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" names no calorie figure` });
+        if (!KCAL_FIGURE.test(plain(t.text)) && !/This week's plan|Nearly there|snack/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" names no calorie figure` });
       }
     }
-    if (plan.action.kind === 'ease_to_maintenance' && !KCAL_FIGURE.test(plain(plan.action.text))) out.push({ snap, detail: `plan action [ease_to_maintenance] "${visible(plan.action.text)}" names no calorie figure` });
+    // (A user who logs no food gets the step as a snack, never a calorie figure - wave 23w.)
+    if (plan.action.kind === 'ease_to_maintenance' && !KCAL_FIGURE.test(plain(plan.action.text)) && !/snack/.test(plain(plan.action.text))) out.push({ snap, detail: `plan action [ease_to_maintenance] "${visible(plan.action.text)}" names no calorie figure` });
     const reachedDaysAgo = snap.card?.weightRead?.reachedDaysAgo;
     if (snap.card?.verdict === 'reached' && reachedDaysAgo != null && reachedDaysAgo <= MAINTENANCE_STEP_WINDOW_DAYS) {
       reachedChecked++;
-      if (!KCAL_FIGURE.test(plain(plan.action.text))) out.push({ snap, detail: `reached ${reachedDaysAgo} days ago, plan action [${plan.action.kind}] "${visible(plan.action.text)}" names no calorie figure` });
+      if (!KCAL_FIGURE.test(plain(plan.action.text)) && !/snack/.test(plain(plan.action.text))) out.push({ snap, detail: `reached ${reachedDaysAgo} days ago, plan action [${plan.action.kind}] "${visible(plan.action.text)}" names no calorie figure` });
     }
     if (plan.state === 'maintenance' && /drifts?\b/.test(plain(plan.action.text)) && !/above or below/.test(plain(plan.action.text))) {
       out.push({ snap, detail: `maintenance watch is one-sided: "${visible(plan.action.text)}"` });
@@ -996,14 +997,14 @@ invariant(WEIGHT, '"Holding at 84.0 kg, within 1 kg of 84 kg" is never said when
   return out;
 });
 
-invariant(WEIGHT, 'the opener that asks about a new target celebrates the reach (P3)', (snaps, name) => {
+invariant(WEIGHT, 'the opener that asks about a new target names the reach (P3; it congratulates on the reach day and the Monday after - wave 23w)', (snaps, name) => {
   const out: Violation[] = [];
   let seen = 0;
   for (const snap of snaps) {
     const line = snap.opener?.required ?? '';
     if (!/set a new target or switch to maintenance/i.test(line) || snap.card?.verdict !== 'reached') continue;
     seen++;
-    if (!/Congratulations/.test(line)) out.push({ snap, detail: `"${visible(line)}"` });
+    if (!/Congratulations|You've reached/.test(line)) out.push({ snap, detail: `"${visible(line)}"` });
   }
   assert.ok(seen > 0, `${name}: the reached opener never asked, so this invariant checked nothing`);
   return out;
@@ -2842,6 +2843,380 @@ invariant(LIFTERS, 'est. 1RM is explained once: in the first weekly review that 
   }
   return out;
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// WAVE 23w - WEIGHT LOSS, ROUND 5 (4/4 -> 5). One block, at the END of the file, so merging the other waves' blocks stays trivial.
+//   G-W   weight_loss_obedient: a user who does everything the card says is never contradicted on one card, and a stated kcal level
+//         never moves without a sentence giving the reason.
+//   P2-A  the maintenance loop: the step is given ONCE, stands as a level, is read 14+ days later from the weekly average; "held on ~X kcal"
+//         names the target as soon as two held weeks exist; a user who logs no food gets the step as a food, never a kcal number.
+//   P3    B coach "either side" claim · C one plateau cause figure · D stale card in the past tense · E the opener stays short ·
+//         F rate precision, "N kg down", the congratulation once · G "weekly average has been flat" · H the carried-over items.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+const W23_OBEDIENT: readonly ScenarioName[] = ['weight_loss_obedient'];
+const W23_LOGGERS: readonly ScenarioName[] = ['weight_loss_logged', 'weight_loss_obedient'];
+
+/** The full "add ~150-200 kcal a day" / "add a ~150-200 kcal snack" step sentence (not "add another ~150 kcal"). */
+const W23_STEP_GIVEN = /\badd (?:a )?~[\d,]+(?:\s?[–-]\s?[\d,]+)?\s?kcal (?:a day|snack)/i;
+
+/** Every user-visible string of a day: card, coach lines, opener, review. */
+const w23Texts = (s: DaySnapshot): Text[] => allTexts(s);
+
+/** Mondays of the weight scenarios (the day a plan week starts). */
+const w23Mondays = (snaps: DaySnapshot[]): DaySnapshot[] => snaps.filter(s => s.weekday === 'Mon');
+
+// ── G-W ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// The obedient user eats what the card states. A stated level that moves between two plan weeks (2,150 -> 2,200 kcal, a maintenance target
+// "named" twice with two different numbers) is a contradiction for her, whatever the logs say: it needs a sentence that replaces the old one.
+const W23_LEVEL_REASON = /replaces|instead of|add another|back off|still (?:falling|dropping|drifting)|is rising|last week's trim|you'd need/i;
+
+invariant(W23_OBEDIENT, 'G-W: a calorie level the plan stated never moves from one Monday to the next without a sentence giving the reason', (snaps, name) => {
+  const out: Violation[] = [];
+  let prev: { snap: DaySnapshot; kcal: number } | null = null;
+  let compared = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const plan = snap.card?.weightRead?.plan;
+    const kcal = plan?.action.kcalTarget ?? null;
+    if (prev != null && kcal != null && plan != null) {
+      compared++;
+      if (kcal !== prev.kcal && !W23_LEVEL_REASON.test(plain(plan.action.text))) {
+        out.push({ snap, detail: `Mon ${prev.snap.date} stated ${prev.kcal} kcal, Mon ${snap.date} states ${kcal} kcal and gives no reason: "${visible(plan.action.text)}"` });
+      }
+    }
+    prev = kcal != null ? { snap, kcal } : null;
+  }
+  assert.ok(compared > 0, `${name}: no two consecutive Mondays both stated a calorie level, so this invariant checked nothing`);
+  return out;
+});
+
+// One card, one calorie story: the adherence line is judged against the level the plan asks for, not a budget the plan has just stepped past.
+invariant(W23_OBEDIENT, 'G-W: the card never counts "within your 2,000 kcal target" next to a plan that states a different calorie level', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const level = plan?.action.kcalTarget;
+    const budget = snap.card?.weightRead?.intake?.targetKcal;
+    const adherence = snap.card?.reasons.find(r => r.kind === 'calorie_adherence');
+    if (plan == null || level == null || adherence == null || (plan.state !== 'maintenance' && plan.state !== 'reached' && !plan.nearlyThere)) continue;
+    seen++;
+    const m = /within your ([\d,]+)/.exec(plain(adherence.text));
+    if (m != null && Number(m[1].replace(/,/g, '')) !== level && budget !== level) {
+      out.push({ snap, detail: `adherence "${visible(adherence.text)}" vs the plan's level ${level} kcal: "${visible(plan.action.text)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no card had an adherence line next to a stated level, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(W23_OBEDIENT, 'G-W: the review never grades the week against a budget its own next-week level has moved past', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const rv = snap.review?.review;
+    const plan = snap.card?.weightRead?.plan;
+    if (rv == null || plan == null || plan.action.kcalTarget == null || (plan.state !== 'maintenance' && plan.state !== 'reached' && !plan.nearlyThere)) continue;
+    seen++;
+    const m = /\(([\d,]{4,}) kcal target\)/.exec(plain(`${rv.slip ?? ''} ${rv.headline}`));
+    if (m != null && Number(m[1].replace(/,/g, '')) !== plan.action.kcalTarget) {
+      out.push({ snap, detail: `review grades against ${m[1]} kcal: "${visible(rv.slip ?? '')}" while next week states ${plan.action.kcalTarget} kcal: "${visible(rv.nextWeek)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no review met a stated level, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P2-A ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+invariant(WEIGHT, 'P2-A: the maintenance step ("add ~150-200 kcal a day ... watch the weekly average") is given in ONE plan week, then it is a standing level', (snaps, name) => {
+  const weeks = new Map<string, DaySnapshot>();
+  for (const snap of snaps) {
+    if (w23Texts(snap).some(t => W23_STEP_GIVEN.test(plain(t.text)))) {
+      const monday = mondayOfDate(snap.date);
+      if (!weeks.has(monday)) weeks.set(monday, snap);
+    }
+  }
+  assert.ok(weeks.size > 0, `${name}: the step was never given, so this invariant checked nothing`);
+  if (weeks.size <= 1) return [];
+  return [...weeks.entries()].slice(1).map(([monday, snap]) => ({ snap, detail: `the step is given again in the week of ${monday} (first given in the week of ${[...weeks.keys()][0]})` }));
+});
+
+const W23_ADDS_CALORIES = /\badd (?:a |another )?~?[\d,]+/i;
+const W23_ADD_EXPLAINED = /no longer need|still (?:falling|dropping)|is rising|another|back off|as you close in|you've held/i;
+
+invariant(WEIGHT, 'P2-A: "Holding at ..." is never next to an instruction to add calories on the same card unless the instruction says why', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const reasons = snap.card?.reasons ?? [];
+    const holding = reasons.find(r => r.kind === 'position' && /^Holding at/.test(plain(r.text)));
+    if (holding == null) continue;
+    seen++;
+    for (const r of reasons) {
+      if (r !== holding && r.kind !== 'position' && W23_ADDS_CALORIES.test(plain(r.text)) && !W23_ADD_EXPLAINED.test(plain(r.text))) {
+        out.push({ snap, detail: `"${visible(holding.text)}" next to [${r.kind}] "${visible(r.text)}"` });
+      }
+    }
+  }
+  assert.ok(seen > 0, `${name}: no card said "Holding at", so this invariant checked nothing`);
+  return out;
+});
+
+const W23_CONCLUDES = /your maintenance|add another|back off|keep your calorie target where it is|already at maintenance/i;
+
+invariant(WEIGHT, 'P2-A: the step is read on the first Monday 14+ days after it was given, from the weekly average (keep it / add another / back off)', (snaps, name) => {
+  const given = snaps.find(s => w23Texts(s).some(t => W23_STEP_GIVEN.test(plain(t.text))));
+  assert.ok(given != null, `${name}: the step was never given, so this invariant checked nothing`);
+  const read = w23Mondays(snaps).find(s => s.date >= addDays((given as DaySnapshot).date, 14));
+  assert.ok(read != null, `${name}: the scenario ends before the step is read`);
+  const texts = [...(read as DaySnapshot).card!.reasons.map(r => r.text), (read as DaySnapshot).review?.review.nextWeek ?? ''];
+  return texts.some(t => W23_CONCLUDES.test(plain(t)))
+    ? []
+    : [{ snap: read as DaySnapshot, detail: `the step was given ${(given as DaySnapshot).date}; this Monday still says: ${texts.map(t => `"${visible(t)}"`).join(' | ')}` }];
+});
+
+// Two held weekly means (3+ weigh-ins each, within 1 kg of the target, within 0.5 kg of each other) and 8+ logged days in the 14 name the target.
+invariant(W23_LOGGERS, 'P2-A: "You\'ve held about 84 kg on ~X kcal" names the maintenance target on the first Monday two held weeks exist (not 13 days after the reach)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const target = scn.user.targetWeightKg as number;
+  const out: Violation[] = [];
+  let due = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null || snap.card?.verdict !== 'reached' || plan.action.kind === 'next_target') continue;
+    const asOf = addDays(snap.date, -1);
+    const w2 = wlWeekMean(scn.weighIns, asOf);
+    const w1 = wlWeekMean(scn.weighIns, addDays(asOf, -7));
+    if (w1 == null || w2 == null || Math.abs(w2 - w1) > 0.5 || Math.abs(w1 - target) > 1 || Math.abs(w2 - target) > 1) continue;
+    const logged = scn.intake.filter(i => i.day >= addDays(asOf, -13) && i.day <= asOf).length;
+    if (logged < 8) continue;
+    due++;
+    const texts = [...(snap.card?.reasons ?? []).map(r => r.text), snap.review?.review.nextWeek ?? ''];
+    // The first such Monday NAMES the target; the Mondays after it keep that level ("Stay at ~2,050 kcal - your maintenance").
+    const re = due === 1 ? /you've held|keep your calorie target where it is|already at maintenance/i : /you've held|stay at ~[\d,]+\s?kcal — your maintenance|keep your calorie target where it is|already at maintenance/i;
+    if (!texts.some(t => re.test(plain(t)))) {
+      out.push({ snap, detail: `two held weeks (${w1.toFixed(1)}, ${w2.toFixed(1)} kg), ${logged} logged days of 14, but the card says: ${texts.map(t => `"${visible(t)}"`).join(' | ')}` });
+    }
+  }
+  assert.ok(due > 0, `${name}: no Monday had two held weeks on logged intake, so this invariant checked nothing`);
+  return out;
+});
+
+// No food log, no kcal target: the step is a food (a snack), and it is closed with "keep that snack".
+const W23_KCAL_TARGET_NUMBER = /\d,\d{3}(?:\s?[–-]\s?\d,\d{3})?\s?kcal/;
+
+invariant(['weight_loss'], 'P2-A: a user who logs no food gets the maintenance step as a food ("add a ~150-200 kcal snack"), never a kcal target number, and it closes with "keep that snack"', (snaps, name) => {
+  const out: Violation[] = [];
+  let snack = 0;
+  let kept = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan == null || !(plan.state === 'reached' || plan.state === 'maintenance' || plan.nearlyThere)) continue;
+    for (const t of w23Texts(snap)) {
+      if (/snack/i.test(plain(t.text))) snack++;
+      if (/keep that snack|keep the (?:daily )?snack/i.test(plain(t.text))) kept++;
+      if (W23_KCAL_TARGET_NUMBER.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" states a kcal target number to a user who logs no food` });
+    }
+    if (plan.action.kcalTarget != null && plan.step != null) out.push({ snap, detail: `the step carries kcalTarget ${plan.action.kcalTarget} for a user who logs no food` });
+  }
+  assert.ok(snack > 0 && kept > 0, `${name}: no snack step / "keep that snack" appeared (snack ${snack}, kept ${kept}), so this invariant checked nothing`);
+  return out;
+});
+
+// ── P3 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// B: the coach's "(two weekly reads either side of the target date)" is true only when the two paces land on opposite sides of the date.
+invariant(['weight_loss'], 'P3-B: the coach line says the two reads are "either side of the target date" only on a day they are (days 42-48 are not)', (snaps, name) => {
+  const out: Violation[] = [];
+  let ranges = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const line = (snap.coach ?? []).find(l => /either side of the target date/.test(plain(l)));
+    if (plan?.earlierPace != null) ranges++;
+    if (line != null && plan?.earlierPaceStraddles !== true) out.push({ snap, detail: `"${visible(line.slice(0, 260))}" while both paces land on the same side (earlierPaceStraddles ${plan?.earlierPaceStraddles})` });
+    if (plan?.earlierPace != null && plan.earlierPaceStraddles !== true && snap.idx >= 42 && snap.idx <= 48
+      && !(snap.coach ?? []).some(l => /a week ago the pace was [\d.]+/.test(plain(l)))) {
+      out.push({ snap, detail: 'the coach line does not say what the pace was a week ago' });
+    }
+  }
+  assert.ok(ranges > 0, `${name}: no day showed a pace range, so this invariant checked nothing`);
+  return out;
+});
+
+// C: one plateau cause, one figure. The flat fortnight names "weekends ~2,400"; the plateau a week later keeps that number.
+invariant(['weight_loss_logged'], 'P3-C: a plateau cause named at the flat fortnight keeps its figure when the plateau is called (no ~2,400 then ~2,350)', (snaps, name) => {
+  const out: Violation[] = [];
+  let compared = 0;
+  let prev: { snap: DaySnapshot; kcal: number; kind: string } | null = null;
+  for (const snap of w23Mondays(snaps)) {
+    const cause = snap.card?.weightRead?.plan?.plateauCause;
+    const kcal = cause?.kind === 'weekends' ? cause.weekendAvgKcal : cause?.kind === 'intake' ? cause.avgKcal : null;
+    if (prev != null && cause != null && kcal != null && cause.kind === prev.kind && dayDiff(snap.date, prev.snap.date) === 7) {
+      compared++;
+      if (Math.round(kcal / 50) !== Math.round(prev.kcal / 50)) out.push({ snap, detail: `Mon ${prev.snap.date} quoted ~${prev.kcal} kcal, Mon ${snap.date} quotes ~${kcal} kcal for the same ${cause.kind} cause` });
+    }
+    prev = cause != null && kcal != null ? { snap, kcal, kind: cause.kind } : null;
+  }
+  assert.ok(compared > 0, `${name}: no two consecutive Mondays named the same cause, so this invariant checked nothing`);
+  return out;
+});
+
+// D: a card built on a stale read speaks in the past: "As of May 10: ...", neutral, and the coach is not told "the scale is moving again".
+const W23_AS_OF = /^As of [A-Z][a-z]{2} \d{1,2}\b/;
+
+invariant(WEIGHT, 'P3-D: while the newest weigh-in is a week old or more the card says "As of <date>: ..." in a neutral tone, and the coach gets no "moving again" rule', (snaps, name) => {
+  const out: Violation[] = [];
+  let stale = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan?.staleSince == null || snap.card == null || snap.card.verdict === 'reached') continue;
+    stale++;
+    for (const r of snap.card.reasons) {
+      if (r.kind === 'action' || r.kind === 'weigh_in_age' || r.kind === 'calorie_adherence' || r.kind === 'weekend_overeating') continue;
+      if (!W23_AS_OF.test(plain(r.text)) || r.tone !== 'neutral') out.push({ snap, detail: `stale since ${plan.staleSince}: [${r.kind}/${r.tone}] "${visible(r.text)}"` });
+    }
+    if (!W23_AS_OF.test(plain(snap.card.headline))) out.push({ snap, detail: `stale since ${plan.staleSince}: headline "${visible(snap.card.headline)}"` });
+    const rule = (snap.coach ?? []).find(l => /The scale is moving again after a plateau/.test(plain(l)));
+    if (rule != null) out.push({ snap, detail: `the coach still gets "${visible(rule.slice(0, 120))}" next to the stale-weigh-in rule` });
+  }
+  if (name !== 'weight_loss_obedient' || stale > 0) assert.ok(stale > 0, `${name}: no stale day, so this invariant checked nothing`);
+  return out;
+});
+
+// E: a reached opener after the question is one short clause, not "Target reached — add ~150-200 kcal a day (to ...) and watch ...; a drift of ...".
+invariant(WEIGHT, 'P3-E: once the new-target question is over, the reached opener is one short sentence ("You\'re holding at 84 kg — stay around ~2,150-2,200 kcal this week and keep weighing in.")', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const line = plain(snap.opener?.required ?? '');
+    if (snap.card?.verdict !== 'reached' || snap.card.weightRead?.plan?.action.kind === 'next_target' || line === '') continue;
+    seen++;
+    if (line.length > 125 || line.includes(';')) out.push({ snap, detail: `${line.length} characters: "${visible(line)}"` });
+  }
+  assert.ok(seen > 0, `${name}: no reached opener after the question, so this invariant checked nothing`);
+  return out;
+});
+
+// F: precision. "about 0.6 kg a week" in the opener and the headline (the card's rate line keeps its decimals); "7.8 kg down", never "8 kg down" next to -7.8;
+// the congratulation on the reach day and the following Monday only.
+invariant(WEIGHT, 'P3-F: the headline and the opener say "about 0.6 kg a week" (one decimal), the same figure', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    for (const t of [{ where: 'card.headline', text: snap.card?.headline ?? '' }, { where: 'opener.required', text: snap.opener?.required ?? '' }]) {
+      const m = /about ([\d.]+) (?:kg|lb) a week/.exec(plain(t.text));
+      if (m == null) continue;
+      seen++;
+      if (!/^\d+(?:\.\d)?$/.test(m[1])) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no rate was quoted in a headline or opener, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-F: the reach opener says how far down the weekly average is ("7.8 kg down"), the figure the card prints, not the size of the goal', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const m = /\(([\d.]+) kg down/.exec(plain(snap.opener?.required ?? ''));
+    const change = snap.card?.current.changeKg;
+    if (m == null || change == null) continue;
+    seen++;
+    if (Math.abs(Number(m[1]) + change) > 0.05) out.push({ snap, detail: `opener "${visible(snap.opener?.required ?? '')}" vs card changeKg ${change}` });
+  }
+  assert.ok(seen > 0, `${name}: no reach opener named an amount, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-F: "Congratulations" is said on the reach day and on the following Monday, not every day of the question', (snaps, name) => {
+  const out: Violation[] = [];
+  let said = 0;
+  for (const snap of snaps) {
+    if (!/Congratulations/.test(plain(snap.opener?.required ?? ''))) continue;
+    said++;
+    const reachedAt = snap.card?.reachedAt;
+    const ok = reachedAt != null && (snap.date === reachedAt || (snap.weekday === 'Mon' && dayDiff(snap.date, reachedAt) > 0 && dayDiff(snap.date, reachedAt) <= 6));
+    if (!ok) out.push({ snap, detail: `reached ${reachedAt}: "${visible(snap.opener?.required ?? '')}"` });
+  }
+  assert.ok(said > 0, `${name}: the reach was never congratulated, so this invariant checked nothing`);
+  return out;
+});
+
+// G: the scale can read 88.9 / 88.8 while "the scale has been flat for 3 weeks"; the plateau is a statement about the weekly average.
+invariant(WEIGHT, 'P3-G: the opener says "your weekly average has been flat", not "the scale has been flat"', snaps =>
+  textMatches(snaps, s => coachTexts(s), /the scale has been flat/i));
+
+// H (carried over)
+invariant(['weight_loss_logged'], 'P3-H: the "weekends average ..." watch is never a one-day flash', (snaps, name) => {
+  const out: Violation[] = [];
+  let runs = 0;
+  let i = 0;
+  const has = (s: DaySnapshot): boolean => (s.card?.reasons ?? []).some(r => r.kind === 'weekend_overeating');
+  while (i < snaps.length) {
+    if (!has(snaps[i])) { i++; continue; }
+    let j = i;
+    while (j + 1 < snaps.length && has(snaps[j + 1])) j++;
+    runs++;
+    if (j === i) out.push({ snap: snaps[i], detail: 'the weekend_overeating watch shows on this day only' });
+    i = j + 1;
+  }
+  // The scenario's one flash (day 32: the weekend average tips over the threshold for a single day) must not show.
+  const flash = snaps.find(s => s.idx === 32);
+  assert.ok(flash != null && !has(flash), `${name}: the day-32 flash is shown (${runs} run(s) of the watch)`);
+  return out;
+});
+
+invariant(['weight_loss'], 'P3-H: the welcome back that moves the progress weight from the old average to today\'s reading says so', (snaps, name) => {
+  const out: Violation[] = [];
+  let jumps = 0;
+  snaps.forEach((snap, i) => {
+    if (i === 0 || !/^Welcome back/.test(plain(snap.card?.headline ?? ''))) return;
+    const before = snaps[i - 1].card?.current.changeKg;
+    const now = snap.card?.current.changeKg;
+    if (before == null || now == null || Math.abs(now - before) < 0.5) return;
+    jumps++;
+    const said = [...(snap.card?.reasons ?? []).map(r => r.text), snap.opener?.required ?? ''].some(t => /progress now counts from/i.test(plain(t)));
+    if (!said) out.push({ snap, detail: `changeKg ${before} -> ${now}: "${visible(snap.card?.headline ?? '')}" / "${visible(snap.opener?.required ?? '')}"` });
+  });
+  assert.ok(jumps > 0, `${name}: no welcome back moved the progress weight, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss', 'weight_loss_logged'], 'P3-H: a review of a week with no weigh-ins says "No weigh-ins last week", not "Not enough data for a weekly review yet"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    if (rv == null) continue;
+    const week = scn.weighIns.filter(w => w.day >= rv.weekStart && w.day <= addDays(rv.weekStart, 6));
+    if (week.length > 0) continue;
+    seen++;
+    if (!/^No weigh-ins last week/.test(plain(rv.review.headline)) || !/your plan picks up when you weigh in/i.test(plain(rv.review.headline + ' ' + rv.review.nextWeek))) {
+      out.push({ snap, detail: `headline "${visible(rv.review.headline)}" / next "${visible(rv.review.nextWeek)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no review covered a week without weigh-ins, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss_logged'], 'P3-H: a tough plateau week\'s push leads with the plan, not with the stats', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    if (rv == null || rv.review.weekRating !== 'tough') continue;
+    seen++;
+    if (/^(?:Weight flat|In budget|Down|Up)\b/.test(plain(rv.alert.body))) out.push({ snap, detail: `push body "${visible(rv.alert.body)}" (headline "${visible(rv.review.headline)}")` });
+  }
+  assert.ok(seen > 0, `${name}: no tough week, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-H: the coach is never told to "not blame water" outright; it is told to lead with the logged cause', snaps =>
+  textMatches(snaps, s => coachTexts(s), /do not blame water/i));
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 // ═══ WAVE 23e (ENDURANCE): STRUCTURAL GUARDS G1-G3 + ROUND-5 INVARIANTS ═══════════════════════════════════

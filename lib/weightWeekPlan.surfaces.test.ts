@@ -208,13 +208,19 @@ test('reached: "Set a new target or switch to maintenance" for 7 days after the 
 test('held for two weeks on logged intake: the maintenance target is that intake — card and review', () => {
   const reached = readings(range(0, 130), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
   const meals = food(range(0, 130), n => 2050 + (n % 2 === 0 ? 40 : -40));
-  const { card, review } = reviewOn(reached, meals, 84);
+  // Wave 23w: as soon as two held weeks exist (Monday 70, the first one after the question), not 13 days after the reach (Monday 77).
+  const { card, review } = reviewOn(reached, meals, 70);
   assert.equal(card.verdict, 'reached');
   assert.equal(card.weightRead?.plan?.state, 'maintenance');
-  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target");
+  const named = "You've held about 84 kg on ~2,050 kcal — make that your maintenance target (it replaces the step to ~2,150–2,200 kcal)";
+  assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), named);
   assert.equal(review.nextWeek, card.weightRead?.plan?.action.text);
   assert.doesNotMatch(review.nextWeek, /Switch to maintenance in Goals/);
-  assert.equal(plainSpaces(goalOpenerLine(card, 'metric') ?? ''), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target.");
+  assert.equal(plainSpaces(goalOpenerLine(card, 'metric') ?? ''), `${named}.`);
+  // A week later the named level stands: one short sentence on the opener, the level on the card.
+  const later = reviewOn(reached, meals, 77);
+  assert.equal(plainSpaces(later.card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), 'Stay at ~2,050 kcal — your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act');
+  assert.equal(plainSpaces(goalOpenerLine(later.card, 'metric') ?? ''), "You're holding at 84 kg — stay around ~2,050 kcal this week and keep weighing in.");
   assert.equal(requiredOpenerLine(card, 'weight_loss', 'metric'), goalOpenerLine(card, 'metric'));
   assert.equal(goalFallbackOpener(card, 'weight_loss', 'metric')?.startsWith("You've held"), true);
   // NBSP between the number and its unit, in the card's own copy.
@@ -223,13 +229,16 @@ test('held for two weeks on logged intake: the maintenance target is that intake
 
 test('after the first week a reached goal is told to hold, not to "switch to maintenance"', () => {
   const reached = readings(range(0, 130), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
-  // Monday 77 is still inside the first 3 weeks of maintenance (wave 22w): the step toward maintenance, as a number.
+  // Wave 23w: the step (a snack - no food is logged here) was given the week of the reach; Monday 70 carries it as a level, Monday 77 (14+ days on)
+  // reads the weekly average and keeps it.
+  const standing = reviewOn(reached, [], 70).review;
+  assert.match(plainSpaces(standing.nextWeek), /^Keep the daily snack \(the step you started \w{3} \d{1,2}\); we'll read it on Mon, May 18$/);
   const { review } = reviewOn(reached, [], 77);
-  assert.match(plainSpaces(review.nextWeek), /^Target reached — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\) and watch the weekly average for 2 weeks; a drift of 1 kg above or below your target is your cue to act$/);
+  assert.equal(plainSpaces(review.nextWeek), "Your weekly average held within 0.5 kg — keep that snack, it's your maintenance");
   assert.doesNotMatch(review.nextWeek, /switch to maintenance/i);
-  // Later it is the two-sided watch alone.
+  // Later it is the kept level, with the two-sided watch.
   const later = reviewOn(reached, [], 98).review;
-  assert.match(plainSpaces(later.nextWeek), /^Keep weighing in a few mornings a week; if your average drifts 1 kg above or below your target, that is your cue to act\.$/);
+  assert.equal(plainSpaces(later.nextWeek), "Keep the daily snack — it's your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act");
 });
 
 test('the coach signals follow the plan: "plateau" only in a plateau week, "too fast" only while the call is on', () => {
@@ -278,7 +287,7 @@ test('a reached goal whose calorie target already is maintenance is told to keep
   }
   // On a deficit budget the same week says to set a new target or switch.
   const deficit = cardAt(reached, [], reachedDay + 1, { budget: { ...BUDGET, formulaTdee: 2350 } });
-  assert.match(plainSpaces(deficit.reasons.find(r => r.kind === 'next_step')?.text ?? ''), /^Set a new target or switch to maintenance — add ~150–200 kcal a day \(to ~2,150–2,200 kcal\)/);
+  assert.match(plainSpaces(deficit.reasons.find(r => r.kind === 'next_step')?.text ?? ''), /^Set a new target or switch to maintenance — (?:you no longer need a deficit, so add|keep the daily snack)/);
 });
 
 test('P2-4: while the plan is ahead (or a kilo from the target) the review does not tell a heavy-weekend user to tighten anything', () => {

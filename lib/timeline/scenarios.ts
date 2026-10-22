@@ -16,6 +16,7 @@ import {
 } from '../enduranceProgression';
 import { nextLoadCues, shortWeekLoadCues } from '../liftChange';
 import { summarizeProgression } from '../progressionMath';
+import { computeProgressFor } from './engine';
 import { obedientDayByDay } from './obedient';
 import { addDays, type IntakeRow, type Scenario, type SetRow, type WeighIn, type WorkoutRow } from './types';
 
@@ -743,6 +744,7 @@ export const SCENARIO_NAMES = [
   'lifter_obedient',
   'weight_loss',
   'weight_loss_logged',
+  'weight_loss_obedient',
   'runner_on_plan',
   'runner_on_plan_half',
   'runner_on_plan_imperial',
@@ -774,6 +776,7 @@ export function buildScenario(name: ScenarioName): Scenario {
     case 'lifter_obedient': return lifterObedient();
     case 'weight_loss': return weightLoss();
     case 'weight_loss_logged': return weightLossLogged();
+    case 'weight_loss_obedient': return weightLossObedient();
     case 'runner_on_plan': return runnerOnPlan();
     case 'runner_on_plan_half': return runnerOnPlanHalf();
     case 'runner_on_plan_imperial': {
@@ -786,4 +789,63 @@ export function buildScenario(name: ScenarioName): Scenario {
     case 'runner_comeback_spike': return runnerComebackSpike();
     case 'runner_comeback_obedient': return runnerComebackObedient();
   }
+}
+
+// ═══ wave 23w: an obedient weight-loss user (G-W) ═══════════════════════════════════════════════════════════════════
+
+/**
+ * G-W: the same weigh-ins as `weight_loss`, from a user who does exactly what the card says, day by day. Each day she reads the real
+ * goal-progress card as it stands that morning (the weigh-ins through today, the food she has logged through yesterday) and:
+ *  - eats the calorie level the week's plan states (`action.kcalTarget`; the 2,000 kcal budget while the plan states none), with a
+ *    little day-to-day noise and no weekend binge - she logs it as soon as the plan asks her to ("log a few days"), and every day after;
+ *  - adds the two 30-minute walks from the day the plan names them, and keeps them up;
+ *  - trains Mon / Wed / Sat as in `weight_loss_logged`; nothing at all (no food, no workout, no weigh-in) in the 12-day gap.
+ * After the target (day 102) she therefore takes the maintenance step and then holds it. Her scale does not react to what she eats (the
+ * weights are `weight_loss`'s own, a plateau included, so the three weight scenarios stay comparable): what this scenario guards is what
+ * she is TOLD, week after week, while she does it. Built once per process: it runs the real card ~110 times.
+ */
+let obedientWeightCache: Scenario | null = null;
+export function weightLossObedient(): Scenario {
+  if (obedientWeightCache) return obedientWeightCache;
+  const base = weightLoss();
+  const r = rng(230_001);
+  const intake: IntakeRow[] = [];
+  const workouts: WorkoutRow[] = [];
+  const scn: Scenario = {
+    ...base,
+    name: 'weight_loss_obedient',
+    title: 'Weight loss 92 kg -> 84 kg (same weigh-ins; follows every weekly action: the stated kcal, the walks, logs when asked)',
+    user: { ...base.user, weeklySessions: 3 },
+    intake,
+    workouts,
+    inputNotes: [],
+  };
+  let logging = false;
+  let walking = false;
+  const events: string[] = [];
+  for (let d = 0; d <= base.lastDay; d++) {
+    const date = addDays(DAY0, d);
+    const dow = d % 7; // Mon = 0
+    const away = d >= 70 && d <= 81;
+    if (away) continue;
+    // The card as she reads it this morning: the plan exists from the third week.
+    const plan = d >= 14 ? computeProgressFor(scn, date).weightRead?.plan ?? null : null;
+    const said = plan?.action.text ?? '';
+    if (!logging && /log a few days|keep logging/i.test(said)) { logging = true; events.push(`day ${d}: starts logging food ("${said.slice(0, 70)}...")`); }
+    if (!walking && /30-minute walks/i.test(said)) { walking = true; events.push(`day ${d}: starts the two 30-minute walks`); }
+    if (dow === 0 || dow === 2 || dow === 5) workouts.push({ day: date, type: 'Strength Training', durationMin: 45, distanceM: null });
+    if (walking && (dow === 1 || dow === 4)) workouts.push({ day: date, type: 'Walking', durationMin: 30, distanceM: 2400 });
+    if (logging) {
+      const level = plan?.action.kcalTarget ?? base.budget.targetKcal ?? 2000;
+      intake.push({ day: date, kcal: Math.round(level + gauss(r) * 60), proteinG: Math.round(clamp(140 + gauss(r) * 10, 100, 180)) });
+    }
+  }
+  scn.inputNotes = [
+    'Same goal, target (84 kg by day 126), budget (2,000 kcal) and weigh-ins as weight_loss (including the plateau and the 12-day gap), plus a weekly-sessions target of 3.',
+    'Day by day she reads the real card and obeys it: she eats the calorie level the plan states (the budget while it states none; +/-60 kcal of noise, no weekend binge), logs food from the day the plan asks her to and every day after, adds the two 30-minute walks (Tue/Fri) from the day the plan names them, and trains Mon/Wed/Sat. Nothing is logged in the gap (days 70-81).',
+    'Her scale does not react to what she eats: the weights are weight_loss\'s own. The scenario guards what she is TOLD while she obeys.',
+    ...(events.length > 0 ? [`What she did, and when: ${events.join('; ')}.`] : []),
+  ];
+  obedientWeightCache = scn;
+  return scn;
 }
