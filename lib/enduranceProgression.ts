@@ -582,6 +582,26 @@ export function overCapPhrase(read: Exclude<CapRead, 'within'>): 'a touch over, 
   return read === 'well' ? 'well over the ceiling' : 'a touch over, fine';
 }
 
+/** A hold week is kept while it stays within this multiple of its number (and its long run within `HOLD_LONG_RUN_SLACK_KM` of the held one). */
+export const HOLD_KEPT_FRACTION = 1.05;
+export const HOLD_LONG_RUN_SLACK_KM = 0.5;
+
+/**
+ * Wave 23e: a hold week is "on plan" only if it was held - at most 105% of its number and a long run at most 0.5 km over the held one. A hold the
+ * runner built through ("28 of ~25 km, long run 12 against 11") is neither on plan nor praised as held. `longestRunKm` is the week's longest run
+ * (null = unknown: only the km are judged). The long run the hold asked for is the plan's own, before any trim of the week's last days.
+ */
+export function holdOverrun(
+  plan: Pick<EnduranceWeekPlan, 'kind' | 'targetKm' | 'longRunKm'> & Partial<Pick<EnduranceWeekPlan, 'longRunTrim'>>,
+  km: number,
+  longestRunKm: number | null,
+): boolean {
+  if (plan.kind !== 'hold' || plan.targetKm == null) return false;
+  if (km > plan.targetKm * HOLD_KEPT_FRACTION + 1e-9) return true;
+  const heldLong = plan.longRunTrim?.fullKm ?? plan.longRunKm;
+  return longestRunKm != null && heldLong != null && longestRunKm > heldLong + HOLD_LONG_RUN_SLACK_KM + 1e-9;
+}
+
 /** The km above which `isSpikeWeek` is true for a step (informational: the band's upper edge). */
 function spikeEdgeKm(stepKm: number, unitsPerKm: number): number {
   const minExcessKm = (unitsPerKm < 1 ? SPIKE_MIN_EXCESS_MI : SPIKE_MIN_EXCESS_KM) / unitsPerKm;
@@ -645,6 +665,8 @@ export interface PlanLastWeek {
   grade: WeekGrade | null;
   /** Whole-percent change vs the week before it; null when that week was under 5 km (3 mi) or has no runs. */
   changePct: number | null;
+  /** Wave 23e: that week was a hold week and he did not keep it (`holdOverrun`): the card and the review say "above the hold", not "on plan". */
+  holdOver: boolean;
 }
 
 export interface PlanLongRun {
@@ -1529,6 +1551,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         capRead: prevPlan != null && prevPlan.upTo ? (comebackCapRead(prevPlan, prev.km, ctx.units) === 'within' ? null : (comebackCapRead(prevPlan, prev.km, ctx.units) as 'touch' | 'well')) : null,
         grade: prevGrade,
         // No % against a very small week, nor for the week that restarted after a break (that +150% is not growth).
+        holdOver: prevPlan != null && prevGrade?.gap !== 'spike' && holdOverrun(prevPlan, prev.km, longestRunIn(ctx, prevStart)),
         changePct: prevPrev.km >= compareMin && prevPlan?.restart == null && prevGrade?.level !== 'light' && prevPlan?.last?.grade?.gap !== 'spike'
           ? Math.round(((prev.km - prevPrev.km) / prevPrev.km) * 100)
           : null,

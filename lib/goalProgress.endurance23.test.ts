@@ -152,3 +152,21 @@ test('the remaining-km line and the plan line carry the same number, and so does
   const today = computeGoalProgress(input(weeks(sun, [[[1, 6], [3, 6], [5, 3]], ...CUTBACK_HISTORY]), { todayKey: sun }));
   assert.match(today.reasons[0].text, /^15 of ~20 km — keep today's long run to ~5 km$/);
 });
+
+test('the Sunday of a hold week he built through reads "above the hold", not "on plan"; kept, it is "on plan"; the Monday after says so too', () => {
+  // Cutback week of Monday 2026-10-19 skipped (25 km, not ~20): the week of 2026-10-26 holds ~25 km.
+  const history = [wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];
+  const sun = '2026-11-01';
+  const built = computeGoalProgress(input(weeks(sun, [[[1, 5.6], [3, 5.6], [5, 5.6], [6, 11.2]], ...history]), { todayKey: sun }));
+  assert.equal(built.distance!.plan?.kind, 'hold');
+  assert.equal(built.headline, 'Week done — 28 of ~25 km, above the hold');
+  const kept = computeGoalProgress(input(weeks(sun, [[[1, 5], [3, 5], [5, 5], [6, 10]], ...history]), { todayKey: sun }));
+  assert.equal(kept.headline, 'Week done — 25 of ~25 km, on plan');
+  // The long run alone can break the hold: 25 km, a 13 km Sunday against the held ~10.
+  const longBroke = computeGoalProgress(input(weeks(sun, [[[1, 4], [3, 4], [5, 4], [6, 13]], ...history]), { todayKey: sun }));
+  assert.match(longBroke.headline, /^Week done — 25 of ~25 km, above the hold$/);
+  // Monday after the built-through hold week: last week is named for what it was.
+  const monday = '2026-11-02';
+  const next = computeGoalProgress(input(weeks(monday, [[], [[1, 5.6], [3, 5.6], [5, 5.6], [6, 11.2]], ...history]), { todayKey: monday }));
+  assert.equal(next.distance!.plan?.kind, 'maintain');
+});

@@ -2382,7 +2382,8 @@ test('spike week: no "volume is up" win, no +74% [good] stat, a jump Slip, and N
 });
 
 test('the week after a spike, holding as advised is good: win says so, no "fell X%" slip, no "Rebuild toward 40 km"', () => {
-  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 18, 40, 28]));
+  // (The hold week's number is ~22 km here (a step up from the week the spike should have been); 28 km would be built through it - wave 23e, see the next test.)
+  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 18, 40, 22]));
   assert.equal(r.weekRating, 'good');
   assert.equal(r.weekGap, null);
   assert.equal(r.win, "Held back after last week's jump — exactly right.");
@@ -2390,9 +2391,9 @@ test('the week after a spike, holding as advised is good: win says so, no "fell 
   assert.equal(statByLabel(r, 'Volume')!.comparison, 'held after 40 km last week');
   assert.equal(statByLabel(r, 'Volume')!.tone, 'good');
   assert.doesNotMatch(`${r.headline} ${r.win} ${r.slip} ${r.nextWeek}`, /fell|Rebuild|−30%/);
-  // Next the step reaches the goal: hold it, long run stepping +2 km.
+  // Next the build resumes from the hold (a 10% step), the long run held at 16 km.
   // (the 40 km week's 16 km long run is still inside the 14 days the long run grows from; half of the week is 15 km, so it is held at 16)
-  assert.equal(r.nextWeek, 'Hold 30 km; long run 16 km, the rest easy.');
+  assert.equal(r.nextWeek, 'Build to ~24 km: long run 16 km, the rest mostly easy runs; then add ~10% a week toward 30 km.');
   // Not holding (another 40 km) is the same mistake again, not praise.
   const again = computeWeeklyReview(planReview([15, 17, 19, 21, 18, 40, 40]));
   assert.equal(again.weekRating, 'mixed');

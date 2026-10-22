@@ -3023,3 +3023,58 @@ invariant(RUNNERS, 'G3: on any day, the card (plan line, reasons, headline), the
   }
   return out;
 });
+
+// ── P1-2: a hold week he did not keep is not praised as held ─────────────────
+
+/** The Sunday card of every week whose plan was a hold, with the km the week ran and its longest run (counted from the rows; the race itself left out). */
+function holdWeeks(snaps: DaySnapshot[], name: ScenarioName): Array<{ monday: string; sunday: DaySnapshot; targetKm: number; heldLongKm: number | null; ranKm: number; longestKm: number; kept: boolean; cause: 'skipped_cutback' | 'ceiling' | 'spike' }> {
+  const runKm = scenarioRunKm(name);
+  const out: ReturnType<typeof holdWeeks> = [];
+  for (const s of snaps) {
+    const plan = s.card?.distance?.plan;
+    if (weekdayOf(s.date) !== 'Sun' || plan?.kind !== 'hold' || plan.targetKm == null) continue;
+    const monday = mondayOfDate(s.date);
+    let longest = 0;
+    for (let i = 0; i < 7; i++) longest = Math.max(longest, runKm.get(addDays(monday, i)) ?? 0);
+    const ran = kmThrough(runKm, monday, s.date);
+    const kept = ran <= plan.targetKm * 1.05 + 1e-9 && (plan.longRunKm == null || longest <= plan.longRunKm + 0.5 + 1e-9);
+    out.push({ monday, sunday: s, targetKm: plan.targetKm, heldLongKm: plan.longRunKm, ranKm: ran, longestKm: longest, kept, cause: plan.skippedCutback ? 'skipped_cutback' : plan.overCapRead === 'well' ? 'ceiling' : 'spike' });
+  }
+  return out;
+}
+
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_messy', 'runner_comeback_spike'], 'P1-2: a hold week is "on plan" and praised as held only if it kept to the hold (km <= target x 1.05 and the long run <= the held one + 0.5); otherwise the card and the review say "above the hold", the Volume stat is a neutral "+N% vs last week", there is no win and the slip is a factual "Built again instead of holding"', (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  let broken = 0;
+  let kept = 0;
+  for (const w of holdWeeks(snaps, name)) {
+    const mondayAfter = byDate.get(addDays(w.monday, 7));
+    const review = mondayAfter?.review?.weekStart === w.monday ? mondayAfter.review.review : null;
+    const sundayHeadline = plain(w.sunday.card?.headline ?? '');
+    if (!w.kept) {
+      broken++;
+      if (/on plan/.test(sundayHeadline)) out.push({ snap: w.sunday, detail: `Sunday card "${visible(w.sunday.card?.headline ?? '')}" after ${Math.round(w.ranKm * 10) / 10} km (long run ${Math.round(w.longestKm * 10) / 10}) against a hold of ~${w.targetKm} km (long run ${w.heldLongKm})` });
+      if (review && mondayAfter) {
+        const volume = review.stats.find(st => st.label === 'Volume');
+        if (/held after/.test(plain(volume?.comparison ?? ''))) out.push({ snap: mondayAfter, detail: `Volume "${visible(volume?.value ?? '')} — ${visible(volume?.comparison ?? '')}" [${volume?.tone}] for a hold week that was not kept` });
+        if (volume?.tone === 'good') out.push({ snap: mondayAfter, detail: `Volume is good-toned for a hold week that was not kept: "${visible(volume.comparison ?? '')}"` });
+        if (/held back|held at|exactly right|right call/i.test(plain(review.win ?? ''))) out.push({ snap: mondayAfter, detail: `win "${visible(review.win ?? '')}" for a hold week that was not kept` });
+        if (review.weekRating === 'good') out.push({ snap: mondayAfter, detail: `rated good: "${visible(review.headline)}"` });
+        if (!/above the hold/.test(plain(review.headline))) out.push({ snap: mondayAfter, detail: `review headline "${visible(review.headline)}" does not say "above the hold"` });
+        if (!/^(?:Built again instead of holding: [\d.]+ vs ~[\d.]+ (?:km|mi)|Held the km, but the long run was [\d.]+ (?:km|mi) against the held [\d.]+ (?:km|mi))$/.test(plain(review.slip ?? ''))) out.push({ snap: mondayAfter, detail: `slip "${visible(review.slip ?? '')}" is not the factual "Built again instead of holding: N vs ~M"` });
+      }
+    } else {
+      kept++;
+      if (review && mondayAfter) {
+        const win = plain(review.win ?? '');
+        if (w.cause === 'skipped_cutback' && !/^Held at ~[\d.]+ (?:km|mi) after the skipped cutback — right call\.$/.test(win)) out.push({ snap: mondayAfter, detail: `win "${visible(review.win ?? '')}" for a kept hold after a skipped cutback` });
+        if (w.cause !== 'skipped_cutback' && /skipped the cutback/.test(win)) out.push({ snap: mondayAfter, detail: `win "${visible(review.win ?? '')}" names a skipped cutback for a ${w.cause} hold` });
+        if (review.slip && /Built again/.test(plain(review.slip))) out.push({ snap: mondayAfter, detail: `slip "${visible(review.slip)}" for a kept hold week` });
+      }
+    }
+  }
+  assert.ok(broken + kept > 0, `${name}: no hold week was stepped, so this invariant checked nothing`);
+  if (name === 'runner_on_plan' || name === 'runner_on_plan_half') assert.ok(broken > 0, `${name}: no hold week was broken, so this invariant checked nothing`);
+  return out;
+});

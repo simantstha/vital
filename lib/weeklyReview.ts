@@ -60,6 +60,7 @@ import {
   findRaceRun,
   formatTargetLongRun,
   gradeEnduranceWeek,
+  holdOverrun,
   isWindDownKind,
   isSpikeWeek,
   isWindDownPhase,
@@ -165,6 +166,11 @@ export type WeekGap =
   | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number; ceiling?: boolean }
   /** A cutback week that ran more than 10% over its lowered number (`targetKm`); `normalKm` is the week it replaced. */
   | { kind: 'cutback'; doneKm: number; targetKm: number; normalKm: number }
+  /**
+   * Wave 23e: a hold week the runner built through (more than 105% of the held number, or a long run more than 0.5 km over the held one).
+   * `heldLongKm` / `longKm` are present when the long run was what broke the hold.
+   */
+  | { kind: 'hold'; doneKm: number; targetKm: number; heldLongKm?: number; longKm?: number }
   /**
    * Endurance, race lifecycle: a taper / race-week / recovery week whose running
    * km sat off that phase's target (lib/enduranceProgression.ts). `over` is true
@@ -946,6 +952,10 @@ interface ReviewPlans {
   week: { km: number; days: number };
   /** The week before's running, counted the same way. */
   prevWeek: { km: number; days: number };
+  /** The reviewed week's longest run (km, the race itself left out); null without a run. */
+  longestKm: number | null;
+  /** Wave 23e: the reviewed week was a hold week and the runner built through it (`holdOverrun`). */
+  holdBroken: boolean;
   /** The race run of the reviewed week (>= 90% of the race distance, within a day of race day). */
   raceRun: PlanRun | null;
 }
@@ -976,12 +986,20 @@ function reviewPlans(input: WeeklyReviewInput): ReviewPlans {
   const usable = input.goal === 'endurance' && goalKm != null && goalKm > 0 && runs.length > 0;
   const common = { runs, goalKm: goalKm as number, race, racePeakWeekKm: input.racePeakWeekKm ?? null, unitsPerKm: unitsPerKmOf(input), capNoteAnchorDay: input.signupDay ?? null };
   const nextMonday = addDays(input.weekStart, 7);
+  const weekPlan = usable ? enduranceWeekPlan({ ...common, weekStart: input.weekStart, today: weekEnd }) : null;
+  const weekCount = planWeekKm(runs, input.weekStart, input.raceDate ?? null);
+  const inWeek = runs.filter(r => r.day >= input.weekStart && r.day <= weekEnd && r.day !== input.raceDate);
+  const longestKm = inWeek.length > 0 ? Math.max(...inWeek.map(r => r.km)) : null;
   const out: ReviewPlans = {
     runs,
-    plan: usable ? enduranceWeekPlan({ ...common, weekStart: input.weekStart, today: weekEnd }) : null,
+    plan: weekPlan,
+    longestKm,
+    // (A hold week that was also a jump is a spike, with its own read.)
+    holdBroken: weekPlan != null && holdOverrun(weekPlan, weekCount.km, longestKm)
+      && gradeEnduranceWeek(weekPlan, weekCount.km, { runDays: weekCount.days, unitsPerKm: unitsPerKmOf(input) }).gap !== 'spike',
     // The coming week's long run grows from the long run as of the end of the reviewed week (the goal card's own reading).
     next: usable ? enduranceWeekPlan({ ...common, weekStart: nextMonday, today: nextMonday, longRun: input.longRun ?? null }) : null,
-    week: planWeekKm(runs, input.weekStart, input.raceDate ?? null),
+    week: weekCount,
     prevWeek: planWeekKm(runs, addDays(input.weekStart, -7), input.raceDate ?? null),
     raceRun: findRaceRun(runs.filter(r => r.day >= input.weekStart && r.day <= weekEnd), race),
   };
@@ -1027,7 +1045,7 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   else if (km <= 0 && prevKm <= 0) comparison = plan.daysSinceRun != null ? `${plan.daysSinceRun} days since your last run` : 'none logged';
   else if (km <= 0) comparison = `none logged · ${distanceText(input, prevKm)} last week`;
   // After a hold week or a restart the % against the jump / the sick week is not growth: say what it follows.
-  else if (plan.kind === 'hold' && prevKm > 0) comparison = `held after ${distanceText(input, prevKm)} last week`;
+  else if (plan.kind === 'hold' && prevKm > 0 && !rp.holdBroken && grade.gap !== 'spike') comparison = `held after ${distanceText(input, prevKm)} last week`;
   else if (plan.kind === 'restart' && prevKm > 0) comparison = `back after ${distanceText(input, prevKm)} last week`;
   else if (prevKm >= compareMin) {
     const pct = Math.round(((km - prevKm) / prevKm) * 100);
@@ -1037,7 +1055,8 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   } else if (prevKm > 0) comparison = `vs ${distanceText(input, prevKm)} last week`;
   else comparison = 'for the week';
   // A comeback week more than 10% over its "up to" ceiling is neither a win nor a spike: neutral.
-  const tone: ReviewTone = isWindDownKind(plan.kind) || rp.raceRun != null || grade.level === 'light' || overUpToCap(plan, km, u) ? 'neutral'
+  // (A hold week he built through is neutral: no praise for a hold that was not kept.)
+  const tone: ReviewTone = isWindDownKind(plan.kind) || rp.raceRun != null || grade.level === 'light' || overUpToCap(plan, km, u) || rp.holdBroken ? 'neutral'
     : grade.gap === 'spike' || grade.level === 'tough' ? 'watch'
     : grade.level === 'good' ? 'good'
     : 'neutral';
@@ -1408,6 +1427,15 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
   if (rp.raceRun != null && plan.kind === 'race_week') return { rating: 'good', gap: null };
   // A short week in the 21 days before a half is the taper starting early: fine, not a miss.
   if (startedTaperingEarly(input, rp)) return { rating: 'good', gap: null };
+  // Wave 23e: a hold week he built through is not "on plan": mixed, with a factual gap (not a spike - there is no jump to warn about).
+  if (rp.holdBroken && plan.targetKm != null) {
+    const heldLong = plan.longRunTrim?.fullKm ?? plan.longRunKm;
+    const longBroke = heldLong != null && rp.longestKm != null && rp.longestKm > heldLong + 0.5 + 1e-9 && km <= plan.targetKm * 1.05 + 1e-9;
+    return rated('mixed', {
+      kind: 'hold', doneKm: round1(km), targetKm: plan.targetKm,
+      ...(longBroke ? { heldLongKm: heldLong as number, longKm: round1(rp.longestKm as number) } : {}),
+    });
+  }
   const goal = plan.goalKm;
   const stepped = plan.targetKm != null && plan.targetKm < goal;
   let gap: WeekGap | null = null;
@@ -1517,7 +1545,7 @@ function loggedWord(stat: WeeklyReviewStat, word = 'logged '): string {
  */
 function distanceHeadline(
   input: WeeklyReviewInput, km: number, targetKm: number, stepKm: number,
-  opts: { spike: boolean; cutback?: boolean; upTo?: boolean; overCap?: boolean },
+  opts: { spike: boolean; cutback?: boolean; upTo?: boolean; overCap?: boolean; holdOver?: boolean },
 ): string {
   // A comeback week far past its "up to" ceiling: a spike, said in the ceiling's words (the card says the same).
   if (opts.spike && opts.upTo) {
@@ -1531,6 +1559,8 @@ function distanceHeadline(
   if (opts.cutback && km > stepKm * CUTBACK_SKIPPED_FRACTION + 1e-9) {
     return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — above the cutback · goal ${distanceText(input, targetKm)}`;
   }
+  // Wave 23e: a hold week he built through says so before the weekly goal is looked at ("28 of ~25 km — above the hold").
+  if (opts.holdOver) return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — above the hold · goal ${distanceText(input, targetKm)}`;
   if (stepKm >= targetKm || km >= targetKm) return `${distanceNumber(input, km)} of ${distanceText(input, targetKm)}`;
   // A comeback's target is a ceiling ("up to ~18 km"), worded so on the goal card too.
   const target = `${opts.upTo ? 'up to ' : ''}~${distanceText(input, stepKm)}`;
@@ -1670,7 +1700,13 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
     return `Back on the way up: ${km}, up from ${distanceText(input, rp.prevWeek.km)} last week.`;
   }
   switch (plan.kind) {
-    case 'hold': return "Held back after last week's jump — exactly right.";
+    // Worded by its cause (wave 23e): "after last week's jump" is only for a spike hold.
+    case 'hold': {
+      const km = distanceText(input, plan.targetKm as number);
+      if (plan.hold?.skippedCutback === true) return `Held at ~${km} after the skipped cutback — right call.`;
+      if (plan.hold?.ceiling === true) return "Stayed at the ceiling after last week's jump — exactly right.";
+      return "Held back after last week's jump — exactly right.";
+    }
     case 'baseline': return `Baseline set: ${km} in ${rp.week.days} ${plural(rp.week.days, 'run')} — next week's step builds from it.`;
     case 'restart': return `Back out there: ${km} after the break.`;
     case 'maintain': {
@@ -1816,12 +1852,12 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
           ? gradeEnduranceWeek(reviewed, km, { runDays, unitsPerKm: unitsPerKmOf(input) }).gap === 'spike'
           : isSpikeWeek(km, stepKm, target, unitsPerKmOf(input)));
         const value = hasDistanceTarget(input) && kmBased && km != null
-          ? distanceHeadline(input, km, target, stepKm, { spike, cutback: reviewed?.cutback != null, upTo: reviewed?.upTo === true, overCap })
+          ? distanceHeadline(input, km, target, stepKm, { spike, cutback: reviewed?.cutback != null, upTo: reviewed?.upTo === true, overCap, holdOver: reviewPlans(input).holdBroken })
           : volume.value;
         // A spike's (or an over-the-cap week's) headline already says it is a jump: no "+186% vs last week" on top (and it would overrun the headline limit).
         // (A planned cutback drop is short: "-13%, as planned (cutback)".)
         const comparison = volume.comparison?.replace(/ vs last week(, as planned \(cutback\))$/, '$1');
-        parts.push(!(spike || overCap) && comparison && comparison.includes('%') ? `${value}, ${comparison}` : value);
+        parts.push(!(spike || overCap || reviewPlans(input).holdBroken) && comparison && comparison.includes('%') ? `${value}, ${comparison}` : value);
       }
     }
   } else {
@@ -1882,6 +1918,11 @@ function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: W
         : `${distanceNumber(input, gap.doneKm)} of ${distanceText(input, gap.targetKm)} target — ${distanceText(input, gap.targetKm - gap.doneKm)} short`;
     case 'cutback':
       return `Cutback skipped: ${distanceText(input, gap.doneKm)} vs ~${distanceText(input, gap.targetKm)} planned`;
+    // Wave 23e: factual, no guilt - the hold was a plan, and he built again.
+    case 'hold':
+      return gap.heldLongKm != null && gap.longKm != null
+        ? `Held the km, but the long run was ${distanceText(input, gap.longKm)} against the held ${distanceText(input, gap.heldLongKm)}`
+        : `Built again instead of holding: ${distanceNumber(input, gap.doneKm)} vs ~${distanceText(input, gap.targetKm)}`;
     case 'spike':
       // A comeback week far past its "up to" ceiling.
       if (gap.ceiling === true) {
@@ -2629,6 +2670,7 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
     // The gap names the week; "Next week" is the coming week's plan (normally answered before this safety net).
     case 'distance':
     case 'cutback':
+    case 'hold':
     case 'spike': return plannedNextWeek(input)?.text ?? fallbackNextWeek(input, week);
     // Normally answered by the coming week's phase (`windDownNextWeek`); this is the safety net.
     case 'phase': return windDownNextWeek(input, week) ?? fallbackNextWeek(input, week);
