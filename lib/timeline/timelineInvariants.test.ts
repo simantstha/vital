@@ -3687,6 +3687,31 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
   return out;
 });
 
+// ── P3-g: a cutback week's spike is over the cutback, not "the safe step" ───────
+
+invariant(RUNNERS, 'P3-g: when the week over its number is a cutback week (or the hold week right after one), the spike reason calls the number "this week\'s cutback" / "its cutback", never "the safe step"', (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  let seen = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.distance?.plan;
+    if (!plan) continue;
+    const lastSunday = byDate.get(addDays(mondayOfDate(snap.date), -1));
+    const afterCutback = plan.kind === 'hold' && lastSunday?.card?.distance?.plan?.cutback === true;
+    if (plan.cutback !== true && !afterCutback) continue;
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'volume') continue;
+      const text = plain(r.text);
+      if (/over this week['’]s (?:safe )?step|was over the safe step of/.test(text)) {
+        seen++;
+        out.push({ snap, detail: `${plan.cutback === true ? 'cutback week' : 'hold week after a cutback'}: card reason "${visible(r.text)}"` });
+      } else if (/over this week['’]s cutback|was over its ~[\d.]+\s?(?:km|mi) cutback/.test(text)) seen++;
+    }
+  }
+  if (name === 'runner_messy') assert.ok(seen > 0, `${name}: no cutback-week spike was stepped, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P3-f: "N runs a week before your break" names weeks from before the break ───
 
 invariant(RUNNERS, 'P3-f: when the sessions window holds a run-free week, "N runs a week before your break" quotes only weeks OLDER than that gap, and a window with only post-gap weeks says "N runs a week since you came back"', (snaps, name) => {

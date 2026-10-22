@@ -3399,7 +3399,8 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       ));
     }
     return finish('holding', `Over the safe step — ${done} of ~${fmt(target)}. Hold ~${fmt(nextHold)} next week`, body(
-      { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's safe step; big jumps raise injury risk — ${advice}`, tone: 'watch' },
+      // (Wave 23e P3-g: in a cutback week the number is the cutback, not "the safe step".)
+      { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's ${plan.cutback != null ? 'cutback' : 'safe step'}; big jumps raise injury risk — ${advice}`, tone: 'watch' },
     ));
   }
 
@@ -3485,7 +3486,14 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
           ? body(stepWarn, [ceilingInfo, planLine])
           : body(ceilingInfo, [planLine]));
       }
-      const jumpInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} was over the safe step of ~${fmt(hold.spikeStepKm)}`, tone: 'watch' };
+      const jumpInfo: GoalProgressReason = {
+        kind: 'volume',
+        // (Wave 23e P3-g: a spike in a cutback week is over the cutback, not "the safe step".)
+        text: plan.last?.cutback === true
+          ? `Last week's ${fmt(hold.spikeKm)} was over its ~${fmt(hold.spikeStepKm)} cutback`
+          : `Last week's ${fmt(hold.spikeKm)} was over the safe step of ~${fmt(hold.spikeStepKm)}`,
+        tone: 'watch',
+      };
       return finish('holding', `Over the safe step last week — hold ~${fmt(target)} this week`, stepWarn != null
         ? body(stepWarn, [jumpInfo, planLine])
         : body(jumpInfo, [planLine]));
