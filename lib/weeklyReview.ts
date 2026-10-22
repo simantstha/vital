@@ -2526,6 +2526,22 @@ function readMondaySession(input: WeeklyReviewInput, week: Week): { lifts: strin
   return { lifts };
 }
 
+/** The one-time explainer for the term the lifter meets first in the review (wave 23s). */
+export const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
+
+/**
+ * The first weekly review that shows an est. 1RM stat explains the term, once: the Next-week row carries it as a closing sentence (the iOS
+ * row shows the text verbatim, with no line limit; a stat tile's comparison is capped at two lines and the card at three reasons, and the card
+ * is read daily). "First" is the lifter's second week of lift data (a week-over-week comparison needs two): a stateless test that fires for
+ * exactly one review. Muscle goal only.
+ */
+function needsEst1rmExplainer(input: WeeklyReviewInput, week: Week, cands: Candidate[]): boolean {
+  if (input.goal !== 'muscle' || !cands.some(x => x.stat.label.endsWith('est. 1RM'))) return false;
+  const withData = new Set<string>();
+  for (const weeks of Object.values(input.progression)) for (const w of weeks) if (w.bestEstimatedOneRepMaxKg != null && w.weekStart <= week.days[0]) withData.add(w.weekStart);
+  return withData.size === 2;
+}
+
 /** The lift data of the reviewed week and before: a set logged after it (that Monday) is not its lifting and must not move the comparisons (wave 23s). */
 function progressionUpTo(progression: ProgressionSummary, weekStart: string): ProgressionSummary {
   return Object.fromEntries(Object.entries(progression).map(([key, weeks]) => [key, weeks.filter(w => w.weekStart <= weekStart)]));
@@ -2819,7 +2835,7 @@ export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
     stats: cands.map(x => x.stat),
     win: reachedWin(input, week) ?? enduranceWin(input, assessment) ?? windDownWin(input, week, assessment) ?? (assessment.rating === 'light' && input.goal === 'muscle' ? deloadWin(input, week) : null) ?? (slackMuscleWeek(input, week) ? slackWeekWin(input, week, cands) : (cands.find(x => x.win)?.win ?? null)),
     slip,
-    nextWeek: buildNextWeek(input, cands, week, prevWeek, assessment, slip),
+    nextWeek: `${buildNextWeek(input, cands, week, prevWeek, assessment, slip)}${needsEst1rmExplainer(input, week, cands) ? ` ${EST_1RM_EXPLAINER}` : ''}`,
     dataSufficiency: { daysWithData, statCount: cands.length, sufficient: true },
   };
 }

@@ -2788,3 +2788,28 @@ invariant(LIFTERS, 'a review read on a Monday she has already lifted does not sa
   if (name === 'lifter') assert.ok(weeksOff > 0, `${name}: no week off was followed by a session on the review's Monday, so this invariant checked nothing`);
   return out;
 });
+
+// ── The first time "est. 1RM" reaches a lifter it is explained, once: in the Next-week row of the first weekly review that shows an
+// est. 1RM stat (iOS shows nextWeek verbatim, unlimited lines; the stat tile's comparison is capped at two lines and the card shows
+// three reasons). Never on the card (that would repeat daily), never in a later review.
+const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
+
+invariant(LIFTERS, 'est. 1RM is explained once: in the first weekly review that shows an est. 1RM stat, never on the card and never again', (snaps, name) => {
+  const out: Violation[] = [];
+  const firstWithStat = snaps.find(s => s.review?.review.stats.some(st => st.label.endsWith('est. 1RM')));
+  const holders: DaySnapshot[] = [];
+  for (const snap of snaps) {
+    for (const t of allTexts(snap)) {
+      if (!/most you could lift once/.test(plain(t.text))) continue;
+      if (!t.where.startsWith('review.')) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" explains est. 1RM outside the review` });
+      else if (!holders.includes(snap)) holders.push(snap);
+    }
+  }
+  assert.ok(firstWithStat, `${name}: no review showed an est. 1RM stat`);
+  if (holders.length !== 1 || holders[0] !== firstWithStat) {
+    out.push({ snap: firstWithStat, detail: `the explainer should be in the first review with an est. 1RM stat (${describeDay(firstWithStat)}) and nowhere else, found on: ${holders.map(describeDay).join(', ') || 'no day'}` });
+  } else if (!plain(firstWithStat.review?.review.nextWeek ?? '').endsWith(EST_1RM_EXPLAINER)) {
+    out.push({ snap: firstWithStat, detail: `review.nextWeek should end "${EST_1RM_EXPLAINER}": "${visible(firstWithStat.review?.review.nextWeek ?? '')}"` });
+  }
+  return out;
+});

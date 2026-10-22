@@ -4,6 +4,7 @@ import {
   buildExerciseDisplay,
   signupLocalDay,
   computeWeeklyReview as computeWeeklyReviewRaw,
+  EST_1RM_EXPLAINER,
   lastCompletedWeekStart,
   REVIEW_HEADLINE_MAX_CHARS,
   type WeeklyReview,
@@ -878,8 +879,27 @@ test('mixed lifter (3 of 4 sessions): the Slip names the sessions and Next week 
   assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +10 kg over 4 wks');
   assert.equal(r.slip, '3 of 4 sessions — one short');
   // One session short: back to 4, the missed one is not put back on the calendar (a muscle week is never made up).
-  assert.equal(r.nextWeek, "Back to 4 this week — don't make up the missed ones, starting today.");
+  // (This fixture is the lifter's second week of lift data: the first review that shows an est. 1RM stat explains it, once - wave 23s.)
+  assert.equal(r.nextWeek, `Back to 4 this week — don't make up the missed ones, starting today. ${EST_1RM_EXPLAINER}`);
   assert.doesNotMatch(r.nextWeek, /Repeat this week|put the missed one|Book 4/);
+});
+
+test('est. 1RM is explained once: the review of the lifter\'s second week of lift data carries the sentence, no other (wave 23s)', () => {
+  const week = (weekStart: string, e: number) => liftWk(weekStart, e, 6);
+  const two = computeWeeklyReview(priyaWeek());
+  assert.ok(two.nextWeek.endsWith(EST_1RM_EXPLAINER), two.nextWeek);
+  assert.equal(EST_1RM_EXPLAINER, 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.');
+  // One week of data: no comparison yet (and no est. 1RM stat to explain); three weeks: she has been told already.
+  const one = computeWeeklyReview(priyaWeek({ progression: { Squat: [week(WEEK_START, 163)] } }));
+  assert.ok(!one.nextWeek.includes('most you could lift once'), one.nextWeek);
+  const three = computeWeeklyReview(priyaWeek({ progression: { Squat: [week('2026-08-24', 150), week('2026-08-31', 153), week(WEEK_START, 163)] } }));
+  assert.ok(three.stats.some(st => st.label.endsWith('est. 1RM')));
+  assert.ok(!three.nextWeek.includes('most you could lift once'), three.nextWeek);
+  // Two weeks of data, but the review shows no est. 1RM stat (a week without a lift session): nothing to explain.
+  const off = computeWeeklyReview(priyaWeek({ trainingDays: [], strengthDays: [], progression: { Squat: [week('2026-08-24', 150), week('2026-08-31', 153)] } }));
+  assert.ok(!off.nextWeek.includes('most you could lift once'), off.nextWeek);
+  // Weight loss and the other goals never carry it.
+  assert.ok(!computeWeeklyReview(weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], () => 82) })).nextWeek.includes('most you could lift once'));
 });
 
 test('the day suggested for the missed active day is the weekday with the fewest sessions over the two weeks (general goal)', () => {
