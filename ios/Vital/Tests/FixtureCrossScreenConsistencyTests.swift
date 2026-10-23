@@ -643,7 +643,7 @@ final class FixtureCrossScreenConsistencyTests: XCTestCase {
         let longRun = progress.reasons[2]
         XCTAssertEqual(longRun.tone, .neutral)
         let buildTo = try XCTUnwrap(
-            longRun.text.range(of: #"^Long run 12 km · build to 15 km by (early|mid-|late )?[A-Z][a-z]{2}\. "#, options: .regularExpression)
+            longRun.text.range(of: #"^Long run 12 km · build to 15 km by (early |mid-|late )?[A-Z][a-z]{2}\. "#, options: .regularExpression)
         )
         XCTAssertEqual(
             String(longRun.text[buildTo.upperBound...]),
