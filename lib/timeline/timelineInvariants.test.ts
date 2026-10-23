@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TAPER_GOOD_MIN_FRACTION, racePhaseInfo } from '../enduranceProgression';
+import { TAPER_GOOD_MIN_FRACTION, longRunStepKm, racePhaseInfo } from '../enduranceProgression';
 import { weekFitsSessionTarget, type GoalLiftReturn } from '../goalProgress';
 import { liftLapseMinDays, liftReturnDisplay, liftShortName } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
@@ -3684,6 +3684,43 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
     }
   }
   if (['runner_messy', 'runner_comeback_spike', 'runner_comeback_obedient', 'runner_on_plan_obedient'].includes(name)) assert.ok(maintainWeeks > 0, `${name}: no maintain week was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P3-i: a peak date is promised only if the long run can get there ───────────
+
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+invariant(RUNNERS, 'P3-i: "build to 15 km by early Jun" is said only when the plan\'s long-run step (+2 km a Sunday, the next Sunday if this week\'s long run is run) reaches the peak target by then', (snaps, name) => {
+  const out: Violation[] = [];
+  let promises = 0;
+  for (const snap of snaps) {
+    const line = snap.card?.reasons.find(r => r.kind === 'long_run');
+    const m = line ? /build to (\d+(?:\.\d+)?)\s?(km|mi) by (early |mid-|late )?([A-Z][a-z]{2})\b/.exec(plain(line.text)) : null;
+    const lr = snap.card?.longRun;
+    if (!m || !lr) continue;
+    promises++;
+    const month = MONTHS_SHORT.indexOf(m[4]);
+    const [yy] = snap.date.split('-').map(Number);
+    const monthIdx = month + 1;
+    const year = monthIdx < Number(snap.date.slice(5, 7)) ? yy + 1 : yy;
+    const lastDay = new Date(Date.UTC(year, monthIdx, 0)).getUTCDate();
+    const day = m[3] === 'early ' ? 7 : m[3] === 'mid-' ? 22 : lastDay;
+    const promisedBy = `${year}-${String(monthIdx).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    // The plan's growth: +2 km a Sunday (capped at the peak target). This week's Sunday only counts while this week's long run is still to come.
+    const longRunDone = snap.card?.distance?.plan?.longRunAhead !== true && weekdayOf(snap.date) === 'Sun' && (snap.card?.distance?.thisWeekKm ?? 0) > 0;
+    let sunday = addDays(mondayOfDate(snap.date), longRunDone ? 13 : 6);
+    let km = lr.lastKm;
+    const target = lr.targetPeakKm as number;
+    let reached: string | null = null;
+    for (let i = 0; i < 12 && reached == null; i++) {
+      km = longRunStepKm(km, target);
+      if (km >= target - 1e-9) reached = sunday;
+      sunday = addDays(sunday, 7);
+    }
+    if (reached == null || reached > promisedBy) out.push({ snap, detail: `"${visible(line?.text ?? '')}": the long run (${lr.lastKm} km, +2 km a Sunday) first reaches ${target} km on ${reached ?? 'never'}, after ${promisedBy}` });
+  }
+  if (name === 'runner_messy' || name === 'runner_no_race' || name === 'runner_on_plan') assert.ok(promises > 0 || name === 'runner_no_race', `${name}: no peak date was promised, so this invariant checked nothing`);
   return out;
 });
 

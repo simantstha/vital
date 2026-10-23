@@ -163,6 +163,7 @@ import {
   longRunCapNote,
   longRunPeakTarget,
   longRunStats,
+  longRunStepKm,
   longRunTargetKm as longRunTargetKmFor,
   longRunWord,
   mondayOfDay,
@@ -3022,7 +3023,15 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
   const word = longRunWord(lr.lastKm, unitsPerKm(input));
   const lead = `${word.charAt(0).toUpperCase()}${word.slice(1)} ${fmtDistance(input, lr.lastKm)}`;
   const peakBy = addDays(race.date, -raceRules(race.distanceKm).peakLongRunLeadDays);
-  const goal = peakBy >= input.todayKey
+  // Wave 23e P3-i: a peak date is promised only if the plan's long-run step (+2 km on each Sunday, this week's only while its long run is still to come)
+  // gets there by then; otherwise it is "peak target 15 km", with no date to miss ("build to 15 km by early Jun", then a 14 km peak "done" in the taper).
+  const sundays = (): string => addDays(weekStart(input.todayKey), enduranceCtx(input).plan?.longRunAhead === false ? 13 : 6);
+  let reachedOn: string | null = null;
+  for (let step = 0, km = lr.lastKm, sunday = sundays(); step < 12 && reachedOn == null; step++, sunday = addDays(sunday, 7)) {
+    km = longRunStepKm(km, lr.targetPeakKm);
+    if (km >= lr.targetPeakKm - 1e-9) reachedOn = sunday;
+  }
+  const goal = peakBy >= input.todayKey && reachedOn != null && reachedOn <= peakBy
     ? `build to ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))} by ${looseMonthPosition(peakBy)}`
     : `peak target ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))}`;
   return { kind: 'long_run', text: `${lead} · ${goal}${note}`, tone: 'neutral' };

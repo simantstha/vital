@@ -196,6 +196,18 @@ test('the sessions line quotes "before your break" only from weeks older than th
   assert.equal(sessions([[], [], [], wk(30), wk(30)]), '4 runs a week before your break');
 });
 
+test('a peak date is promised only when the long run can get there: 10 -> 12 -> 14 -> 15 km needs three Sundays before the peak-by day (23e P3-i)', () => {
+  // A half: the peak is due 14 days before the race. Tuesday 2026-10-06, last long run 10 km (40% of 25 km): Sundays 10-11 (12), 10-18 (14), 10-25 (15).
+  const history = [[[1, 4]] as Array<[number, number]>, wk(25), wk(23), wk(21), wk(19)];
+  const longRunLine = (raceDate: string): string => computeGoalProgress(input(weeks(TODAY, history), { race: { date: raceDate, distanceKm: 21.1 }, racePeakWeekKm: 30 })).reasons.find(r => r.kind === 'long_run')!.text;
+  // Race 11-08: the peak is due 10-25 - the third Sunday, in time.
+  assert.match(longRunLine('2026-11-08'), /^Long run 10 km · build to 15 km by late Oct/);
+  // Race 11-01: the peak is due 10-18, two Sundays away (14 km) - 15 km would come a week after the date, so no date is promised.
+  const late = longRunLine('2026-11-01');
+  assert.match(late, /^Long run 10 km · peak target 15 km/);
+  assert.doesNotMatch(late, /build to|by (early|mid|late)/);
+});
+
 test('the taper week\'s own long run is no yardstick: a 14 km peak run on the taper Sunday (the taper plans ~9) reads "Peak long run 14 km - done", not "longer than the 9 km plan" (23e P3-e)', () => {
   const race = { date: '2026-10-25', distanceKm: 21.1 }; // Monday 10-12 is the taper week (13 days out), Sunday 10-18 its last day; the peak target is 15 km
   const sun = '2026-10-18';
