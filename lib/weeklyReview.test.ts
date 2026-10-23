@@ -2503,7 +2503,8 @@ test('half marathon table: ONE taper week (x0.75), race week x0.5, recovery x0.4
   const toTaper = computeWeeklyReview(planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-11', raceDistanceKm: 21.1, racePeakWeekKm: 40 }));
   assert.equal(toTaper.nextWeek.replace(/ /g, ' ').replace(/long run [\d.]+ km/, 'long run N km'), 'Race week: short easy runs, ~20 km before the race, then rest 1–2 days before it.');
   const toRaceWeek = computeWeeklyReview(planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-18', raceDistanceKm: 21.1, racePeakWeekKm: 40 }));
-  assert.match(toRaceWeek.nextWeek, /^Taper: ~30 km next week — cut volume; long run [\d.]+ km easy, plus 3×1 km at race pace midweek\.$/);
+  // (Wave 23e P3-m: 30 km weeks into a taper of 30 km - 75% of the 40 km peak - hold the volume, they do not cut it.)
+  assert.match(toRaceWeek.nextWeek, /^Taper: hold ~30 km next week \(75% of your ~40 km peak\); long run [\d.]+ km easy, plus 3×1 km at race pace midweek\.$/);
   // 10K: no taper — the week before race week is still a build / maintain week.
   const ten = computeWeeklyReview(planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-18', raceDistanceKm: 10, racePeakWeekKm: 40 }));
   assert.match(ten.nextWeek, /^Hold 30 km;/);

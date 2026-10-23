@@ -319,6 +319,9 @@ export interface GoalWeekPlan {
   goalReachedBefore?: boolean;
   /** Additive (wave 23e): last week ran the weekly goal (>= goal - 0.5 km): a maintain week is "hold" only then, else "build back to" the goal. */
   lastAtGoal?: boolean;
+  /** Additive (wave 23e): a taper week that holds last week's volume instead of cutting it ("hold ~22 km, 75% of your ~29 km peak"); `taperPeakKm` is that peak. */
+  taperHold?: boolean;
+  taperPeakKm?: number;
   /** Additive: a cutback week (every 4th plain build / maintain week): `targetKm` is ~80% of the week it replaces, the long run is held. */
   cutback?: boolean;
   /** Additive: a light week - 4+ days without a run, or well behind the week's pace from Thursday with the rest of the target out of reach: don't make it up (`longRunKm` is the cap). */
@@ -2730,6 +2733,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             comebackKm: plan.comeback != null ? plan.comeback.medianKm : plan.restart != null ? plan.restart.medianKm : null,
             goalReachedBefore: plan.goalReachedBefore,
             lastAtGoal: plan.lastAtGoal,
+            ...(plan.taperHold && plan.wind != null ? { taperHold: true, taperPeakKm: round1(plan.wind.peakKm) } : {}),
             ...(plan.cutback != null ? { cutback: true } : {}),
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),

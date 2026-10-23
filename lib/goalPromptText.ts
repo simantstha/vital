@@ -71,7 +71,8 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
       if (gp.distance?.plan?.longRunTrim?.weekDone === true) {
         return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; the week's km are done: skip the long run (rest or a 20-min jog), plus ${rep} at race pace midweek if not yet run — do not push volume`;
       }
-      return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; cut volume, ${longRun != null ? `long run ${longRunText(longRun, units)} easy, ` : 'keep the long run easy, '}plus ${rep} at race pace midweek — do not push volume or build the long run`;
+      // Wave 23e P3-m: a taper week at last week's own volume holds it ("hold the volume at ~22.0 km (75% of the ~29.3 km peak)"), it does not cut it.
+      return `- Race phase: taper${target ? ` — this week's target ~${target}` : ''}; ${gp.distance?.plan?.taperHold === true && target != null && gp.distance.plan.taperPeakKm != null ? `hold the volume at ~${target} (${Math.round((gp.distance.stepTargetKm / gp.distance.plan.taperPeakKm) * 100)}% of the ~${distKm(gp.distance.plan.taperPeakKm, units)} peak)` : 'cut volume'}, ${longRun != null ? `long run ${longRunText(longRun, units)} easy, ` : 'keep the long run easy, '}plus ${rep} at race pace midweek — do not push volume or build the long run`;
     case 'race_week':
       if (race.daysToGo === 0) {
         return race.completed

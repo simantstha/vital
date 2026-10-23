@@ -69,3 +69,18 @@ test('a cutback is never planned for the last build week before the taper, owed 
   assert.equal(p.preTaper != null || p.kind === 'taper', true);
   assert.equal(p.cutback, null);
 });
+
+test('a taper week at last week\'s own volume HOLDS it ("hold ~22 km (76% of your ~29 km peak)"); one that cuts says "cut the volume" (23e P3-m)', () => {
+  // A half on the Sunday of week 10: week 9 is the taper. Week 8 (the last build week) ran 22 km - the taper's own number - or 28 km.
+  const race = { date: addDayKey(monday(10), 6), distanceKm: 21.1 };
+  const taperOf = (lastBuild: number) => enduranceWeekPlan({ runs: runsFor([15, 17, 19, 21, 23, 25, 27, lastBuild]), weekStart: monday(9), goalKm: 30, race, today: monday(9), racePeakWeekKm: 29 });
+  const hold = taperOf(22);
+  assert.equal(hold.kind, 'taper');
+  assert.equal(hold.targetKm, 22);
+  assert.equal(hold.taperHold, true);
+  assert.match(hold.purpose.replace(/ /g, '~'), /^Taper: hold ~22~km this week \(76% of your ~29~km peak\); /);
+  assert.doesNotMatch(hold.purpose, /cut the volume/);
+  const cut = taperOf(28);
+  assert.equal(cut.taperHold, false);
+  assert.match(cut.purpose.replace(/ /g, '~'), /^Taper: ~22~km this week, cut the volume; /);
+});

@@ -2363,7 +2363,10 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
   if (next.cutback != null && (next.kind === 'build' || next.kind === 'maintain')) return { kind: next.kind, text: `${next.purpose}.` };
   switch (next.kind) {
     case 'taper':
-      text = `Taper: ~${t} next week — cut volume; ${lr ? `${lr} easy, plus ` : ''}${rep} at race pace midweek${lr ? '' : ', the rest easy'}.`;
+      // Wave 23e P3-m: a taper week at last week's own volume holds it - "hold ~22 km next week (75% of your ~29 km peak)" - it does not cut it.
+      text = next.taperHold && next.targetKm != null && next.wind != null
+        ? `Taper: hold ~${t} next week (${Math.round((next.targetKm / next.wind.peakKm) * 100)}% of your ~${distanceText(input, Math.round(next.wind.peakKm * u) / u)} peak); ${lr ? `${lr} easy, plus ` : ''}${rep} at race pace midweek${lr ? '' : ', the rest easy'}.`
+        : `Taper: ~${t} next week — cut volume; ${lr ? `${lr} easy, plus ` : ''}${rep} at race pace midweek${lr ? '' : ', the rest easy'}.`;
       break;
     case 'race_week':
       text = `Race week: short easy runs, ~${t} before the race, then rest 1–2 days before it.`;

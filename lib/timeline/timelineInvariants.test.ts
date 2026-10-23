@@ -3687,6 +3687,41 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
   return out;
 });
 
+// ── P3-m: "cut the volume" only when the taper week is a cut ───────────────────
+
+invariant(RUNNERS, 'P3-m: a taper week says "cut the volume" only when its number differs from last week\'s km; when it equals last week (within half a km) it says "hold ~22 km (75% of your ~29 km peak)" - card, coach and review', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const weekKm = (monday: string): number => kmThrough(runKm, monday, addDays(monday, 6));
+  const out: Violation[] = [];
+  let holds = 0;
+  for (const snap of snaps) {
+    const lastCardWeek = weekKm(addDays(mondayOfDate(snap.date), -7));
+    for (const t of [...cardTexts(snap), ...coachTexts(snap), ...reviewTexts(snap)]) {
+      const text = plain(t.text);
+      // The review's "Next week" is about the week AFTER the reviewed one: its "last week" is the reviewed week.
+      const lastKm = t.where.startsWith('review') ? weekKm(snap.review?.weekStart ?? snap.date) : lastCardWeek;
+      const cut = /Taper: ~(\d+(?:\.\d+)?)\s?(?:km|mi) (?:this week, cut the volume|next week — cut volume)|taper — this week's target ~(\d+(?:\.\d+)?) (?:km|mi); cut volume/.exec(text);
+      if (cut) {
+        // (The plan decides in km, whatever the unit: within half a km of last week's volume the taper is a hold, not a cut.)
+        const targetKm = Number(cut[1] ?? cut[2]) * (/\bmi\b/.test(text) ? KM_PER_MILE : 1);
+        if (Math.abs(lastKm - targetKm) <= 0.5) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but last week ran ${Math.round(lastKm * 10) / 10} km, the taper's number is ${Math.round(targetKm * 10) / 10} km` });
+      }
+      const hold = /hold ~(\d+(?:\.\d+)?)\s?(km|mi) (?:this week|next week) \((\d+)% of your ~(\d+(?:\.\d+)?)\s?(?:km|mi) peak\)|hold the volume at ~(\d+(?:\.\d+)?) (km|mi) \((\d+)% of the ~(\d+(?:\.\d+)?) (?:km|mi) peak\)/.exec(text);
+      if (hold) {
+        holds++;
+        const target = Number(hold[1] ?? hold[5]);
+        const pct = Number(hold[3] ?? hold[7]);
+        const peak = Number(hold[4] ?? hold[8]);
+        const targetKm = target * ((hold[2] ?? hold[6]) === 'mi' ? KM_PER_MILE : 1);
+        if (Math.abs(lastKm - targetKm) > 0.5 + 0.06) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" but last week ran ${Math.round(lastKm * 10) / 10} km, not the taper's ${Math.round(targetKm * 10) / 10} km` });
+        if (Math.abs(Math.round((target / peak) * 100) - pct) > 1) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" - ${target} is ${Math.round((target / peak) * 100)}% of ${peak}, not ${pct}%` });
+      }
+    }
+  }
+  if (name === 'runner_on_plan' && out.length === 0) assert.ok(holds > 0, `${name}: no taper week held last week's volume, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P3-j: the day the build ends, the coach's "next long run" is the taper's ──
 
 invariant(RUNNERS, 'P3-j: on the last build Sunday, once the long run is run, the coach\'s "next long run" is the taper\'s long run (the number Monday\'s plan shows), not the build week\'s', (snaps, name) => {

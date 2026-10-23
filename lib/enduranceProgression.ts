@@ -799,6 +799,11 @@ export interface EnduranceWeekPlan {
    * week was at it; a week after a shorter one (a cutback, a 28 km week) is "Build to 30 km" - never "hold" a number he has not just run.
    */
   lastAtGoal: boolean;
+  /**
+   * Wave 23e P3-m: a TAPER week whose number is last week's km (within `TAPER_HOLD_SLACK_KM`, either side): it holds the volume, it does not "cut" it. The card,
+   * the coach and the review say "hold ~22 km (75% of your ~29 km peak)" instead of "cut the volume" right after a 22 km week.
+   */
+  taperHold: boolean;
   /** Days from the day the plan is read on (today; the week's last day for a past week) to race day; negative after it; null without a race. */
   raceDaysToGo: number | null;
   /** The actual step over last week in whole percent (this week's target against last week's km); null when last week was too small to compare or there is no target. */
@@ -1405,6 +1410,10 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
     case 'taper': {
       const reps = racePaceReps(u);
       const race = lrPart ? `${lrPart} easy, plus ${reps} at race pace midweek` : `${reps} at race pace midweek, the rest easy`;
+      // Wave 23e P3-m: right after a week at the taper's own number it is no cut - say what it is, as a share of the peak.
+      if (plan.taperHold && t != null && plan.wind != null) {
+        return `Taper: hold ~${formatKm(t, u)} this week (${Math.round((t / plan.wind.peakKm) * 100)}% of your ~${formatKm(Math.round(plan.wind.peakKm * u) / u, u)} peak); ${race}`;
+      }
       return `Taper: ~${formatKm(t ?? plan.goalKm, u)} this week, cut the volume; ${race}`;
     }
     case 'race_week': {
@@ -1434,6 +1443,8 @@ function stepFromShownTarget(targetKm: number, goalKm: number, units: number): n
 
 /** Wave 23e P3-c: last week "ran the goal" when it came within this many km of it (30 km goal: 29.5 km and up). */
 export const LAST_AT_GOAL_SLACK_KM = 0.5;
+/** Wave 23e P3-m: a taper week within this many km of last week's volume (either side) is a hold, not a cut. */
+export const TAPER_HOLD_SLACK_KM = 0.5;
 
 /** True when a training week before `w` (up to the lookback) ran at least the weekly goal. */
 function goalReachedBefore(ctx: PlanCtx, w: string): boolean {
@@ -1994,6 +2005,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     longRunJump,
     goalReachedBefore: goalReachedBefore(ctx, w),
     lastAtGoal: hasPrior && prev.km >= ctx.goalKm - LAST_AT_GOAL_SLACK_KM,
+    taperHold: wind?.phase === 'taper' && hasPrior && targetKm != null && Math.abs(targetKm - prev.km) <= TAPER_HOLD_SLACK_KM + 1e-9,
     raceDaysToGo,
     stepPct,
     stepBaseKm,
