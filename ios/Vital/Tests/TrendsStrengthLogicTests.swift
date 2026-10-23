@@ -361,4 +361,455 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertFalse(TrendsGoalOrdering.leadsWithStrength(for: "endurance"))
         XCTAssertFalse(TrendsGoalOrdering.leadsWithStrength(for: "general"))
     }
+
+    // MARK: - Headline lift (the server's rule, lib/liftChange.ts rankLifts / pickHeadlineLift)
+
+    /// 9 consecutive Mondays ending at the current week: indices 0...7 are the 8
+    /// COMPLETED weeks the server ranks over (2026-08-10 ... 2026-09-28), index 8
+    /// is the current week (2026-10-05, the server's anchor).
+    private var rankKeys: [String] { TrendsStrengthLogic.weekKeys(endingAt: today, count: 9) }
+
+    private func counted(_ week: String, e1rm: Double? = 100, sessions: Int?, sets: Int = 3) -> WorkoutWeeklyStatDTO {
+        WorkoutWeeklyStatDTO(
+            weekStart: week, bestEstimatedOneRepMaxKg: e1rm, volumeKg: 0,
+            totalSets: sets, totalReps: sets * 5, sessions: sessions, topLoadKg: nil
+        )
+    }
+
+    /// One stat per index of `rankKeys`, each with `sessions` sessions.
+    private func trained(_ weeks: [Int], sessions: Int?, e1rm: Double = 100, sets: Int = 3) -> [WorkoutWeeklyStatDTO] {
+        weeks.map { counted(rankKeys[$0], e1rm: e1rm, sessions: sessions, sets: sets) }
+    }
+
+    private func rank(_ exercises: [String: [WorkoutWeeklyStatDTO]]) -> [String] {
+        TrendsStrengthLogic.rankedLiftKeys(in: WorkoutSummaryResponse(days: 84, exercises: exercises), today: today)
+    }
+
+    func testRankOrdersByCompletedWeekSessionsNotBySetsOrChange() {
+        XCTAssertEqual(rank([
+            "squat": trained([1, 2, 3, 4, 5, 6, 7], sessions: 1, sets: 12), // 7 sessions, lots of sets
+            "bench press": trained([3, 4, 5, 6, 7], sessions: 2, sets: 2),   // 10 sessions
+            "deadlift": trained([7, 8], sessions: 3),                         // 3 completed + 3 this week (not counted)
+        ]), ["bench press", "squat", "deadlift"])
+    }
+
+    func testRankBreaksTiesByTheFixedMainLiftOrderThenAlphabetically() {
+        var exercises: [String: [WorkoutWeeklyStatDTO]] = [:]
+        for key in ["row", "overhead press", "pull up", "deadlift", "bench press", "squat", "curl"] {
+            exercises[key] = trained([6, 7], sessions: 1)
+        }
+        XCTAssertEqual(rank(exercises), ["squat", "bench press", "deadlift", "overhead press", "curl", "pull up", "row"])
+    }
+
+    /// The week being trained would make the ranking swing day to day, so only the
+    /// completed weeks count — until none has completed (a brand-new lifter).
+    func testRankIgnoresTheCurrentWeekUnlessNothingHasCompleted() {
+        XCTAssertEqual(rank([
+            "a lift": trained([5], sessions: 1) + trained([8], sessions: 9),
+            "b lift": trained([6, 7], sessions: 1),
+        ]), ["b lift", "a lift"])
+        XCTAssertEqual(rank([
+            "a lift": trained([8], sessions: 1),
+            "b lift": trained([8], sessions: 3),
+        ]), ["b lift", "a lift"])
+    }
+
+    func testRankCountsAWeekWithoutASessionCountAsOneAndDropsLiftsOutOfRotation() {
+        XCTAssertEqual(rank([
+            "squat": trained([5, 6, 7], sessions: nil),       // no counts: one per trained week = 3
+            "bench press": trained([6, 7], sessions: 2),       // 4
+            "old lift": trained([0], sessions: 9),             // last e1RM 9 weeks back: out of rotation
+        ]), ["bench press", "squat"])
+    }
+
+    func testHeadlineLiftIsTheMostTrainedLiftThatHasAFourWeekChange() {
+        let k = rankKeys
+        // Bench is the most trained (6 completed sessions) but started 3 weeks ago: no
+        // baseline 4 weeks back, so no change — the server skips it for squat.
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "bench press": [6, 7, 8].map { counted(k[$0], sessions: 3) },
+            "squat": [3, 4, 7, 8].map { counted(k[$0], sessions: 1) },
+        ])
+        XCTAssertEqual(TrendsStrengthLogic.rankedLiftKeys(in: summary, today: today), ["bench press", "squat"])
+        XCTAssertEqual(TrendsStrengthLogic.headlineLift(in: summary, today: today), "squat")
+
+        let single = WorkoutSummaryResponse(days: 84, exercises: ["squat": [counted(k[8], sessions: 1)]])
+        XCTAssertNil(TrendsStrengthLogic.headlineLift(in: single, today: today), "no lift has a comparable change")
+    }
+
+    func testHeadlineLiftIsNeverPickedByTheBiggestChange() {
+        let k = rankKeys
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "squat": [3, 4, 5, 6, 7, 8].map { counted(k[$0], e1rm: $0 >= 7 ? 102 : 100, sessions: 1) },  // +2 kg, 5 completed sessions
+            "bench press": [3, 4, 7, 8].map { counted(k[$0], e1rm: $0 >= 7 ? 130 : 100, sessions: 1) },   // +30 kg, 3 completed sessions
+        ])
+        XCTAssertEqual(TrendsStrengthLogic.headlineLift(in: summary, today: today), "squat")
+    }
+
+    func testCardFollowsTheServerRuleOnlyWhenTheStatsCarrySessions() throws {
+        let k = rankKeys
+        // Bench: one heavy-volume session a week (the old recent-sets rule puts it first).
+        // Squat: two lighter sessions a week (the server's most-trained-lift rule puts it first).
+        func exercises(withSessions: Bool) -> [String: [WorkoutWeeklyStatDTO]] {
+            [
+                "bench press": [3, 4, 5, 6, 7, 8].map { counted(k[$0], e1rm: 100 + Double($0), sessions: withSessions ? 1 : nil, sets: 9) },
+                "squat": [3, 4, 5, 6, 7, 8].map { counted(k[$0], e1rm: 100 + Double($0), sessions: withSessions ? 2 : nil, sets: 4) },
+            ]
+        }
+        let served = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: WorkoutSummaryResponse(days: 84, exercises: exercises(withSessions: true)), system: .metric, today: today
+        ))
+        XCTAssertEqual(served.lifts.map(\.key), ["squat", "bench press"])
+        let older = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: WorkoutSummaryResponse(days: 84, exercises: exercises(withSessions: false)), system: .metric, today: today
+        ))
+        XCTAssertEqual(older.lifts.map(\.key), ["bench press", "squat"], "an older server keeps the recent-sets order")
+    }
+
+    func testCardLeadsWithTheHeadlineLiftEvenWhenAMoreTrainedLiftHasNoChangeYet() throws {
+        let k = rankKeys
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "bench press": [6, 7, 8].map { counted(k[$0], sessions: 3) },
+            "squat": [3, 4, 7, 8].map { counted(k[$0], sessions: 1) },
+        ])
+        let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
+        XCTAssertEqual(card.lifts.map(\.key), ["squat", "bench press"])
+        XCTAssertEqual(card.lifts.last?.status.text, "New")
+    }
+
+    /// Wave 22: the server's headline lift is sticky (another lift takes the lead only by
+    /// out-training it by 2+ sessions for 2 weeks running), which the local ranking does not
+    /// replay. When the goal card sends its key the Strength card leads with it, whatever the
+    /// local rule says; without a usable key the local rule stands.
+    func testCardLeadsWithTheServersStickyHeadlineLift() throws {
+        let k = rankKeys
+        // Bench: 10 completed sessions, squat: 3 - the local rule puts bench first.
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "bench press": [3, 4, 5, 6, 7, 8].map { counted(k[$0], sessions: 2) },
+            "squat": [3, 4, 7, 8].map { counted(k[$0], sessions: 1) },
+        ])
+        XCTAssertEqual(TrendsStrengthLogic.headlineLift(in: summary, today: today), "bench press")
+        let local = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
+        XCTAssertEqual(local.lifts.map(\.key), ["bench press", "squat"])
+
+        let served = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: "squat"))
+        XCTAssertEqual(served.lifts.map(\.key), ["squat", "bench press"])
+        // The key is matched the way the server normalises lift keys.
+        let spelled = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: "Squat"))
+        XCTAssertEqual(spelled.lifts.map(\.key), ["squat", "bench press"])
+        // A key that is not in rotation (or an empty one) falls back to the local rule.
+        let unknown = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: "overhead press"))
+        XCTAssertEqual(unknown.lifts.map(\.key), ["bench press", "squat"])
+        let empty = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, headlineLift: ""))
+        XCTAssertEqual(empty.lifts.map(\.key), ["bench press", "squat"])
+        // The server's lift stays first next to a break return, whichever lift is being rebuilt.
+        let rebuilding = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: summary, system: .metric, today: today,
+            liftReturn: GoalProgressDTO.LiftReturn(
+                exercise: "bench press", name: "Bench Press", breakDays: 14, endedOn: "2026-09-20",
+                preBreakKg: 100, recentKg: 96, pct: 96, regained: false
+            ),
+            headlineLift: "squat"
+        ))
+        XCTAssertEqual(rebuilding.lifts.map(\.key), ["squat", "bench press"])
+    }
+
+    // MARK: - Building back after a break (GoalProgressDTO.liftReturn)
+
+    private func liftReturn(
+        _ exercise: String = "squat", preBreakKg: Double = 142, pct: Int = 96, regained: Bool = false,
+        recentKg: Double? = 136.3
+    ) -> GoalProgressDTO.LiftReturn {
+        GoalProgressDTO.LiftReturn(
+            exercise: exercise, name: exercise.capitalized, breakDays: 14, endedOn: "2026-09-20",
+            preBreakKg: preBreakKg, recentKg: recentKg, pct: pct, regained: regained
+        )
+    }
+
+    func testBuildingBackStatusIsNeutralAndNamesThePreBreakBest() {
+        XCTAssertEqual(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .metric),
+            TrendsStrengthLogic.Status(text: "Building back — est. 1RM 136 of 142\u{00A0}kg pre-break", tone: .neutral)
+        )
+        // 142 kg = 313 lb, 136.3 kg = 300 lb.
+        XCTAssertEqual(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .imperial)?.text,
+            "Building back — est. 1RM 300 of 313\u{00A0}lb pre-break"
+        )
+        // The key is matched the way the server normalises it.
+        XCTAssertNotNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn("Bench-Press"), forLift: "bench press", system: .metric))
+    }
+
+    func testBuildingBackStatusOnlyForTheRebuildingLiftAndOnlyUntilRegained() {
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "bench press", system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(regained: true), forLift: "squat", system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: nil, forLift: "squat", system: .metric))
+    }
+
+    /// The server's headline is "Building back — Squat est. 1RM 136 of 142 kg pre-break"
+    /// (`liftReturnOutcome`): the row names the lift itself, so the chip is that same
+    /// sentence without the name — never "96% of pre-break", which the server no longer says.
+    func testBuildingBackStatusIsTheServersSentenceWithoutTheLiftName() throws {
+        let serverHeadline = "Building back — Squat est. 1RM 136 of 142\u{00A0}kg pre-break"
+        let status = try XCTUnwrap(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: liftReturn(), forLift: "squat", system: .metric)
+        )
+        XCTAssertEqual(status.text, serverHeadline.replacingOccurrences(of: "Squat ", with: ""))
+        XCTAssertEqual(status.tone, .neutral)
+        XCTAssertFalse(status.text.contains("%"))
+    }
+
+    /// Each number is rounded to the nearest whole kg (lb) on its own, exactly as the
+    /// server prints it (`liftReturnDisplay` in `lib/liftChange.ts`), and the chip never
+    /// claims "142 of 142" before the pre-break best is regained.
+    func testBuildingBackStatusRoundsTheNumbersLikeTheServer() {
+        func text(_ pre: Double, _ recent: Double?, _ system: UnitSystem = .metric) -> String? {
+            TrendsStrengthLogic.buildingBackStatus(
+                liftReturn: liftReturn(preBreakKg: pre, recentKg: recent), forLift: "squat", system: system
+            )?.text
+        }
+        XCTAssertEqual(text(142.2, 136.4), "Building back — est. 1RM 136 of 142\u{00A0}kg pre-break")
+        // Nearest, not down: 141.6 -> 142 and 135.5 -> 136.
+        XCTAssertEqual(text(141.6, 135.5), "Building back — est. 1RM 136 of 142\u{00A0}kg pre-break")
+        // A recent number that rounds up to the pre-break one is shown one unit under it.
+        XCTAssertEqual(text(142.4, 141.6), "Building back — est. 1RM 141 of 142\u{00A0}kg pre-break")
+        XCTAssertEqual(text(142, 141.5), "Building back — est. 1RM 141 of 142\u{00A0}kg pre-break")
+        // Pounds are converted with the app's one formatter, then rounded: 140 kg = 309 lb, 132.5 kg = 292 lb.
+        XCTAssertEqual(text(140, 132.5, .imperial), "Building back — est. 1RM 292 of 309\u{00A0}lb pre-break")
+        // The unit is glued to the pre-break number with U+00A0, so a narrow chip never strands it.
+        XCTAssertFalse((text(142, 136.3) ?? "").contains(" kg"))
+    }
+
+    /// Without `recentKg` (it is optional on the wire) there are no numbers to print, so
+    /// the chip keeps the percentage wording it had.
+    func testBuildingBackStatusKeepsThePercentageWithoutARecentWeight() {
+        func text(_ recent: Double?, _ system: UnitSystem = .metric) -> String? {
+            TrendsStrengthLogic.buildingBackStatus(
+                liftReturn: liftReturn(recentKg: recent), forLift: "squat", system: system
+            )?.text
+        }
+        XCTAssertEqual(text(nil), "Building back — 96% of pre-break 142\u{00A0}kg")
+        XCTAssertEqual(text(nil, .imperial), "Building back — 96% of pre-break 313\u{00A0}lb")
+        // A recent weight that is not a real weight is no weight.
+        XCTAssertEqual(text(0), "Building back — 96% of pre-break 142\u{00A0}kg")
+        XCTAssertEqual(text(-5), "Building back — 96% of pre-break 142\u{00A0}kg")
+        XCTAssertEqual(text(Double.nan), "Building back — 96% of pre-break 142\u{00A0}kg")
+    }
+
+    func testLiftReturnShownMirrorsTheServersDisplayNumbers() throws {
+        let metric = try XCTUnwrap(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142.2, recentKg: 136.4, system: .metric))
+        XCTAssertEqual(metric.pre, 142)
+        XCTAssertEqual(metric.recent, 136)
+        let imperial = try XCTUnwrap(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142, recentKg: 136.3, system: .imperial))
+        XCTAssertEqual(imperial.pre, 313)
+        XCTAssertEqual(imperial.recent, 300)
+        let clamped = try XCTUnwrap(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142, recentKg: 142.2, system: .metric))
+        XCTAssertEqual(clamped.recent, 141, "still rebuilding: never equal to, or above, the pre-break number")
+        XCTAssertNil(TrendsStrengthLogic.liftReturnShown(preBreakKg: 0, recentKg: 100, system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.liftReturnShown(preBreakKg: 142, recentKg: 0, system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.liftReturnShown(preBreakKg: .infinity, recentKg: 100, system: .metric))
+    }
+
+    /// A lift whose e1RM is 10 kg under four weeks ago would read "−10 kg" (amber) and
+    /// count as a header "to watch"; while the server says the user is rebuilding it
+    /// after a break, the card is neutral and the header does not count it.
+    func testCardShowsBuildingBackInsteadOfADeclineForTheReturningLift() throws {
+        let k = keys
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "squat": [stat(k[2], e1rm: 110), stat(k[3], e1rm: 110), stat(k[6], e1rm: 100), stat(k[7], e1rm: 100)],
+            "bench press": [stat(k[2], e1rm: 80), stat(k[3], e1rm: 80), stat(k[6], e1rm: 90), stat(k[7], e1rm: 90)],
+        ])
+        func lifts(_ liftReturn: GoalProgressDTO.LiftReturn?) throws -> (squat: TrendsStrengthLogic.Lift, bench: TrendsStrengthLogic.Lift, moves: TrendsHeadline.GoalMoves) {
+            let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today, liftReturn: liftReturn))
+            let moves = TrendsHeadline.GoalMoves.make(goal: "muscle", weightTrend: nil, strength: card, weightAlreadyCounted: false)
+            return (
+                try XCTUnwrap(card.lifts.first { $0.key == "squat" }),
+                try XCTUnwrap(card.lifts.first { $0.key == "bench press" }),
+                moves
+            )
+        }
+
+        let without = try lifts(nil)
+        XCTAssertEqual(without.squat.status.text, "\u{2212}10\u{00A0}kg vs 4\u{00A0}wk ago")
+        XCTAssertEqual(without.squat.status.tone, .watch)
+        XCTAssertEqual(without.moves.liftsDown, 1)
+
+        let rebuilding = try lifts(liftReturn(preBreakKg: 110, pct: 91, recentKg: 100))
+        XCTAssertEqual(rebuilding.squat.status, TrendsStrengthLogic.Status(text: "Building back — est. 1RM 100 of 110\u{00A0}kg pre-break", tone: .neutral))
+        XCTAssertNil(rebuilding.squat.changeKg)
+        XCTAssertNil(rebuilding.squat.baselineKg)
+        XCTAssertEqual(rebuilding.squat.accessibilityLabel, "Squat, estimated one-rep max 100\u{00A0}kg, Building back — est. 1RM 100 of 110\u{00A0}kg pre-break")
+        XCTAssertEqual(rebuilding.moves.liftsDown, 0)
+        // The other lift is untouched, and so is everything once the pre-break best is regained.
+        XCTAssertEqual(rebuilding.bench, without.bench)
+        XCTAssertEqual(rebuilding.moves.liftsUp, 1)
+        let regained = try lifts(liftReturn(preBreakKg: 110, pct: 100, regained: true))
+        XCTAssertEqual(regained.squat, without.squat)
+        // A return about a lift not on the card changes nothing.
+        XCTAssertEqual(try lifts(liftReturn("deadlift")).squat, without.squat)
+    }
+
+    // MARK: - Building back, lift by lift (GoalProgressDTO.liftReturns, wave 21)
+
+    /// The mixed state the server's headline names ("Squat back above pre-break; deadlift at
+    /// 98% ..."): the squat is back and is the headline lift (first), the deadlift is still
+    /// under its pre-break best.
+    private var squatBackDeadliftBehind: [GoalProgressDTO.LiftReturn] {
+        [
+            liftReturn("squat", preBreakKg: 110, pct: 109, regained: true, recentKg: 120),
+            liftReturn("deadlift", preBreakKg: 160, pct: 94, regained: false, recentKg: 150),
+        ]
+    }
+
+    /// Squat up 10 kg on four weeks ago; deadlift 10 kg under it (the dip a break leaves).
+    private var squatUpDeadliftDown: WorkoutSummaryResponse {
+        let k = keys
+        return WorkoutSummaryResponse(days: 84, exercises: [
+            "squat": [stat(k[2], e1rm: 110), stat(k[3], e1rm: 110), stat(k[6], e1rm: 120), stat(k[7], e1rm: 120)],
+            "deadlift": [stat(k[2], e1rm: 160), stat(k[3], e1rm: 160), stat(k[6], e1rm: 150), stat(k[7], e1rm: 150)],
+        ])
+    }
+
+    func testBuildingBackStatusReadsTheEntryForTheLiftFromTheList() {
+        let list = squatBackDeadliftBehind
+        // Not the headline lift, still under its pre-break best: "Building back".
+        XCTAssertEqual(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: list[0], liftReturns: list, forLift: "deadlift", system: .metric),
+            TrendsStrengthLogic.Status(text: "Building back — est. 1RM 150 of 160\u{00A0}kg pre-break", tone: .neutral)
+        )
+        // The lift that is back is not, and neither is a lift with no entry.
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: list[0], liftReturns: list, forLift: "squat", system: .metric))
+        XCTAssertNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: list[0], liftReturns: list, forLift: "bench press", system: .metric))
+        // The key is matched the way the server normalises it, on both sides.
+        let hyphenated = [liftReturn("Bench-Press", preBreakKg: 100, pct: 90, recentKg: 90)]
+        XCTAssertNotNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: nil, liftReturns: hyphenated, forLift: "bench press", system: .metric))
+        XCTAssertNotNil(TrendsStrengthLogic.buildingBackStatus(liftReturn: nil, liftReturns: list, forLift: "Deadlift", system: .metric))
+        // Pounds: 160 kg = 353 lb, 150 kg = 331 lb.
+        XCTAssertEqual(
+            TrendsStrengthLogic.buildingBackStatus(liftReturn: nil, liftReturns: list, forLift: "deadlift", system: .imperial)?.text,
+            "Building back — est. 1RM 331 of 353\u{00A0}lb pre-break"
+        )
+    }
+
+    func testCardShowsBuildingBackForANonHeadlineLiftThatIsStillRebuilding() throws {
+        let list = squatBackDeadliftBehind
+        let card = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: squatUpDeadliftDown, system: .metric, today: today, liftReturn: list[0], liftReturns: list
+        ))
+        let deadlift = try XCTUnwrap(card.lifts.first { $0.key == "deadlift" })
+        XCTAssertEqual(deadlift.status, TrendsStrengthLogic.Status(text: "Building back — est. 1RM 150 of 160\u{00A0}kg pre-break", tone: .neutral))
+        XCTAssertNil(deadlift.changeKg)
+        XCTAssertNil(deadlift.baselineKg)
+        // The lift that is back keeps its ordinary progress chip.
+        let squat = try XCTUnwrap(card.lifts.first { $0.key == "squat" })
+        XCTAssertEqual(squat.status, TrendsStrengthLogic.Status(text: "+10\u{00A0}kg vs 4\u{00A0}wk ago", tone: .good))
+        XCTAssertEqual(squat.changeKg, 10)
+
+        // The header counts the squat as up and does not count the rebuilding deadlift as down.
+        let moves = TrendsHeadline.GoalMoves.make(goal: "muscle", weightTrend: nil, strength: card, weightAlreadyCounted: false)
+        XCTAssertEqual(moves.liftsUp, 1)
+        XCTAssertEqual(moves.liftsDown, 0)
+
+        // With only the headline `liftReturn` (the squat, back) the deadlift's dip would read as a decline.
+        let headlineOnly = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: squatUpDeadliftDown, system: .metric, today: today, liftReturn: list[0]
+        ))
+        let declined = try XCTUnwrap(headlineOnly.lifts.first { $0.key == "deadlift" })
+        XCTAssertEqual(declined.status, TrendsStrengthLogic.Status(text: "\u{2212}10\u{00A0}kg vs 4\u{00A0}wk ago", tone: .watch))
+    }
+
+    func testCardDoesNotShowBuildingBackForALiftThatIsBack() throws {
+        // Every lift regained: both read their ordinary chip, the deadlift as the decline it is.
+        let list = [
+            liftReturn("squat", preBreakKg: 110, pct: 109, regained: true, recentKg: 120),
+            liftReturn("deadlift", preBreakKg: 160, pct: 100, regained: true, recentKg: 160),
+        ]
+        let card = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: squatUpDeadliftDown, system: .metric, today: today, liftReturn: list[0], liftReturns: list
+        ))
+        for lift in card.lifts {
+            XCTAssertFalse(lift.status.text.hasPrefix("Building back"), lift.key)
+            XCTAssertNotNil(lift.changeKg, lift.key)
+        }
+        XCTAssertEqual(card.lifts.first { $0.key == "deadlift" }?.status.tone, .watch)
+    }
+
+    func testCardFallsBackToTheSingleLiftReturnWithoutTheList() throws {
+        let rebuildingSquat = liftReturn("squat", preBreakKg: 130, pct: 92, regained: false, recentKg: 120)
+        let fromSingle = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: squatUpDeadliftDown, system: .metric, today: today, liftReturn: rebuildingSquat
+        ))
+        // Explicit nil is the same as leaving it out, and the same as an empty list (which the server never sends).
+        let explicitNil = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: squatUpDeadliftDown, system: .metric, today: today, liftReturn: rebuildingSquat, liftReturns: nil
+        ))
+        let emptyList = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: squatUpDeadliftDown, system: .metric, today: today, liftReturn: rebuildingSquat, liftReturns: []
+        ))
+        XCTAssertEqual(fromSingle, explicitNil)
+        XCTAssertEqual(fromSingle, emptyList)
+        let squat = try XCTUnwrap(fromSingle.lifts.first { $0.key == "squat" })
+        XCTAssertEqual(squat.status, TrendsStrengthLogic.Status(text: "Building back — est. 1RM 120 of 130\u{00A0}kg pre-break", tone: .neutral))
+        // Only the headline lift is read from the single liftReturn; the deadlift is not.
+        let deadlift = try XCTUnwrap(fromSingle.lifts.first { $0.key == "deadlift" })
+        XCTAssertEqual(deadlift.status.tone, .watch)
+        XCTAssertNotNil(deadlift.changeKg)
+        // Neither given: unchanged from before the return existed.
+        let none = try XCTUnwrap(TrendsStrengthLogic.card(from: squatUpDeadliftDown, system: .metric, today: today))
+        XCTAssertEqual(none.lifts.first { $0.key == "squat" }?.status.text, "+10\u{00A0}kg vs 4\u{00A0}wk ago")
+        // The one-entry list says what the single liftReturn does.
+        let oneEntry = try XCTUnwrap(TrendsStrengthLogic.card(
+            from: squatUpDeadliftDown, system: .metric, today: today, liftReturn: rebuildingSquat, liftReturns: [rebuildingSquat]
+        ))
+        XCTAssertEqual(oneEntry, fromSingle)
+    }
+
+    // MARK: - Weekly stat decoding (sessions / topLoadKg)
+
+    func testWeeklyStatDecodesSessionsAndTopLoadTolerantly() throws {
+        func decode(_ extra: String) throws -> WorkoutWeeklyStatDTO {
+            let json = "{\"weekStart\":\"2026-10-05\",\"bestEstimatedOneRepMaxKg\":163.3,\"volumeKg\":2100,\"totalSets\":3,\"totalReps\":15\(extra)}"
+            return try JSONDecoder().decode(WorkoutWeeklyStatDTO.self, from: Data(json.utf8))
+        }
+        let full = try decode(",\"sessions\":2,\"topLoadKg\":140")
+        XCTAssertEqual(full.sessions, 2)
+        XCTAssertEqual(full.topLoadKg, 140)
+        XCTAssertEqual(full.weekStart, "2026-10-05")
+        XCTAssertEqual(full.bestEstimatedOneRepMaxKg, 163.3)
+        XCTAssertEqual(full.totalReps, 15)
+
+        // Older payloads decode exactly as before.
+        let older = try decode("")
+        XCTAssertNil(older.sessions)
+        XCTAssertNil(older.topLoadKg)
+        XCTAssertEqual(older, WorkoutWeeklyStatDTO(weekStart: "2026-10-05", bestEstimatedOneRepMaxKg: 163.3, volumeKg: 2100, totalSets: 3, totalReps: 15))
+        let nulls = try decode(",\"sessions\":null,\"topLoadKg\":null")
+        XCTAssertNil(nulls.sessions)
+        XCTAssertNil(nulls.topLoadKg)
+
+        // Wrong-typed or nonsensical additive values drop only themselves.
+        let wrong = try decode(",\"sessions\":\"two\",\"topLoadKg\":\"heavy\"")
+        XCTAssertNil(wrong.sessions)
+        XCTAssertNil(wrong.topLoadKg)
+        XCTAssertEqual(wrong.totalSets, 3)
+        XCTAssertEqual(try decode(",\"sessions\":2.0").sessions, 2)
+        XCTAssertNil(try decode(",\"sessions\":-1").sessions)
+
+        // A bodyweight-only week has no e1RM; the original required fields stay required.
+        XCTAssertNil(try JSONDecoder().decode(
+            WorkoutWeeklyStatDTO.self,
+            from: Data(#"{"weekStart":"2026-10-05","bestEstimatedOneRepMaxKg":null,"volumeKg":0,"totalSets":2,"totalReps":20}"#.utf8)
+        ).bestEstimatedOneRepMaxKg)
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            WorkoutWeeklyStatDTO.self, from: Data(#"{"weekStart":"2026-10-05","sessions":2}"#.utf8)
+        ))
+    }
+
+    func testSummaryResponseCarriesSessionCountsPerWeek() throws {
+        let json = #"{"days":84,"exercises":{"squat":[{"weekStart":"2026-10-05","bestEstimatedOneRepMaxKg":163.3,"volumeKg":2100,"totalSets":3,"totalReps":15,"sessions":2,"topLoadKg":140}]}}"#
+        let summary = try JSONDecoder().decode(WorkoutSummaryResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(summary.exercises["squat"]?.first?.sessions, 2)
+        XCTAssertTrue(TrendsStrengthLogic.carriesSessionCounts(summary))
+        XCTAssertFalse(TrendsStrengthLogic.carriesSessionCounts(WorkoutSummaryResponse(days: 84, exercises: exercises())))
+    }
 }

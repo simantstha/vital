@@ -115,7 +115,7 @@ struct TrendBarChart: View {
             HStack(spacing: 8) {
                 ForEach(Array(dayLabels.enumerated()), id: \.offset) { index, label in
                     Text(label)
-                        .font(.system(size: 11, weight: index == todayIndex ? .heavy : .medium))
+                        .scaledFont(size: 11, weight: index == todayIndex ? .heavy : .medium)
                         .foregroundStyle(index == todayIndex ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
                         .frame(maxWidth: .infinity)
                 }
@@ -123,6 +123,10 @@ struct TrendBarChart: View {
         }
         .sensoryFeedback(Theme.Haptics.selection, trigger: selectedIndex)
         .onAppear(perform: startEntranceIfNeeded)
+        // Day / value / goal labels are positioned against fixed bar
+        // geometry (the value label is offset a fixed 14pt above its bar), so
+        // they stop growing at the largest standard size.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     // MARK: - One bar (no day label — that's its own row below, so every
@@ -160,7 +164,7 @@ struct TrendBarChart: View {
 
                 if index == activeIndex, valueLabelPopped || startsGrown {
                     Text(TrendBarChartLogic.compactHoursLabel(value))
-                        .font(.system(size: 11, weight: index == todayIndex ? .heavy : .semibold))
+                        .scaledFont(size: 11, weight: index == todayIndex ? .heavy : .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize()
                         .offset(y: -(grownHeight + 14))
@@ -210,7 +214,7 @@ struct TrendBarChart: View {
         let fraction = TrendBarChartLogic.fraction(value: goalHours, chartMax: chartMax)
         VStack(alignment: .leading, spacing: 3) {
             Text("\(TrendsSummary.hoursLabel(goalHours))h goal")
-                .font(.system(size: 10, weight: .bold))
+                .scaledFont(size: 10, weight: .bold)
                 .foregroundStyle(Theme.Colors.textSecondary)
             DashedLine()
                 .stroke(Theme.Colors.textSecondary.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))

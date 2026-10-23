@@ -50,8 +50,7 @@ struct SignInView: View {
                                     .tint(Theme.Colors.onAccent)
                             } else {
                                 Text("Dev sign-in")
-                                    .font(Theme.Typography.bodyLarge)
-                                    .fontWeight(.semibold)
+                                    .scaledFont(Theme.Typography.bodyLarge.weight(.semibold))
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -65,7 +64,7 @@ struct SignInView: View {
 
                     if let message = authViewModel.errorMessage {
                         Text(message)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.alert)
                             .multilineTextAlignment(.center)
                     }
@@ -101,11 +100,11 @@ private extension SignInView {
 
             VStack(spacing: Theme.Spacing.sm) {
                 Text("Vital")
-                    .font(Theme.Typography.titleLarge)
+                    .scaledFont(Theme.Typography.titleLarge)
                     .foregroundStyle(Theme.Colors.textPrimary)
 
                 Text("Your health, coached.")
-                    .font(Theme.Typography.bodyMedium)
+                    .scaledFont(Theme.Typography.bodyMedium)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }

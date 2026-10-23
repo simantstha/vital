@@ -39,6 +39,7 @@ import { getWeightReadingsWithLazyImport } from '../weightRepository';
 import {
   assessWeightSignals,
   formatWeightSignalsSection,
+  weeklyWeightRead,
   WEEKEND_PATTERN_WINDOW_DAYS,
   type WeightSignal,
   type DailyIntakeKcalPoint,
@@ -104,6 +105,7 @@ export interface CoachContext {
   dietBudget?: DietBudget;          // effective calorie/macro targets (auto or pinned)
   todayIntake?: DailyIntake;        // resolved consumed kcal/macros for `today` — see lib/brain/nutritionIntake.ts
   weightTrend?: WeightTrendResult;  // smoothed EWMA weight trend, last WEIGHT_TREND_WINDOW_DAYS days — see lib/weightTrend.ts
+  localToday?: string;              // the user's local day (YYYY-MM-DD): the trend line quotes no weekly rate off a weigh-in older than a week
   weightSignals: WeightSignal[];    // plateau/too-fast-loss/under-eating/rate-not-reliable — see lib/brain/weightSignals.ts
   goalProgress?: GoalProgress;      // deterministic goal verdict (lib/goalProgress.ts) — the same one the Trends/Today goal card shows; absent if the loader failed
   cachedBrief?: CachedBrief;        // today's app-generated insight + meal plan, if warm
@@ -336,7 +338,8 @@ export function buildPromptText(
   // ── Weight trend & energy signals ───────────────────────────────────────
   if (ctx.weightTrend) {
     lines.push('\n### Weight trend & energy signals');
-    lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem));
+    // A weight-loss goal quotes the card's weekly average and the week's pace, not the smoothed trend (one displayed weight).
+    lines.push(...formatWeightSignalsSection(ctx.weightTrend, ctx.weightSignals, ctx.unitSystem, ctx.localToday, weeklyWeightRead(ctx.goalProgress)));
   }
 
   // ── Goal progress ───────────────────────────────────────────────────────
@@ -754,6 +757,10 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     floorKcal,
     goal: dietBudget?.goal ?? 'general',
     weekendPatternIntakeKcal,
+    todayKey: localToday,
+    goalStartDay: usersRow?.goal_started_at ? localDayKey(usersRow.goal_started_at, tz) : null,
+    // The weight-loss week plan the goal card shows: plateau / too-fast follow it, not today's scale.
+    weekPlan: goalProgress?.weightRead?.plan ?? null,
   });
 
   // WHOOP context line (Task 7) — daily_metrics is day-keyed to the user's
@@ -787,6 +794,7 @@ export async function assembleContext(userId: string, findingId?: string): Promi
     dietBudget,
     todayIntake,
     weightTrend,
+    localToday,
     weightSignals,
     goalProgress: goalProgress ?? undefined,
     cachedBrief,

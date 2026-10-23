@@ -66,7 +66,7 @@ struct PlanItemActionsSheet: View {
                                     .font(.system(size: 17, weight: .medium))
                                     .foregroundStyle(action.danger ? Theme.Colors.alert : Theme.Colors.textSecondary)
                                 Text(action.label)
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .scaledFont(size: 15, weight: .semibold)
                                     .foregroundStyle(action.danger ? Theme.Colors.alert : Theme.Colors.textPrimary)
                                 Spacer()
                             }
@@ -88,7 +88,7 @@ struct PlanItemActionsSheet: View {
 
             Button(action: onCancel) {
                 Text("Cancel")
-                    .font(.system(size: 15, weight: .bold))
+                    .scaledFont(size: 15, weight: .bold)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.md + 2)
@@ -105,11 +105,11 @@ struct PlanItemActionsSheet: View {
             IconBadge(systemName: item.sfSymbol, style: .soft)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .font(.system(size: 16, weight: .bold))
+                    .scaledFont(size: 16, weight: .bold)
                     .tracking(-0.2)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text(item.timeLabel + (item.source == .calendar ? " · from calendar" : ""))
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer()

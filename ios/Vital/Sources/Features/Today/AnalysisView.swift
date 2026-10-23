@@ -41,7 +41,7 @@ struct AnalysisView: View {
             Spacer()
             Button("Done") { dismiss() }
                 .buttonStyle(.plain)
-                .font(.system(size: 15, weight: .semibold))
+                .scaledFont(size: 15, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .padding(.horizontal, Theme.Spacing.lg)
                 .frame(minHeight: 44)
@@ -68,7 +68,7 @@ struct AnalysisView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 HStack {
-                    Text(kind.title).font(Theme.Typography.titleMedium)
+                    Text(kind.title).scaledFont(Theme.Typography.titleMedium)
                     Spacer()
                     Button("Done") { dismiss() }
                         .buttonStyle(.plain)
@@ -77,7 +77,7 @@ struct AnalysisView: View {
                         .accessibilityIdentifier("analysis.done")
                 }
                 GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    Text(value.result.headline).font(Theme.Typography.titleMedium)
+                    Text(value.result.headline).scaledFont(Theme.Typography.titleMedium)
                     Text(value.result.narrative)
                 }}
                 analysisList("What stood out", value.result.observations)
@@ -97,7 +97,7 @@ struct AnalysisView: View {
             EmptyView()
         } else {
             GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text(title).font(Theme.Typography.bodyMedium).fontWeight(.semibold)
+                Text(title).scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                 ForEach(rows, id: \.self) { Text("• \($0)").foregroundStyle(Theme.Colors.textSecondary) }
             }}
         }
@@ -140,14 +140,14 @@ private struct AnalysisHeader: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     IconBadge(systemName: iconSystemName, style: .soft, size: 28, cornerRadius: 14)
                     Text(kickerText)
-                        .font(.system(size: 12, weight: .bold))
+                        .scaledFont(size: 12, weight: .bold)
                         .tracking(0.5)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 Spacer()
                 Button("Done", action: doneAction)
                     .buttonStyle(.plain)
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(size: 15, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .padding(.horizontal, Theme.Spacing.lg)
                     .frame(minHeight: 44)
@@ -155,13 +155,13 @@ private struct AnalysisHeader: View {
                     .accessibilityIdentifier("analysis.done")
             }
             Text(title)
-                .font(.system(size: 28, weight: .bold))
+                .scaledFont(size: 28, weight: .bold)
                 .tracking(-0.3)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(titleIdentifier ?? "")
             Text(subline)
-                .font(.system(size: 15))
+                .scaledFont(size: 15)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -175,12 +175,12 @@ private struct AnalysisSectionHeader: View {
     var body: some View {
         HStack(alignment: .lastTextBaseline) {
             Text(title)
-                .font(.system(size: 17, weight: .bold))
+                .scaledFont(size: 17, weight: .bold)
                 .foregroundStyle(Theme.Colors.textPrimary)
             Spacer()
             if !trailing.isEmpty {
                 Text(trailing)
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
@@ -226,7 +226,7 @@ private struct ChipView: View {
 
     private var label: some View {
         Text(chip.text)
-            .font(.system(size: 12, weight: .bold))
+            .scaledFont(size: 12, weight: .bold)
             .foregroundStyle(foreground)
             .lineLimit(1)
             .padding(.horizontal, Theme.Spacing.sm)
@@ -250,7 +250,7 @@ private struct DataRow: View {
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .frame(width: 20)
             Text(label)
-                .font(.system(size: 15))
+                .scaledFont(size: 15)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -287,18 +287,18 @@ private struct CoachTakeCard: View {
                             .foregroundStyle(Theme.Colors.onAccent)
                     }
                     Text("Coach's take")
-                        .font(.system(size: 13, weight: .bold))
+                        .scaledFont(size: 13, weight: .bold)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 Text(narrative)
-                    .font(.system(size: 16))
+                    .scaledFont(size: 16)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 ForEach(observations, id: \.self) { observation in
                     HStack(alignment: .top, spacing: Theme.Spacing.md) {
                         RoundedRectangle(cornerRadius: 2).fill(Theme.Colors.accentContent).frame(width: 3)
                         Text(observation)
-                            .font(.system(size: 15))
+                            .scaledFont(size: 15)
                             .foregroundStyle(Theme.Colors.textPrimary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -324,11 +324,11 @@ private struct NextStepCard: View {
             VitalCard {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     Text("NEXT")
-                        .font(.system(size: 12, weight: .bold))
+                        .scaledFont(size: 12, weight: .bold)
                         .tracking(0.5)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     Text(step)
-                        .font(.system(size: 17, weight: .bold))
+                        .scaledFont(size: 17, weight: .bold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: Theme.Spacing.sm) {
@@ -359,7 +359,7 @@ private struct AskCoachLink: View {
                 Image(systemName: "bubble.left.fill")
                 Text(label)
             }
-            .font(.system(size: 15, weight: .semibold))
+            .scaledFont(size: 15, weight: .semibold)
             .foregroundStyle(Theme.Colors.textPrimary)
             .frame(maxWidth: .infinity, minHeight: 48)
             .background(Theme.Colors.card, in: Capsule())
@@ -383,7 +383,7 @@ private struct DeviceSourceChip: View {
             Image(systemName: device == .apple ? "applewatch" : "waveform.path.ecg")
                 .font(.system(size: 11, weight: .semibold))
             Text(label ?? AnalysisLogic.deviceDisplayName(device))
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .lineLimit(1)
         }
         .foregroundStyle(Theme.Colors.textSecondary)
@@ -423,7 +423,7 @@ private struct DeviceSwitchControl: View {
                 Image(systemName: option == .apple ? "applewatch" : "waveform.path.ecg")
                     .font(.system(size: 13, weight: .semibold))
                 Text(AnalysisLogic.deviceDisplayName(option))
-                    .font(.system(size: 14, weight: isOn ? .bold : .semibold))
+                    .scaledFont(size: 14, weight: isOn ? .bold : .semibold)
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -479,7 +479,7 @@ private struct ZoneBarRow: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
             Text(bar.label)
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .frame(width: 58, alignment: .leading)
                 .lineLimit(1)
@@ -491,12 +491,12 @@ private struct ZoneBarRow: View {
             }
             .frame(height: 10)
             Text(bar.timeLabel)
-                .font(Theme.Typography.numericSmall(14))
+                .scaledFont(Theme.Typography.numericSmall(14))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .frame(width: 46, alignment: .trailing)
                 .fixedSize()
             Text(bar.percentLabel)
-                .font(.system(size: 11))
+                .scaledFont(size: 11)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .frame(width: 32, alignment: .trailing)
                 .fixedSize()
@@ -728,11 +728,11 @@ struct WorkoutAnalysisContent: View {
         return VitalCard(padding: Theme.Spacing.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 HStack {
-                    Text("Heart rate").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.Colors.textPrimary)
+                    Text("Heart rate").scaledFont(size: 15, weight: .bold).foregroundStyle(Theme.Colors.textPrimary)
                     Spacer()
                     if let avg, let peak {
                         Text("avg \(Int(avg.rounded())) · max \(Int(peak.rounded()))")
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
@@ -752,12 +752,12 @@ struct WorkoutAnalysisContent: View {
         let bars = AnalysisLogic.zoneBars(secondsByZone: zonesSec, basis: basis)
         return VitalCard(padding: Theme.Spacing.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                Text("Time in zones").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.Colors.textPrimary)
+                Text("Time in zones").scaledFont(size: 15, weight: .bold).foregroundStyle(Theme.Colors.textPrimary)
                 ForEach(Array(bars.enumerated()), id: \.offset) { _, bar in
                     ZoneBarRow(bar: bar)
                 }
                 Text(zoneCaption(basis: basis))
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, Theme.Spacing.xs)
@@ -790,10 +790,10 @@ struct WorkoutAnalysisContent: View {
         VitalCard(padding: Theme.Spacing.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 HStack(alignment: .lastTextBaseline) {
-                    Text("Strain").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.Colors.textPrimary)
+                    Text("Strain").scaledFont(size: 15, weight: .bold).foregroundStyle(Theme.Colors.textPrimary)
                     Spacer()
                     Text(String(format: "%.1f", strain))
-                        .font(Theme.Typography.numericSmall(18))
+                        .scaledFont(Theme.Typography.numericSmall(18))
                         .foregroundStyle(Theme.Colors.textPrimary)
                 }
                 StrainScaleView(value: strain).frame(height: 14)
@@ -827,7 +827,7 @@ struct WorkoutAnalysisContent: View {
     /// THIS session's own kcal was omitted (i.e. it isn't the primary).
     private var caloriesCountOnceCaption: some View {
         Text("Calories count once, from your primary device for workouts — \(AnalysisLogic.deviceDisplayName(devicesPrimary)).")
-            .font(.system(size: 12))
+            .scaledFont(size: 12)
             .foregroundStyle(Theme.Colors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -881,12 +881,12 @@ struct WorkoutAnalysisContent: View {
                         ForEach(Array(stats.enumerated()), id: \.offset) { _, stat in
                             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                                 HStack(alignment: .lastTextBaseline, spacing: 3) {
-                                    Text(stat.value).font(Theme.Typography.numericLarge(26)).foregroundStyle(Theme.Colors.textPrimary)
+                                    Text(stat.value).scaledFont(Theme.Typography.numericLarge(26)).foregroundStyle(Theme.Colors.textPrimary)
                                     if !stat.unit.isEmpty {
-                                        Text(stat.unit).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                                        Text(stat.unit).scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                                     }
                                 }
-                                Text(stat.label).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                                Text(stat.label).scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                                 if let chip = stat.chip {
                                     ChipView(chip: chip, scalesToFit: true).padding(.top, Theme.Spacing.xxs)
                                 }
@@ -900,7 +900,7 @@ struct WorkoutAnalysisContent: View {
                     if stats.contains(where: { $0.chip != nil }),
                        let basis = AnalysisLogic.usualBasisCaption(sessions: context?.usual?.sessions, noun: noun) {
                         Text(basis)
-                            .font(.system(size: 12))
+                            .scaledFont(size: 12)
                             .foregroundStyle(Theme.Colors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -923,12 +923,12 @@ struct WorkoutAnalysisContent: View {
                         .frame(height: 40)
                         .accessibilityLabel(AnalysisLogic.paceRankPhrase(rank: paceHistory.rank, previousCount: paceHistory.previous.count, noun: noun))
                     HStack {
-                        Text("slower").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                        Text("slower").scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                         Spacer()
-                        Text("faster").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                        Text("faster").scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                     }
                     Text(AnalysisLogic.paceRankPhrase(rank: paceHistory.rank, previousCount: paceHistory.previous.count, noun: noun))
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -944,12 +944,12 @@ struct WorkoutAnalysisContent: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     HStack(alignment: .lastTextBaseline) {
                         Text(AnalysisLogic.effortZoneLabel(effort.zone))
-                            .font(.system(size: 16, weight: .bold))
+                            .scaledFont(size: 16, weight: .bold)
                             .foregroundStyle(Theme.Colors.textPrimary)
                         Spacer()
                         if let avgHr = metrics?.avgHr, let maxHr = metrics?.maxHr {
                             Text("avg \(Int(avgHr.rounded())) · max \(Int(maxHr.rounded())) bpm")
-                                .font(.system(size: 12))
+                                .scaledFont(size: 12)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -960,12 +960,12 @@ struct WorkoutAnalysisContent: View {
                     // the bar above aren't left unexplained.
                     EffortZoneLegend(showsMaxMarker: maxHrMarkerFraction(effort) != nil, noun: noun)
                     HStack {
-                        Text(AnalysisLogic.usualRestingLabel(effort.restingHr)).font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                        Text(AnalysisLogic.usualRestingLabel(effort.restingHr)).scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                         Spacer()
-                        Text("highest recorded \(Int(effort.maxHr.rounded()))").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                        Text("highest recorded \(Int(effort.maxHr.rounded()))").scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                     }
                     Text(AnalysisLogic.effortDescription(avgFraction: effort.avgPct))
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -1007,7 +1007,7 @@ struct WorkoutAnalysisContent: View {
                                 isFirst: goingIn.sleepMinutes == nil && goingIn.hrv == nil)
                     }
                     Text(AnalysisLogic.goingInFootnote(noun: noun))
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .padding(.top, Theme.Spacing.xs)
                 }
@@ -1042,10 +1042,10 @@ struct WorkoutAnalysisContent: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack(spacing: Theme.Spacing.sm) {
                         Image(systemName: "sparkles").foregroundStyle(Theme.Colors.accentContent)
-                        Text("How your body took it").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.Colors.textPrimary)
+                        Text("How your body took it").scaledFont(size: 16, weight: .bold).foregroundStyle(Theme.Colors.textPrimary)
                     }
                     Text("Check back tomorrow morning. I'll compare your HRV and resting heart rate to your normal and tell you if you're ready to go hard again.")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -1152,7 +1152,7 @@ private struct EffortZoneBar: View {
                 HStack(spacing: 2) {
                     ForEach(0..<4, id: \.self) { i in
                         Text(bandLabels[i])
-                            .font(.system(size: 10, weight: .semibold))
+                            .scaledFont(size: 10, weight: .semibold)
                             .foregroundStyle(i == activeIndex ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
                             .frame(width: geo.size.width * CGFloat(bandBounds[i + 1] - bandBounds[i]))
                     }
@@ -1180,7 +1180,7 @@ private struct EffortZoneLegend: View {
                     .fill(Theme.Colors.textPrimary)
                     .frame(width: 2, height: 10)
                 Text("your average")
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             if showsMaxMarker {
@@ -1189,7 +1189,7 @@ private struct EffortZoneLegend: View {
                         .strokeBorder(Theme.Colors.textPrimary, lineWidth: 1.5)
                         .frame(width: 8, height: 8)
                     Text(AnalysisLogic.maxMarkerLegend(noun: noun))
-                        .font(.system(size: 11))
+                        .scaledFont(size: 11)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }
@@ -1308,17 +1308,18 @@ struct SleepAnalysisContent: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text(AnalysisLogic.formatDuration(minutes))
-                            .font(Theme.Typography.numericHero(34))
+                            .scaledFont(Theme.Typography.numericHero(34))
+                            .dynamicTypeSize(...DynamicTypeSize.accessibility2) // hero number: capped growth
                             .foregroundStyle(Theme.Colors.textPrimary)
-                        Text("asleep").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                        Text("asleep").scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                     }
                     if let timing = context?.timing {
                         HStack(spacing: Theme.Spacing.sm) {
                             Image(systemName: "moon.fill").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
-                            Text(AnalysisLogic.clockTime(timing.bedTime)).font(.system(size: 13)).foregroundStyle(Theme.Colors.textSecondary)
+                            Text(AnalysisLogic.clockTime(timing.bedTime)).scaledFont(size: 13).foregroundStyle(Theme.Colors.textSecondary)
                             Image(systemName: "arrow.right").font(.system(size: 10)).foregroundStyle(Theme.Colors.textTertiary)
                             Image(systemName: "alarm.fill").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
-                            Text(AnalysisLogic.clockTime(timing.wakeTime)).font(.system(size: 13)).foregroundStyle(Theme.Colors.textSecondary)
+                            Text(AnalysisLogic.clockTime(timing.wakeTime)).scaledFont(size: 13).foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
                     if let usual = context?.sleepUsual {
@@ -1369,7 +1370,7 @@ struct SleepAnalysisContent: View {
     private func stageRow(_ label: String, minutes: Double?, usual: Double?, kind: AnalysisLogic.SleepStageKind, isFirst: Bool) -> some View {
         if let minutes, let usual {
             HStack(spacing: Theme.Spacing.md) {
-                Text(label).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.Colors.textPrimary).frame(width: 54, alignment: .leading)
+                Text(label).scaledFont(size: 14, weight: .semibold).foregroundStyle(Theme.Colors.textPrimary).frame(width: 54, alignment: .leading)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -1383,9 +1384,9 @@ struct SleepAnalysisContent: View {
                 }
                 .frame(height: 18)
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(AnalysisLogic.formatDuration(minutes)).font(Theme.Typography.numericSmall(15)).foregroundStyle(Theme.Colors.textPrimary)
+                    Text(AnalysisLogic.formatDuration(minutes)).scaledFont(Theme.Typography.numericSmall(15)).foregroundStyle(Theme.Colors.textPrimary)
                     Text("usual \(AnalysisLogic.formatDuration(usual))")
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(size: 11, weight: .semibold)
                         .foregroundStyle(stageToneColor(kind, minutes: minutes, usual: usual))
                 }
             }
@@ -1454,7 +1455,7 @@ struct SleepAnalysisContent: View {
                             HStack(spacing: Theme.Spacing.xs) {
                                 Circle().fill(segment.2).frame(width: 8, height: 8)
                                 Text("\(segment.0) \(AnalysisLogic.formatDuration(segment.1))")
-                                    .font(.system(size: 11))
+                                    .scaledFont(size: 11)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                             }
                         }
@@ -1510,10 +1511,10 @@ struct SleepAnalysisContent: View {
            AnalysisLogic.sleepDevicesDisagree(minutesA: primaryMinutes, minutesB: otherMinutes) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text("The devices disagree a little")
-                    .font(.system(size: 14, weight: .bold))
+                    .scaledFont(size: 14, weight: .bold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("\(AnalysisLogic.deviceDisplayName(other)) counted \(AnalysisLogic.formatDuration(otherMinutes)) asleep. Each device estimates stages its own way, so I compare every night against the same device's normal — never one against the other.")
-                    .font(.system(size: 13))
+                    .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1540,7 +1541,7 @@ struct SleepAnalysisContent: View {
                                 isFirst: beforeBed.lastWorkoutEndedAt == nil)
                     }
                     Text("What I saw in your logs. These often go with lighter sleep — not proof they caused it.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .padding(.top, Theme.Spacing.xs)
                 }
@@ -1598,7 +1599,7 @@ struct SleepAnalysisContent: View {
                                         .fill(bar.isToday ? Theme.Colors.indigo : Theme.Colors.indigo.opacity(0.85))
                                         .frame(width: Self.weekBarWidth, height: max(4, Self.weekChartHeight * CGFloat(bar.heightFraction)))
                                     Text(bar.dayLabel)
-                                        .font(.system(size: 11, weight: bar.isToday ? .bold : .medium))
+                                        .scaledFont(size: 11, weight: bar.isToday ? .bold : .medium)
                                         .foregroundStyle(bar.isToday ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
                                 }
                             }

@@ -325,7 +325,8 @@ jobs:
     # `git fetch` and view them. Deliberately its own job (not folded into
     # `ios` above) so a slow/flaky screenshot run never blocks the fast
     # build-and-unit-test signal.
-    timeout-minutes: 40
+    # ~27–38 min as of Oct 2026 (6 scenarios × light/dark + AX captures); keep headroom.
+    timeout-minutes: 50
     permissions:
       contents: write
     defaults:
@@ -455,6 +456,20 @@ jobs:
               CODE_SIGNING_ALLOWED=NO \
               ${ONLY_TESTING}
           fi
+
+      # The full result bundle (activity names, query timings, failure
+      # screenshots) is the only way to see where a snapshot-query timeout hit.
+      # Only on failure: the PNGs a passing run produces go out via the
+      # `ios-screenshots` artifact below. `uses:` paths are repo-root relative
+      # (the `working-directory: ios` default applies to `run:` steps only).
+      - name: Upload xcresult on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshots-xcresult
+          path: ios/build/Screens.xcresult
+          retention-days: 7
 
       # Best-effort from here down: only the test step above should fail this
       # job (or the whole `pr-checks` aggregate) — exporting/publishing

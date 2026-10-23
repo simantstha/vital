@@ -126,7 +126,7 @@ struct PhotoLogFlowView: View {
                 Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 14, weight: .semibold))
                 Text("Library")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
             }
             .foregroundStyle(.white)
             .padding(.horizontal, Theme.Spacing.lg)
@@ -157,7 +157,7 @@ struct PhotoLogFlowView: View {
                         ProgressView()
                             .tint(.white)
                         Text("Reading your plate…")
-                            .font(.system(size: 15, weight: .semibold))
+                            .scaledFont(size: 15, weight: .semibold)
                             .foregroundStyle(.white)
                     }
                     .padding(.horizontal, Theme.Spacing.xl)
@@ -166,7 +166,7 @@ struct PhotoLogFlowView: View {
                 }
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, Theme.Spacing.xl)

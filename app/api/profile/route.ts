@@ -56,7 +56,9 @@
  *     lightsOutMinutes?: integer,  // 0–1439
  *     unitSystem?: 'metric' | 'imperial',
  *     targetWeightKg?: number | null,       // 30–300; null clears
- *     targetDate?: string | null,           // 'YYYY-MM-DD', future and <= 3 years out; null clears
+ *     targetDate?: string | null,           // 'YYYY-MM-DD', future and <= 3 years out; null clears.
+ *                                           // Accepted unchanged (echoing the stored value) even if it has passed;
+ *                                           // a NEW date that is today or earlier -> 400 'Target date must be in the future'.
  *     weeklySessionsTarget?: integer | null, // 1–14; null clears
  *     weeklyDistanceKmTarget?: number | null, // 1–300 km; null clears
  *     raceDate?: string | null,               // YYYY-MM-DD, today..+2y; null clears
@@ -95,7 +97,7 @@ import { parseProfileDetails, updateIdentityLines, formatSleepSubtitle } from '@
 import { importLegacyWeightLogIfPresent, logWeightEntry } from '@/lib/weightRepository';
 import { localDayKey, pickTimeZone } from '@/lib/localDay';
 import { parseUnitSystem } from '@/lib/units';
-import { parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget, parseRaceDate, parseRaceDistanceKm } from '@/lib/goalTarget';
+import { parseTargetDate, isTargetDateNotInFuture, TARGET_DATE_NOT_FUTURE_ERROR, parseTargetWeightKg, parseWeeklySessionsTarget, parseWeeklyDistanceKmTarget, parseRaceDate, parseRaceDistanceKm } from '@/lib/goalTarget';
 import { buildGoalRestart, shouldReanchorGoalForTarget } from '@/lib/goalStart';
 import { invalidateGoalProgress } from '@/lib/brain/goalProgressCache';
 
@@ -317,14 +319,24 @@ export async function PATCH(request: Request): Promise<NextResponse> {
     } else {
       // "Future" is judged on the user's local day.
       const [tzRow] = await db
-        .select({ timezone: schema.users.timezone })
+        .select({ timezone: schema.users.timezone, target_date: schema.users.target_date })
         .from(schema.users)
         .where(eq(schema.users.id, userId))
         .limit(1);
-      const todayKey = localDayKey(new Date(), pickTimeZone(null, tzRow?.timezone));
-      const r = parseTargetDate(targetDate, todayKey);
-      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
-      parsedTargetDate = r.value;
+      if (typeof targetDate === 'string' && targetDate === tzRow?.target_date) {
+        // Unchanged from the stored value: nothing to validate or write. A
+        // target date that has since passed must not block unrelated goal
+        // edits (new target weight, sessions, …) when the client echoes it.
+        parsedTargetDate = undefined;
+      } else {
+        const todayKey = localDayKey(new Date(), pickTimeZone(null, tzRow?.timezone));
+        if (isTargetDateNotInFuture(targetDate, todayKey)) {
+          return NextResponse.json({ error: TARGET_DATE_NOT_FUTURE_ERROR }, { status: 400 });
+        }
+        const r = parseTargetDate(targetDate, todayKey);
+        if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+        parsedTargetDate = r.value;
+      }
     }
   }
   let parsedWeeklySessions: number | null | undefined;

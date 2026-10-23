@@ -26,18 +26,18 @@ struct FuelStripView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(kcalRemaining.formatted()) kcal left")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .monospacedDigit()
                         .contentTransition(.numericText(value: Double(kcalRemaining)))
                     Text(showsProtein ? "Protein \(proteinHave)/\(proteinGoal)g · tap to log a meal" : "tap to log a meal")
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .monospacedDigit()
                         .contentTransition(.numericText())
                     if consumedSource == "healthkit" {
                         Text(HealthAttributionLabel.text(sourceName: consumedSourceName))
-                            .font(.system(size: 11))
+                            .scaledFont(size: 11)
                             .foregroundStyle(Theme.Colors.textTertiary)
                     }
                 }
@@ -45,7 +45,7 @@ struct FuelStripView: View {
                 Spacer(minLength: Theme.Spacing.sm)
 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.horizontal, Theme.Spacing.lg)

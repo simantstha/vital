@@ -65,16 +65,60 @@ enum WeeklyReviewLogic {
         return calendar.date(byAdding: .day, value: ahead, to: start) ?? start
     }
 
-    /// Trends row subtitle while there isn't enough data: "First review on
-    /// Mon Oct 12". Honest about timing — the review needs a few logged days
-    /// in the week before it, so the copy says so.
-    static func firstReviewText(now: Date, calendar: Calendar = .current) -> String {
+    /// Accounts younger than this many days (or with fewer logged days than
+    /// this) get the "First review …" / "To get started" onboarding copy; an
+    /// established account that is merely returning after a gap does not.
+    static let newAccountDays = 14
+
+    /// True while the account is genuinely new: created less than
+    /// `newAccountDays` ago (`createdAtISO`, profile `createdAt`), or — for an
+    /// older account — one that has logged fewer than `newAccountDays` days in
+    /// total (profile `stats.loggedDays`; it hasn't really started, so "to get
+    /// started" is still true). A veteran returning after a gap (old account,
+    /// plenty of logged days) is NOT new. With nothing known the long-standing
+    /// first-review copy stays, so a failed profile fetch never changes it.
+    static func isNewAccount(createdAtISO: String?, loggedDays: Int?, now: Date) -> Bool {
+        let created = createdAtISO.flatMap(parseISO)
+        if let created, now.timeIntervalSince(created) < Double(newAccountDays) * 86_400 { return true }
+        if let loggedDays { return loggedDays < newAccountDays }
+        return created == nil
+    }
+
+    private static func parseISO(_ iso: String) -> Date? {
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return withFractional.date(from: iso) ?? plain.date(from: iso)
+    }
+
+    /// "Mon Oct 12" — the next review day.
+    private static func nextReviewDayText(now: Date, calendar: Calendar) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.calendar = calendar
         f.timeZone = calendar.timeZone
         f.dateFormat = "EEE MMM d"
-        return "First review on \(f.string(from: nextMonday(after: now, calendar: calendar))) — log a few days before then"
+        return f.string(from: nextMonday(after: now, calendar: calendar))
+    }
+
+    /// Trends row subtitle while there isn't enough data: "First review on
+    /// Mon Oct 12". Honest about timing — the review needs a few logged days
+    /// in the week before it, so the copy says so.
+    static func firstReviewText(now: Date, calendar: Calendar = .current) -> String {
+        "First review on \(nextReviewDayText(now: now, calendar: calendar)) — log a few days before then"
+    }
+
+    /// The same row for an established account that is back after a gap:
+    /// "Your next review: Mon Oct 12 — log a few days before then" (it is not
+    /// their FIRST review).
+    static func nextReviewText(now: Date, calendar: Calendar = .current) -> String {
+        "Your next review: \(nextReviewDayText(now: now, calendar: calendar)) — log a few days before then"
+    }
+
+    /// The Trends row subtitle while there isn't enough data, by account age.
+    static func notEnoughDataSubtitle(isNewAccount: Bool, now: Date, calendar: Calendar = .current) -> String {
+        isNewAccount ? firstReviewText(now: now, calendar: calendar) : nextReviewText(now: now, calendar: calendar)
     }
 
     /// Week-scoped pill word. Deliberately NOT the goal-status vocabulary
@@ -106,7 +150,7 @@ enum WeeklyReviewLogic {
     /// Legacy mapping, used only for reviews without a `weekRating`.
     static func weekLabel(for verdict: GoalVerdict) -> String {
         switch verdict {
-        case .onTrack, .ahead, .progressing, .building: return "Good week"
+        case .onTrack, .ahead, .progressing, .building, .reached: return "Good week"
         case .behind, .holding:              return "Mixed week"
         case .stalled, .tooFast:             return "Tough week"
         case .needsTarget:                   return "Set a target"
@@ -154,14 +198,25 @@ enum WeeklyReviewLogic {
         var id: RowKind { kind }
     }
 
-    static func rows(_ review: WeeklyReviewDTO) -> [Row] {
+    /// Title of the next-step row when there isn't enough data: "To get started"
+    /// for a new account, "For your next review" for one that is just back.
+    static func nextStepTitle(notEnoughData: Bool, isNewAccount: Bool) -> String {
+        guard notEnoughData else { return "Next week" }
+        return isNewAccount ? "To get started" : "For your next review"
+    }
+
+    static func rows(_ review: WeeklyReviewDTO, isNewAccount: Bool = true) -> [Row] {
         var out: [Row] = []
         if !isNotEnoughData(review) {
             if let win = nonEmpty(review.win) { out.append(Row(kind: .win, title: "Win", text: win)) }
             if let slip = nonEmpty(review.slip) { out.append(Row(kind: .slip, title: "Slip", text: slip)) }
         }
         if let next = nonEmpty(review.nextWeek) {
-            out.append(Row(kind: .next, title: isNotEnoughData(review) ? "To get started" : "Next week", text: next))
+            out.append(Row(
+                kind: .next,
+                title: nextStepTitle(notEnoughData: isNotEnoughData(review), isNewAccount: isNewAccount),
+                text: next
+            ))
         }
         return out
     }
@@ -180,6 +235,12 @@ enum WeeklyReviewLogic {
         case .slip: return Theme.Colors.caution
         case .next: return Theme.Colors.accentContent
         }
+    }
+
+    /// What VoiceOver adds for a tile's colour-only tone: "good" / "watch";
+    /// `nil` for neutral (nothing to say).
+    static func accessibilityToneWord(for tone: GoalReasonTone) -> String? {
+        GoalProgressLogic.accessibilityToneWord(for: tone)
     }
 
     /// One VoiceOver phrase per stat tile: "Days in budget, 5 of 7, 6 days logged".

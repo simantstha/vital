@@ -31,12 +31,12 @@ struct SleepGoalView: View {
 
                     if let errorMessage {
                         Text(errorMessage)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.alert)
                     }
 
                     Text("Lights out drives the last item on your Today plan.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -72,8 +72,7 @@ struct SleepGoalView: View {
     private var nightlyGoalRow: some View {
         HStack(spacing: Theme.Spacing.md) {
             Text("Nightly goal")
-                .font(Theme.Typography.bodyMedium)
-                .fontWeight(.medium)
+                .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                 .foregroundStyle(Theme.Colors.textPrimary)
 
             Spacer(minLength: Theme.Spacing.sm)
@@ -94,7 +93,7 @@ struct SleepGoalView: View {
             setSleepGoal(minutes)
         } label: {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(selected ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.xs + 2)
@@ -108,8 +107,7 @@ struct SleepGoalView: View {
     private var lightsOutRow: some View {
         HStack(spacing: Theme.Spacing.md) {
             Text("Lights out")
-                .font(Theme.Typography.bodyMedium)
-                .fontWeight(.medium)
+                .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                 .foregroundStyle(Theme.Colors.textPrimary)
 
             Spacer(minLength: Theme.Spacing.sm)

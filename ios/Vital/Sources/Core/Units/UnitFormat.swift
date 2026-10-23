@@ -59,6 +59,19 @@ enum UnitFormat {
         return "\(sign)\(magnitude)/wk"
     }
 
+    /// A weekly-rate RANGE in the user's unit, unsigned: "0.37–0.59 kg/wk" (U+2013 between the two
+    /// numbers, a non-breaking space before the unit). Two decimals with trailing zeros dropped — the
+    /// server's own wording (`paceRangeReason` in `lib/goalProgress.ts`: "Down 0.37–0.59 kg/wk"), so
+    /// the app and the card print the same figures. The caller passes magnitudes (the slower pace
+    /// first) and says the direction ("Down", "↓"): a range only ever stands for a loss.
+    static func weightRateRange(slowKgPerWeek: Double, fastKgPerWeek: Double, _ system: UnitSystem) -> String {
+        func shown(_ kgPerWeek: Double) -> String {
+            let value = abs(system == .metric ? kgPerWeek : UnitConvert.kgToLb(kgPerWeek))
+            return formatNumber((value * 100).rounded() / 100, maximumFractionDigits: 2)
+        }
+        return "\(shown(slowKgPerWeek))\u{2013}\(shown(fastKgPerWeek))\(nbsp)\(system.weightUnit)/wk"
+    }
+
     /// Rounds to 1 decimal place, normalizing `-0.0` to `0.0` first — Swift's
     /// `.rounded()` preserves the sign of a value that rounds to zero (e.g.
     /// `(-0.4).rounded()` is `-0.0`, not `0.0`), and `-0.0 < 0` is `false`

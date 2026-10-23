@@ -161,4 +161,185 @@ final class TrendsWeightCardLogicTests: XCTestCase {
         XCTAssertNotNil(laterDate)
         XCTAssertLessThan(earlierDate!, laterDate!)
     }
+
+    // MARK: - ratePill while the server reads the scale (wave 19)
+
+    func testRatePillIsDroppedWhileTheServerWithholdsAPace() {
+        let days = [WeightTrendDayDTO(day: "2026-09-08", rawKg: 82, trendKg: 82)]
+        XCTAssertNotNil(TrendsWeightCardLogic.ratePill(trend: trend(days: days), entries: sevenDayEntries, system: .metric))
+        XCTAssertNil(TrendsWeightCardLogic.ratePill(
+            trend: trend(days: days), entries: sevenDayEntries, system: .metric, withholdsLocalRate: true
+        ))
+        // Defaulted: an older server (no weightRead) keeps the pill exactly as before.
+        XCTAssertEqual(
+            TrendsWeightCardLogic.ratePill(trend: trend(days: days), entries: sevenDayEntries, system: .metric, withholdsLocalRate: false),
+            TrendsWeightCardLogic.ratePill(trend: trend(days: days), entries: sevenDayEntries, system: .metric)
+        )
+    }
+
+    // MARK: - The big number on a wave 21 weight-loss goal (the goal's progress weight)
+
+    private let trendDays = [
+        WeightTrendDayDTO(day: "2026-09-01", rawKg: 83.5, trendKg: 83.4),
+        WeightTrendDayDTO(day: "2026-09-08", rawKg: 82.1, trendKg: 82.0),
+    ]
+
+    /// Without a progress weight (an older server, other goals) the big number is the trend's newest point, exactly as before.
+    func testHeadlineWeightIsTheTrendWithoutAProgressWeight() {
+        let headline = TrendsWeightCardLogic.headlineWeight(trend: trend(days: trendDays), system: .metric)
+        XCTAssertEqual(headline, TrendsWeightCardLogic.HeadlineWeight(magnitude: "82", unit: "kg", label: nil))
+        XCTAssertEqual(
+            TrendsWeightCardLogic.headlineWeight(trend: trend(days: trendDays), progressWeight: nil, system: .imperial),
+            TrendsWeightCardLogic.HeadlineWeight(magnitude: "181", unit: "lb", label: nil)
+        )
+        XCTAssertEqual(TrendsWeightCardLogic.spokenHeadline(trend: trend(days: trendDays), system: .metric), "Trend 82\u{00A0}kg")
+    }
+
+    /// With the goal's progress weight the big number is that weight and carries its label; the trend line is not touched.
+    func testHeadlineWeightIsTheGoalsProgressWeightWithItsLabel() {
+        for label in ["This week", "Weekly avg", "Latest"] {
+            let weight = GoalProgressLogic.ProgressWeight(kg: 82.3, label: label)
+            XCTAssertEqual(
+                TrendsWeightCardLogic.headlineWeight(trend: trend(days: trendDays), progressWeight: weight, system: .metric),
+                TrendsWeightCardLogic.HeadlineWeight(magnitude: "82.3", unit: "kg", label: label)
+            )
+            XCTAssertEqual(
+                TrendsWeightCardLogic.spokenHeadline(trend: trend(days: trendDays), progressWeight: weight, system: .metric),
+                "\(label) 82.3\u{00A0}kg"
+            )
+        }
+        // Pounds: 82.3 kg = 181 lb.
+        XCTAssertEqual(
+            TrendsWeightCardLogic.headlineWeight(
+                trend: trend(days: trendDays), progressWeight: GoalProgressLogic.ProgressWeight(kg: 82.3, label: "This week"),
+                system: .imperial
+            ),
+            TrendsWeightCardLogic.HeadlineWeight(magnitude: "181", unit: "lb", label: "This week")
+        )
+        // The rate pill and the subline still come from the trend (the chart), not from the progress weight.
+        XCTAssertEqual(
+            TrendsWeightCardLogic.ratePill(trend: trend(days: trendDays), entries: sevenDayEntries, system: .metric)?.text,
+            "↓\u{00A0}0.6\u{00A0}kg/wk"
+        )
+    }
+
+    /// The same honesty gate as before: no established trend, no number — a progress weight does not bypass it.
+    func testHeadlineWeightStaysHiddenUntilTheTrendIsEstablished() {
+        let weight = GoalProgressLogic.ProgressWeight(kg: 82.3, label: "This week")
+        XCTAssertNil(TrendsWeightCardLogic.headlineWeight(trend: trend(established: false, days: trendDays), progressWeight: weight, system: .metric))
+        XCTAssertNil(TrendsWeightCardLogic.headlineWeight(trend: trend(days: []), progressWeight: weight, system: .metric))
+        XCTAssertNil(TrendsWeightCardLogic.headlineWeight(trend: nil, progressWeight: weight, system: .metric))
+        // ...and the spoken headline falls back to the trend's own placeholder.
+        XCTAssertEqual(
+            TrendsWeightCardLogic.spokenHeadline(trend: nil, progressWeight: weight, system: .metric),
+            WeightHeroLogic.trendPlaceholderText
+        )
+    }
+
+    /// End to end from a goal payload: the card's number is the goal's, and an older server's is the trend.
+    func testCardNumberFollowsTheGoalPayload() {
+        func headline(_ trendKg: Double?) -> TrendsWeightCardLogic.HeadlineWeight? {
+            let goal = GoalProgressDTO(
+                goal: "weight_loss", current: .init(weightKg: 82.3, startWeightKg: 83.7, trendKg: trendKg), verdict: .onTrack,
+                lastWeighInDaysAgo: 0, weightRead: GoalProgressDTO.WeightRead(state: .pace, weekMeanKg: 82.3)
+            )
+            return TrendsWeightCardLogic.headlineWeight(
+                trend: trend(days: trendDays), progressWeight: GoalProgressLogic.progressWeight(goal), system: .metric
+            )
+        }
+        XCTAssertEqual(headline(82), TrendsWeightCardLogic.HeadlineWeight(magnitude: "82.3", unit: "kg", label: "This week"))
+        XCTAssertEqual(headline(nil), TrendsWeightCardLogic.HeadlineWeight(magnitude: "82", unit: "kg", label: nil))
+    }
+
+    // MARK: - ratePill while the goal card shows a pace range (wave 22w)
+
+    private let paceRange = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.37, fastKgPerWeek: 0.59)
+    private let rangeDash = "\u{2060}\u{2013}\u{2060}"
+    private let oneDay = [WeightTrendDayDTO(day: "2026-09-08", rawKg: 82, trendKg: 82)]
+
+    /// On an on-pace week the goal card says "Down 0.37–0.59 kg/wk": the pill says the same range (a loss, so ↓ and
+    /// `.positive`) instead of its own single 7-day rate beside it.
+    func testRatePillSaysTheGoalCardsRangeNotItsOwnSingleRate() {
+        let pill = TrendsWeightCardLogic.ratePill(
+            trend: trend(delta7d: -0.8, days: oneDay), entries: sevenDayEntries, system: .metric, paceRange: paceRange
+        )
+        XCTAssertEqual(pill?.text, "↓\u{00A0}0.37\(rangeDash)0.59\u{00A0}kg/wk")
+        XCTAssertEqual(pill?.tone, .positive)
+        XCTAssertFalse(pill?.text.contains("0.8") ?? true, "the card's own 7-day rate must not sneak in beside the range")
+        let imperial = TrendsWeightCardLogic.ratePill(
+            trend: trend(delta7d: -0.8, days: oneDay), entries: sevenDayEntries, system: .imperial, paceRange: paceRange
+        )
+        XCTAssertEqual(imperial?.text, "↓\u{00A0}0.82\(rangeDash)1.3\u{00A0}lb/wk")
+    }
+
+    /// The range sits behind the same honesty gates as the single rate, and the server's own read still silences the pill.
+    func testRatePillRangeKeepsTheSameGates() {
+        XCTAssertNil(TrendsWeightCardLogic.ratePill(
+            trend: trend(established: false, days: []), entries: sevenDayEntries, system: .metric, paceRange: paceRange
+        ))
+        XCTAssertNil(TrendsWeightCardLogic.ratePill(
+            trend: trend(days: oneDay), entries: [entry("2026-09-05", 83), entry("2026-09-08", 82)], system: .metric, paceRange: paceRange
+        ))
+        XCTAssertNil(TrendsWeightCardLogic.ratePill(
+            trend: trend(days: oneDay), entries: sevenDayEntries, system: .metric, withholdsLocalRate: true, paceRange: paceRange
+        ))
+        XCTAssertNil(TrendsWeightCardLogic.ratePill(
+            trend: nil, entries: sevenDayEntries, system: .metric, paceRange: paceRange
+        ))
+    }
+
+    /// The range is the server's, so the trend not carrying a 7-day delta does not hide it.
+    func testRatePillRangeShowsWithoutATrendDelta() {
+        let pill = TrendsWeightCardLogic.ratePill(
+            trend: trend(delta7d: nil, days: oneDay), entries: sevenDayEntries, system: .metric, paceRange: paceRange
+        )
+        XCTAssertEqual(pill?.text, "↓\u{00A0}0.37\(rangeDash)0.59\u{00A0}kg/wk")
+        XCTAssertNil(TrendsWeightCardLogic.ratePill(trend: trend(delta7d: nil, days: oneDay), entries: sevenDayEntries, system: .metric))
+    }
+
+    /// An older server sends no `earlierPace`, so no range: the pill is exactly what it was.
+    func testRatePillWithoutARangeIsExactlyAsBefore() {
+        let before = TrendsWeightCardLogic.ratePill(trend: trend(delta7d: -0.8, days: oneDay), entries: sevenDayEntries, system: .metric)
+        XCTAssertEqual(before?.text, "↓\u{00A0}0.8\u{00A0}kg/wk")
+        XCTAssertEqual(
+            TrendsWeightCardLogic.ratePill(
+                trend: trend(delta7d: -0.8, days: oneDay), entries: sevenDayEntries, system: .metric, paceRange: nil
+            ),
+            before
+        )
+        // End to end from a payload: a plan with two paces gives the range, one without gives nothing.
+        func range(earlier: Double?) -> GoalProgressLogic.PaceRange? {
+            GoalProgressLogic.paceRange(GoalProgressDTO(
+                goal: "weight_loss", ratePerWeek: .init(kg: -0.59), verdict: .onTrack,
+                weightRead: GoalProgressDTO.WeightRead(state: .pace, plan: GoalProgressDTO.WeightRead.Plan(
+                    state: .pace,
+                    pace: GoalProgressDTO.WeightRead.Plan.Pace(kgPerWeek: -0.59),
+                    earlierPace: earlier.map { GoalProgressDTO.WeightRead.Plan.Pace(kgPerWeek: $0) }
+                ))
+            ))
+        }
+        XCTAssertEqual(
+            TrendsWeightCardLogic.ratePill(
+                trend: trend(delta7d: -0.8, days: oneDay), entries: sevenDayEntries, system: .metric, paceRange: range(earlier: -0.37)
+            )?.text,
+            "↓\u{00A0}0.37\(rangeDash)0.59\u{00A0}kg/wk"
+        )
+        XCTAssertEqual(
+            TrendsWeightCardLogic.ratePill(
+                trend: trend(delta7d: -0.8, days: oneDay), entries: sevenDayEntries, system: .metric, paceRange: range(earlier: nil)
+            ),
+            before
+        )
+    }
+
+    /// The range pill glues its arrow, numbers and unit like the single-rate pill: no plain space inside it.
+    func testRangePillHasNoBreakableSpace() throws {
+        for system in [UnitSystem.metric, .imperial] {
+            let pill = try XCTUnwrap(TrendsWeightCardLogic.ratePill(
+                trend: trend(days: oneDay), entries: sevenDayEntries, system: system, paceRange: paceRange
+            ))
+            assertNoBreakableUnitSpace(pill.text)
+            XCTAssertFalse(pill.text.contains(" "), "plain space left in \(pill.text.debugDescription)")
+        }
+    }
 }
