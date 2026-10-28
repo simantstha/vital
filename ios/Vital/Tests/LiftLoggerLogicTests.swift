@@ -418,23 +418,25 @@ final class LiftLoggerLogicTests: XCTestCase {
         XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 185, key: "bench press", system: .imperial), 190)
         XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 187, key: "bench press", system: .imperial), 190)
         XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 225, key: "squat", system: .imperial), 230)
-        // An off-grid load rounds DOWN to the grid before the step: 193 lb -> 190 -> 195 (+2), never 195 -> 200 (+7); 81.5 kg -> 80 -> 82.5.
-        XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 193, key: "bench press", system: .imperial), 195)
-        XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 243, key: "squat", system: .imperial), 245)
-        XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 81.5, key: "bench press", system: .metric), 82.5)
+        // An off-grid load snaps to the NEAREST grid value before the step: 193 lb -> 195 -> 200 (+7), never 190 -> 195 (+2); 81.5 kg -> 82.5 -> 85 (+3.5).
+        XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 193, key: "bench press", system: .imperial), 200)
+        XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 243, key: "squat", system: .imperial), 250)
+        XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 259, key: "squat", system: .imperial), 265)
+        XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 81.5, key: "bench press", system: .metric), 85)
         // Capped at the logger's maximum, never below the last load.
         XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 1000, key: "deadlift", system: .metric), 1000)
         XCTAssertEqual(LiftLoggerLogic.nextLoad(after: 2200, key: "deadlift", system: .imperial), 2200)
     }
 
-    /// The step starts on the 2.5 kg / 5 lb grid BELOW the logged load and adds exactly
-    /// one step, as the server's `nextWorkingLoad` (`start`, `to`, `approx`): "bench ~190 → 195 lb".
-    /// Server fixtures: 87.5 kg = 193 lb -> ~190 -> 195; 110 kg = 243 lb -> ~240 -> 245;
-    /// 80 kg = 176 lb -> ~175 -> 180. "~" whenever the start moved from the logged load.
+    /// The step starts on the NEAREST 2.5 kg / 5 lb grid value to the logged load and adds exactly
+    /// one step, as the server's `nextWorkingLoad` (`start`, `to`, `approx`): "bench ~195 → 200 lb".
+    /// Server fixtures: 87.5 kg = 193 lb -> ~195 -> 200; 110 kg = 243 lb -> ~245 -> 250;
+    /// 117.5 kg = 259 lb -> ~260 -> 265; 80 kg = 176 lb -> ~175 -> 180. "~" whenever the start moved
+    /// from the logged load.
     func testNextLoadStartsOnTheGridAndStepsExactlyOnce() {
         // (last load, start, next, "~")
         let pounds: [(Double, Double, Double, Bool)] = [
-            (193, 190, 195, true), (243, 240, 245, true), (287, 285, 290, true), (182, 180, 185, true),
+            (193, 195, 200, true), (243, 245, 250, true), (259, 260, 265, true), (287, 285, 290, true), (182, 180, 185, true),
             (176, 175, 180, true), (185, 185, 190, false), (225, 225, 230, false),
         ]
         for (last, start, next, approximate) in pounds {
@@ -443,7 +445,7 @@ final class LiftLoggerLogicTests: XCTestCase {
             XCTAssertEqual(LiftLoggerLogic.isNextLoadStartApproximate(after: last, key: "bench press", system: .imperial), approximate, "\(last) lb")
         }
         let kilos: [(Double, Double, Double, Bool)] = [
-            (110, 110, 112.5, false), (80.5, 80, 82.5, true), (81, 80, 82.5, true), (81.5, 80, 82.5, true), (82, 80, 82.5, true),
+            (110, 110, 112.5, false), (80.5, 80, 82.5, true), (81, 80, 82.5, true), (81.5, 82.5, 85, true), (82, 82.5, 85, true),
             (101, 100, 102.5, true),
         ]
         for (last, start, next, approximate) in kilos {
@@ -457,16 +459,18 @@ final class LiftLoggerLogicTests: XCTestCase {
             let start = LiftLoggerLogic.nextLoadStart(after: kg, key: "deadlift", system: .metric)
             XCTAssertEqual(start.truncatingRemainder(dividingBy: 2.5), 0, accuracy: 0.0001, "\(kg) kg")
             XCTAssertEqual(LiftLoggerLogic.nextLoad(after: kg, key: "deadlift", system: .metric) - start, 2.5, accuracy: 0.0001, "\(kg) kg")
-            // Rounded DOWN: the real step from the load that was lifted is never more than one step.
-            XCTAssertLessThanOrEqual(start, kg + 0.0001, "\(kg) kg")
-            XCTAssertLessThanOrEqual(LiftLoggerLogic.nextLoad(after: kg, key: "deadlift", system: .metric) - kg, 2.5 + 0.0001, "\(kg) kg")
+            // The NEAREST grid value: the real step from the load that was lifted is half to one-and-a-half steps (1.25-3.75 kg).
+            XCTAssertLessThanOrEqual(abs(start - kg), 1.25 + 0.0001, "\(kg) kg")
+            XCTAssertGreaterThanOrEqual(LiftLoggerLogic.nextLoad(after: kg, key: "deadlift", system: .metric) - kg, 1.25 - 0.0001, "\(kg) kg")
+            XCTAssertLessThanOrEqual(LiftLoggerLogic.nextLoad(after: kg, key: "deadlift", system: .metric) - kg, 3.75 + 0.0001, "\(kg) kg")
         }
         for lb in 40...600 {
             let start = LiftLoggerLogic.nextLoadStart(after: Double(lb), key: "deadlift", system: .imperial)
             XCTAssertEqual(start.truncatingRemainder(dividingBy: 5), 0, accuracy: 0.0001, "\(lb) lb")
             XCTAssertEqual(LiftLoggerLogic.nextLoad(after: Double(lb), key: "deadlift", system: .imperial) - start, 5, accuracy: 0.0001, "\(lb) lb")
-            XCTAssertLessThanOrEqual(start, Double(lb) + 0.0001, "\(lb) lb")
-            XCTAssertLessThanOrEqual(LiftLoggerLogic.nextLoad(after: Double(lb), key: "deadlift", system: .imperial) - Double(lb), 5 + 0.0001, "\(lb) lb")
+            XCTAssertLessThanOrEqual(abs(start - Double(lb)), 2.5 + 0.0001, "\(lb) lb")
+            XCTAssertGreaterThanOrEqual(LiftLoggerLogic.nextLoad(after: Double(lb), key: "deadlift", system: .imperial) - Double(lb), 2.5 - 0.0001, "\(lb) lb")
+            XCTAssertLessThanOrEqual(LiftLoggerLogic.nextLoad(after: Double(lb), key: "deadlift", system: .imperial) - Double(lb), 7.5 + 0.0001, "\(lb) lb")
         }
         // At the logger's maximum the step is capped, never below the last load.
         XCTAssertEqual(LiftLoggerLogic.nextLoadStart(after: 1000, key: "deadlift", system: .metric), 1000)
@@ -509,10 +513,10 @@ final class LiftLoggerLogicTests: XCTestCase {
         XCTAssertEqual(legPress.suggestedLoad, 182.5)
     }
 
-    /// A load that is off the grid (80 kg is on it, 81 kg and 101 kg are not) rounds down to
-    /// the 2.5 kg grid and steps once, exactly like the server's "Bench 80 → 82.5 kg" / "~80 → 82.5 kg".
+    /// A load that is off the grid (80 kg is on it, 81 kg, 81.5 kg and 101 kg are not) snaps to the
+    /// NEAREST 2.5 kg grid value and steps once, exactly like the server's "Bench 80 → 82.5 kg" / "~80 → 82.5 kg" / "~82.5 → 85 kg".
     func testHintRoundsAnOffGridLoadOntoTheStepGrid() throws {
-        for (last, expected) in [(80.0, 82.5), (81.0, 82.5), (101.0, 102.5)] {
+        for (last, expected) in [(80.0, 82.5), (81.0, 82.5), (81.5, 85), (101.0, 102.5)] {
             let hint = try XCTUnwrap(
                 LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: last), key: "bench press", system: .metric)
             )
@@ -542,13 +546,13 @@ final class LiftLoggerLogicTests: XCTestCase {
             )
             XCTAssertEqual(hint.suggestedLoad, 190, "bench \(last) lb")
         }
-        // A load logged off the 5 lb grid: the caption keeps what was logged, the try is one step from the grid BELOW it (193 -> 195, +2, as "bench ~190 → 195 lb"; it used to be 200, +7).
+        // A load logged off the 5 lb grid: the caption keeps what was logged, the try is one step from the NEAREST grid value (193 -> 195 -> 200, +7, as "bench ~195 → 200 lb"; rounding down gave 195, a +2 that was no step).
         let offGrid = try XCTUnwrap(
             LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 193), key: "bench press", system: .imperial)
         )
         XCTAssertEqual(offGrid.lastLoad, 193)
-        XCTAssertEqual(offGrid.suggestedLoad, 195)
-        XCTAssertEqual(LiftLoggerLogic.progressionText(offGrid, system: .imperial), "Last 3×5 @ 193\u{00A0}lb · try 195\u{00A0}lb")
+        XCTAssertEqual(offGrid.suggestedLoad, 200)
+        XCTAssertEqual(LiftLoggerLogic.progressionText(offGrid, system: .imperial), "Last 3×5 @ 193\u{00A0}lb · try 200\u{00A0}lb")
     }
 
     func testHintSaysRepeatWhenAnySetMissedItsReps() throws {

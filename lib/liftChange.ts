@@ -584,7 +584,7 @@ export function isLowerBodyCompound(exerciseKey: string): boolean {
 export interface NextLoad {
   /** The working load as logged, in display units (rounded to 0.5 kg / 1 lb): what a "hold" keeps. */
   from: number;
-  /** The load the step starts from: `from` rounded DOWN to the 2.5 kg / 5 lb grid, so the step is exactly one plate step and never more than one above `from`. */
+  /** The load the step starts from: `from` snapped to the NEAREST 2.5 kg / 5 lb grid value, so the step is exactly one plate step and the real step from `from` is half to one-and-a-half grid steps (2.5-7.5 lb, 1.25-3.75 kg). */
   start: number;
   /** The load to try next: `start` plus one step, always on the grid (capped at the logger's maximum). */
   to: number;
@@ -602,13 +602,15 @@ const MAX_LOAD_LB = 2200;
  * on the 2.5 kg / 5 lb grid, so every step is loadable with standard plates (a
  * 1.25 kg step is 0.625 kg a side — "bench 80 → 81.5 kg" needs 0.75 kg plates
  * nobody has). The load is first read as logged (`from`, to 0.5 kg / 1 lb), then
- * rounded DOWN to the grid (`start`, wave 23s) and stepped exactly once (`to` =
- * `start` + step): "bench ~190 → 195 lb" for a bench logged at 193 lb, never
- * "193 → 200" (a +7 that is no step) or "176 → 180" (a +4). Rounding down keeps
- * the real step from what she lifted at most one step (193 lb -> 195 is +2; the
- * nearest grid point gave 195 -> 200, a +7), and `approx` marks EVERY start that
- * moved from the logged load. `to` is capped at the logger's maximum and never
- * below `from`. `topLoadKg` is the lift's top working set.
+ * snapped to the NEAREST grid value (`start`, wave 24s) and stepped exactly once
+ * (`to` = `start` + step): "bench ~195 → 200 lb" for a bench logged at 193 lb,
+ * never "193 → 200" (a +7 that is no step) or "176 → 180" (a +4). Wave 23s
+ * rounded DOWN, which printed "Squat ~255 → 260 lb" after a 259 lb set (+1) and
+ * "bench ~190 → 195" after 193 (+2), steps that were no progression; the nearest
+ * value makes the real step from the logged load 2.5-7.5 lb (1.25-3.75 kg).
+ * `approx` marks EVERY start that moved from the logged load. `to` is capped at
+ * the logger's maximum and never below `from`. `topLoadKg` is the lift's top
+ * working set.
  * Mirrors LiftLoggerLogic.nextLoad (iOS), which returns `to`.
  */
 export function nextWorkingLoad(topLoadKg: number, _exerciseKey: string, imperial: boolean): NextLoad {
@@ -616,7 +618,7 @@ export function nextWorkingLoad(topLoadKg: number, _exerciseKey: string, imperia
   const step = imperial ? 5 : 2.5;
   const plate = imperial ? 1 : 0.5;
   const from = Math.round((imperial ? topLoadKg * LB_PER_KG : topLoadKg) / plate) * plate;
-  const start = Math.floor(from / step + 1e-9) * step;
+  const start = Math.round(from / step + 1e-9) * step;
   const to = Math.min(start + step, imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
   return { from, start, to: Math.max(to, from), unit, approx: Math.abs(start - from) > 1e-9 };
 }
