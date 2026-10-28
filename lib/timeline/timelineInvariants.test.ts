@@ -1305,9 +1305,9 @@ invariant(LIFTERS, 'a muscle review never asks to make up, catch up or lock in t
 });
 
 // The same week, the other way round: a muscle week with 1..target-1 sessions says "Back to N this week" + "don't make up", ends with
-// "starting today" (the review is read on its Monday, unless she has lifted that day) and cues the planned load of every main lift she did NOT train that week: the
-// step the previous week's cue already gave ("Squat 112.5 kg"), taken from the scenario's own rows so a wrong load cannot excuse itself.
-invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week", not to make up the missed ones, and repeats the planned load of each lift skipped', (snaps, name) => {
+// "starting today" (the review is read on its Monday, unless she has lifted that day) and cues the LAST load of every main lift she did NOT train that week
+// (wave 24s: "Squat 110 kg (your last load)", not the step she never lifted), taken from the scenario's own rows so a wrong load cannot excuse itself.
+invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week", not to make up the missed ones, and repeats the last load of each lift skipped', (snaps, name) => {
   const scn = buildScenario(name);
   const target = scn.user.weeklySessions as number;
   const out: Violation[] = [];
@@ -1331,9 +1331,8 @@ invariant(['lifter_short_week'], 'a short muscle week says "Back to N this week"
       if (topLoad(ex, weekStart, addDays(weekStart, 6)) != null) continue; // trained that week: the normal next-load rule
       const prev = topLoad(ex, prevStart, addDays(prevStart, 6));
       if (prev == null) continue;
-      const planned = prev + 2.5;
       const named = new RegExp(`\\b${ex}\\b[^,.;]*?(\\d+(?:\\.\\d+)?)\\s?kg`, 'i').exec(text);
-      if (!named || Number(named[1]) !== planned) out.push({ snap, detail: `${ex} was not trained and its planned step is ${planned} kg, but review.nextWeek says: "${visible(r.nextWeek)}"` });
+      if (!named || Number(named[1]) !== prev) out.push({ snap, detail: `${ex} was not trained and its last load is ${prev} kg, but review.nextWeek says: "${visible(r.nextWeek)}"` });
     }
   }
   assert.ok(checked > 0, `${name}: no short muscle week was reviewed, so this invariant checked nothing`);
@@ -3925,5 +3924,37 @@ invariant(LIFTERS, 'P3-4: a printed "A → B" load step is a real step of half t
     }
   }
   assert.ok(pairs > 0, `${name}: no "A → B" load step was printed, so this invariant checked nothing`);
+  return out;
+});
+
+/** The best top working load (kg) of `exercise` in the 4 Mon-Sun weeks before `monday`; null when none. */
+function priorBestKg24s(name: ScenarioName, exercise: string, monday: string): number | null {
+  const tops = [1, 2, 3, 4].flatMap(back => {
+    const kg = weekTopKg24s(name, exercise, addDays(monday, -7 * back));
+    return kg == null ? [] : [kg];
+  });
+  return tops.length > 0 ? Math.max(...tops) : null;
+}
+
+// P3-7. After a short week the lifts she did not lift heavy repeat the LAST load she completed, then resume +2.5 the week after ("Squat 112.5 kg and
+// deadlift 132.5 kg (your last loads)"). The wave 23s copy ("Squat 115 kg and deadlift 135 kg (the steps you skipped)") prescribed a 2.5 kg jump after
+// 14 days without a heavy squat (lifter_obedient, day 49).
+invariant(['lifter_short_week', 'lifter_obedient'], 'P3-7: a short-week review names the last load she lifted for the lifts she did not lift heavy, never a step she skipped', (snaps, name) => {
+  const out: Violation[] = [];
+  let loads = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done === 0) continue;
+    const text = plain(r.nextWeek);
+    if (/you skipped/.test(text)) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}" still prescribes "the step(s) you skipped"` });
+    for (const m of text.matchAll(/\b(squat|bench|deadlift)\s+(\d+(?:\.\d+)?)\s?(kg|lb)\b/gi)) {
+      const best = priorBestKg24s(name, LIFT_EXERCISE_24S[m[1].toLowerCase()], r.weekStart);
+      if (best == null) continue;
+      loads++;
+      const last = m[3] === 'lb' ? Math.round(best * LB_PER_KG_24S) : Math.round(best * 2) / 2;
+      if (Number(m[2]) !== last) out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}": ${m[0]} is not the last load she lifted (${last} ${m[3]})` });
+    }
+  }
+  assert.ok(loads > 0, `${name}: no short-week review named a plain load, so this invariant checked nothing`);
   return out;
 });

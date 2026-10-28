@@ -14,7 +14,7 @@ import {
   recoveryWeek,
   weekStepOrGoalKm,
 } from '../enduranceProgression';
-import { nextLoadCues, shortWeekLoadCues } from '../liftChange';
+import { nextLoadCues, shortWeekLoadCues, shortWeekLoadToLift } from '../liftChange';
 import { summarizeProgression } from '../progressionMath';
 import { computeProgressFor } from './engine';
 import { obedientDayByDay } from './obedient';
@@ -502,7 +502,7 @@ export const OBEDIENT_SHORT_WEEK = 7;
 /**
  * Wave 23s (G-S): the lifter who DOES what the app says. Each Monday she reads last week the way the weekly review does and lifts
  * exactly the loads it prescribes for the coming week: the normal next-load step after a full week (`nextLoadCues`), and after a
- * short week the skipped lifts' planned step repeated ("Squat 112.5 kg and deadlift 127.5 kg (the steps you skipped), bench 87.5 -> 90 kg",
+ * short week the lifts she did not lift heavy repeat their LAST load ("Squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg (your last loads)",
  * `shortWeekLoadCues`). Same four sessions a week as `lifter` (Mon squat + bench, Tue deadlift, Thu bench volume, Sat light squat +
  * deadlift), no deload, no weeks off - and the one bad week (week 7: only Thursday, an illness). Deterministic: the loads are a pure
  * function of the sets so far. The timeline invariants check that the loads she lifts ARE the loads the reviews print.
@@ -536,7 +536,7 @@ export function lifterObedient(): Scenario {
     if (done >= 4) {
       for (const c of nextLoadCues(progression, reviewedWeek, opts)) next[c.key] = c.hold ? c.load.from : c.load.to;
     } else {
-      for (const c of shortWeekLoadCues(progression, reviewedWeek, opts)) next[c.key] = c.kind === 'hold' ? c.load.from : c.load.to;
+      for (const c of shortWeekLoadCues(progression, reviewedWeek, opts)) next[c.key] = shortWeekLoadToLift(c);
     }
     return next;
   };
