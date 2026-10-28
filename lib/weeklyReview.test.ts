@@ -1925,7 +1925,7 @@ test('a muscle week 1-3 sessions short is never made up: "Back to 4 this week �
 /** Three steady weeks (09-07 .. 09-21) of one lift at `top` kg, 2 sessions a week. */
 const steadyAt = (top: number): Array<ReturnType<typeof lwk>> => ['2026-09-07', '2026-09-14', '2026-09-21'].map(w => lwk(w, top * 1.2, top));
 
-test('a short muscle week cues the loads: a lift not trained repeats its planned step, a light volume day does too, a trained lift follows the normal rule', () => {
+test('a short muscle week cues the loads: a lift not trained repeats its LAST load (not a step it never lifted), a light volume day does too, a trained lift follows the normal rule (wave 24s)', () => {
   // 1 of 4 sessions: only a light bench volume day (75 kg against an 87.5 kg best). Squat and deadlift were skipped.
   const skipped = computeWeeklyReview(liftReview({
     trainingDays: [WEEK[3]], strengthDays: [WEEK[3]],
@@ -1934,20 +1934,20 @@ test('a short muscle week cues the loads: a lift not trained repeats its planned
   assert.deepEqual(skipped.weekGap, { kind: 'sessions', done: 1, target: 4 });
   assert.equal(
     skipped.nextWeek,
-    "Back to 4 this week — don't make up the missed ones. Squat 112.5 kg and deadlift 127.5 kg (the steps you skipped), bench 87.5 → 90 kg, starting today.",
+    "Back to 4 this week — don't make up the missed ones. Squat 110 kg, bench 87.5 kg and deadlift 125 kg (your last loads), starting today.",
   );
-  // Pounds: the skipped targets and the arrow pair are on the 5 lb grid (110 kg -> 250 lb, 125 kg -> 280 lb, 87.5 kg -> "~195 -> 200", the nearest grid value; wave 24s).
+  // Pounds: the last loads as logged (110 kg -> 243 lb, 87.5 kg -> 193 lb, 125 kg -> 276 lb).
   const lb = computeWeeklyReview(liftReview({
     unitSystem: 'imperial', trainingDays: [WEEK[3]], strengthDays: [WEEK[3]],
     progression: { squat: steadyAt(110), 'bench press': [...steadyAt(87.5), lwk(WEEK_START, 100, 75, 1, 1800)], deadlift: steadyAt(125) },
   }));
-  assert.equal(lb.nextWeek, "Back to 4 this week — don't make up the missed ones. Squat 250 lb and deadlift 280 lb (the steps you skipped), bench ~195 → 200 lb, starting today.");
+  assert.equal(lb.nextWeek, "Back to 4 this week — don't make up the missed ones. Squat 243 lb, bench 193 lb and deadlift 276 lb (your last loads), starting today.");
   // The squat WAS trained at its working load (115 kg, above last week's 110): the normal rule, 115 → 117.5; the deadlift alone is skipped.
   const trained = computeWeeklyReview(liftReview({
     trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]],
     progression: { squat: [...steadyAt(110), lwk(WEEK_START, 138, 115, 2)], deadlift: steadyAt(125) },
   }));
-  assert.equal(trained.nextWeek, "Back to 4 this week — don't make up the missed ones. Deadlift 127.5 kg (the step you skipped), squat 115 → 117.5 kg, starting today.");
+  assert.equal(trained.nextWeek, "Back to 4 this week — don't make up the missed ones. Deadlift 125 kg (your last load), squat 115 → 117.5 kg, starting today.");
   // A lift whose e1RM fell more than 1% holds its load instead of going up.
   const held = computeWeeklyReview(liftReview({
     trainingDays: [WEEK[0], WEEK[3]], strengthDays: [WEEK[0], WEEK[3]],

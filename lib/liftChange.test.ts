@@ -4,7 +4,7 @@ import {
   shiftDay,
   cuedLifts, easedLoad, findRecentBreak, headlineLeader, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
   furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
-  liftReturnStates, liftShortName, liftTrainedAtWorkingWeight, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, weekOverWeekWording,
+  liftReturnStates, liftShortName, liftTrainedAtWorkingWeight, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, shortWeekLoadToLift, weekOverWeekWording,
   type LiftWeekPoint,
 } from './liftChange';
 
@@ -159,7 +159,7 @@ test('liftTrainedAtWorkingWeight: a top set at 90%+ of the 4-week best, not a li
 
 // ── Next week's loads after a short week (wave 22s) ─────────────────────────
 
-test('shortWeekLoadCues: a lift not trained (or only a light day) repeats its planned step; a trained one follows the normal rule; the lead is first', () => {
+test('shortWeekLoadCues: a lift not trained (or only a light day) repeats its LAST load; a trained one follows the normal rule; the lead is first (wave 24s)', () => {
   const top = (weekStart: string, kg: number, sessions = 2): LiftWeekPoint => ls(weekStart, kg * 1.2, sessions, { topLoadKg: kg });
   const steady = (kg: number): LiftWeekPoint[] => [top('2026-09-07', kg), top('2026-09-14', kg), top('2026-09-21', kg)];
   const prog = {
@@ -170,17 +170,20 @@ test('shortWeekLoadCues: a lift not trained (or only a light day) repeats its pl
   };
   const cues = shortWeekLoadCues(prog, '2026-09-28', { imperial: false, leadKey: 'bench press', rebuilding: false });
   assert.deepEqual(cues.map(c => [c.key, c.kind, c.load.start, c.load.to]), [
-    ['bench press', 'light', 87.5, 90], // the lead first; the planned step from the last working load
+    ['bench press', 'light', 87.5, 90], // the lead first; `from` is the last working load
     ['squat', 'skipped', 110, 112.5],
     ['deadlift', 'trained', 130, 132.5],
   ]);
-  // Pounds: the planned step is the same 5 lb grid step as everywhere, from the NEAREST grid value of the logged load ("~195 -> 200" for 193 lb; wave 24s).
+  // What goes on the bar: the last load for a repeat (skipped, light), the step for a lift trained at its working load, the load itself for a hold.
+  assert.deepEqual(cues.map(shortWeekLoadToLift), [87.5, 110, 132.5]);
+  // Pounds: the trained lift's step is the same 5 lb grid step as everywhere, from the NEAREST grid value of the logged load ("~195 -> 200" for 193 lb; wave 24s).
   assert.deepEqual(shortWeekLoadCues(prog, '2026-09-28', { imperial: true, leadKey: null, rebuilding: false }).map(c => [c.key, c.load.start, c.load.to]), [
     ['squat', 245, 250], ['bench press', 195, 200], ['deadlift', 285, 290],
   ]);
   // A lift whose e1RM fell more than 1% holds, except while rebuilding after a break.
   const fell = { squat: [...steady(110), top('2026-09-28', 110, 2)].map(w => (w.weekStart === '2026-09-28' ? { ...w, bestEstimatedOneRepMaxKg: 120 } : w)) };
   assert.equal(shortWeekLoadCues(fell, '2026-09-28', { imperial: false, leadKey: null, rebuilding: false })[0].kind, 'hold');
+  assert.equal(shortWeekLoadToLift(shortWeekLoadCues(fell, '2026-09-28', { imperial: false, leadKey: null, rebuilding: false })[0]), 110);
   assert.equal(shortWeekLoadCues(fell, '2026-09-28', { imperial: false, leadKey: null, rebuilding: true })[0].kind, 'trained');
   // No load known in the 4 weeks before: nothing to repeat.
   assert.deepEqual(shortWeekLoadCues({ squat: [top('2026-07-20', 100)] }, '2026-09-28', { imperial: false, leadKey: null, rebuilding: false }), []);

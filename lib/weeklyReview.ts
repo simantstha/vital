@@ -49,6 +49,7 @@ import {
   priorTopLoadKg,
   rankLifts,
   shortWeekLoadCues,
+  shortWeekLoadToLift,
   weekOverWeekWording,
   type NextLoad,
 } from './liftChange';
@@ -2664,8 +2665,9 @@ function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number
 
 /**
  * A muscle week with some sessions but under the target (1..target-1): back to the target, NOT the missed ones made up, with the
- * loads. A lift not trained that week repeats its planned step ("Squat 112.5 kg (the step you skipped)"); a lift that was trained
- * follows the normal next-load rule ("bench 87.5 → 90 kg"). Starting today: the review is read on its Monday. Without a known
+ * loads. A lift not trained at its working load that week (skipped, or only a light volume day) repeats its LAST load ("Squat 112.5 kg
+ * (your last load)": wave 24s, the step it never lifted is not prescribed after a fortnight without a heavy set); a lift that was
+ * trained follows the normal next-load rule ("bench 87.5 → 90 kg"). Starting today: the review is read on its Monday. Without a known
  * load the sentence still stands.
  */
 function shortWeekNextWeek(input: WeeklyReviewInput, week: Week, target: number): string {
@@ -2674,15 +2676,15 @@ function shortWeekNextWeek(input: WeeklyReviewInput, week: Week, target: number)
   const starting = week.monday != null ? '' : ', starting today';
   const cues = shortWeekLoadCues(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: stillRebuilding(input) });
   if (cues.length === 0) return `${head}${starting}.`;
-  // The lifts that repeat their planned step come first, with the one note; the rest follow in the usual "110 → 112.5 kg" form.
-  const repeat = cues.filter(c => c.kind === 'skipped');
-  const rest = cues.filter(c => c.kind !== 'skipped');
+  // The lifts that repeat their last load come first, with the one note; the rest follow in the usual "110 → 112.5 kg" form.
+  const repeat = cues.filter(c => c.kind === 'skipped' || c.kind === 'light');
+  const rest = cues.filter(c => c.kind !== 'skipped' && c.kind !== 'light');
   const names = liftNames(input, [...repeat, ...rest].map(c => c.key));
-  const repeatParts = repeat.map((c, i) => `${names[i]} ${withUnit(c.load.to, c.load.unit)}`);
+  const repeatParts = repeat.map((c, i) => `${names[i]} ${withUnit(shortWeekLoadToLift(c), c.load.unit)}`);
   const parts: string[] = [];
   if (repeatParts.length > 0) {
     const list = repeatParts.length === 1 ? repeatParts[0] : `${repeatParts.slice(0, -1).join(', ')} and ${repeatParts[repeatParts.length - 1]}`;
-    parts.push(`${list} (${repeat.length === 1 ? 'the step' : 'the steps'} you skipped)`);
+    parts.push(`${list} (${repeat.length === 1 ? 'your last load' : 'your last loads'})`);
   }
   rest.forEach((c, i) => {
     const name = names[repeat.length + i];

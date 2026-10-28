@@ -910,14 +910,20 @@ export function nextLoadCues(
 export interface ShortWeekLoadCue {
   key: string;
   /**
-   * 'skipped': not trained that week, so its planned step repeats ("Squat 112.5 kg").
-   * 'light': trained, but only as a light / volume day (top set under 90% of its 4-week best): the planned step repeats too.
+   * 'skipped': not trained that week, so its LAST load repeats ("Squat 112.5 kg (your last load)"; wave 24s: the planned step it never lifted is not prescribed
+   *   after a fortnight without a heavy set).
+   * 'light': trained, but only as a light / volume day (top set under 90% of its 4-week best): its last load repeats too.
    * 'trained': trained at its working load, so the normal next-load rule applies.
    * 'hold': trained, but its e1RM fell last week: the load stays.
    */
   kind: 'skipped' | 'light' | 'trained' | 'hold';
-  /** `from` is the load the step starts at (the lift's last working load), `to` the one to try. */
+  /** `from` is the lift's last working load (what a repeat or a hold keeps), `to` the step above it (what only a 'trained' lift is cued). */
   load: NextLoad;
+}
+
+/** The load (display units) a short-week cue puts on the bar: the step for a 'trained' lift, the last working load for a repeat ('skipped', 'light') or a hold. */
+export function shortWeekLoadToLift(cue: ShortWeekLoadCue): number {
+  return cue.kind === 'trained' ? cue.load.to : cue.load.from;
 }
 
 /**
@@ -925,11 +931,13 @@ export interface ShortWeekLoadCue {
  * (the review's "Back to 4 this week — don't make up the missed ones. Squat
  * 112.5 kg …"): every main lift in rotation, the lead lift first, at most
  * MAX_CUED_LIFTS. A lift that was not trained that week (or only as a light
- * volume day, under 90% of its 4-week best top set) repeats the step it was
- * already cued — the missed session is not made up and the step is not skipped
- * either; a lift trained at its working load follows the normal rule
- * (`nextWorkingLoad`, or a hold when its e1RM fell). A lift with no known load
- * in the last 4 weeks has no step to repeat and is left out.
+ * volume day, under 90% of its 4-week best top set) repeats its LAST working
+ * load (wave 24s): the missed session is not made up, and a step is not
+ * prescribed after a fortnight without a heavy set — the +2.5 kg follows the
+ * week after, from a load she has lifted again. A lift trained at its working
+ * load follows the normal rule (`nextWorkingLoad`, or a hold when its e1RM
+ * fell). A lift with no known load in the last 4 weeks has no load to repeat
+ * and is left out. `shortWeekLoadToLift` is the load each cue puts on the bar.
  */
 export function shortWeekLoadCues(
   progression: Record<string, LiftWeekPoint[]>,
