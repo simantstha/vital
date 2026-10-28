@@ -174,9 +174,9 @@ test('shortWeekLoadCues: a lift not trained (or only a light day) repeats its pl
     ['squat', 'skipped', 110, 112.5],
     ['deadlift', 'trained', 130, 132.5],
   ]);
-  // Pounds: the planned step is the same 5 lb grid step as everywhere, from the grid below the logged load ("~190 -> 195" for 193 lb; wave 23s).
+  // Pounds: the planned step is the same 5 lb grid step as everywhere, from the NEAREST grid value of the logged load ("~195 -> 200" for 193 lb; wave 24s).
   assert.deepEqual(shortWeekLoadCues(prog, '2026-09-28', { imperial: true, leadKey: null, rebuilding: false }).map(c => [c.key, c.load.start, c.load.to]), [
-    ['squat', 240, 245], ['bench press', 190, 195], ['deadlift', 285, 290],
+    ['squat', 245, 250], ['bench press', 195, 200], ['deadlift', 285, 290],
   ]);
   // A lift whose e1RM fell more than 1% holds, except while rebuilding after a break.
   const fell = { squat: [...steady(110), top('2026-09-28', 110, 2)].map(w => (w.weekStart === '2026-09-28' ? { ...w, bestEstimatedOneRepMaxKg: 120 } : w)) };
@@ -345,7 +345,7 @@ test('isDeloadWeek: needs a session that week and earlier weeks to compare with'
 
 // ── Working loads and the next load (the lift logger's next-weight rule) ────
 
-test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, from a start snapped to the 2.5 kg / 5 lb grid — a step standard plates can make (wave 21, 22s)', () => {
+test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, from a start snapped to the NEAREST 2.5 kg / 5 lb grid value — a step standard plates can make (wave 21, 22s, 24s)', () => {
   assert.deepEqual(nextWorkingLoad(107.5, 'squat', false), { from: 107.5, start: 107.5, to: 110, unit: 'kg', approx: false });
   assert.deepEqual(nextWorkingLoad(125, 'romanian deadlift', false), { from: 125, start: 125, to: 127.5, unit: 'kg', approx: false });
   // Upper body used to step +1.25 (rounded to 0.5): "bench 80 -> 81.5 kg" needs 0.75 kg a side.
@@ -354,31 +354,33 @@ test('nextWorkingLoad: +2.5 kg / +5 lb for EVERY lift, from a start snapped to t
   assert.deepEqual(nextWorkingLoad(57.5, 'overhead press', false), { from: 57.5, start: 57.5, to: 60, unit: 'kg', approx: false });
   assert.deepEqual(nextWorkingLoad(100, 'squat', true), { from: 220, start: 220, to: 225, unit: 'lb', approx: false });
   assert.deepEqual(nextWorkingLoad(100, 'bench press', true), { from: 220, start: 220, to: 225, unit: 'lb', approx: false }); // was 223: not a plate
-  // A load logged off the grid starts the step from the grid BELOW it (wave 23s: the real step is never more than one step) and says "~" whenever
-  // the start moved: 81 kg -> "~80 -> 82.5" (+1.5), 80.5 kg -> "~80 -> 82.5" (+2), 81.5 kg -> "~80 -> 82.5" (+1, it used to round UP to 82.5 -> 85, a +3.5 step).
-  assert.deepEqual(nextWorkingLoad(81, 'bench press', false), { from: 81, start: 80, to: 82.5, unit: 'kg', approx: true });
-  assert.deepEqual(nextWorkingLoad(80.5, 'bench press', false), { from: 80.5, start: 80, to: 82.5, unit: 'kg', approx: true });
-  assert.deepEqual(nextWorkingLoad(81.5, 'bench press', false), { from: 81.5, start: 80, to: 82.5, unit: 'kg', approx: true });
-  assert.deepEqual(nextWorkingLoad(82, 'bench press', false), { from: 82, start: 80, to: 82.5, unit: 'kg', approx: true });
-  // Pounds (wave 22s, 23s): "bench 176 -> 180" (+4), "182 -> 185" (+3), "Squat 243 -> 250" (+7) were no step. 87.5 kg = 192.9 lb -> logged 193 -> "~190 -> 195" (+2).
-  assert.deepEqual(nextWorkingLoad(87.5, 'bench press', true), { from: 193, start: 190, to: 195, unit: 'lb', approx: true });
-  assert.deepEqual(nextWorkingLoad(110, 'squat', true), { from: 243, start: 240, to: 245, unit: 'lb', approx: true }); // 242.5 lb logged as 243
+  // A load logged off the grid starts the step from the NEAREST grid value (wave 24s: rounding down printed "Squat ~255 -> 260 lb" after a 259 lb set,
+  // a +1, and "bench ~190 -> 195" after 193, a +2) and says "~" whenever the start moved. The real step from the logged load is 1.25-3.75 kg (2.5-7.5 lb).
+  assert.deepEqual(nextWorkingLoad(81, 'bench press', false), { from: 81, start: 80, to: 82.5, unit: 'kg', approx: true }); // +1.5
+  assert.deepEqual(nextWorkingLoad(80.5, 'bench press', false), { from: 80.5, start: 80, to: 82.5, unit: 'kg', approx: true }); // +2
+  assert.deepEqual(nextWorkingLoad(81.5, 'bench press', false), { from: 81.5, start: 82.5, to: 85, unit: 'kg', approx: true }); // +3.5 (it was a +1)
+  assert.deepEqual(nextWorkingLoad(82, 'bench press', false), { from: 82, start: 82.5, to: 85, unit: 'kg', approx: true }); // +3 (it was a +0.5)
+  // Pounds: 87.5 kg = 192.9 lb -> logged 193 -> "~195 -> 200" (+7, it was "~190 -> 195", +2); 117.5 kg = 259 lb -> "~260 -> 265" (+6, it was "~255 -> 260", +1).
+  assert.deepEqual(nextWorkingLoad(87.5, 'bench press', true), { from: 193, start: 195, to: 200, unit: 'lb', approx: true });
+  assert.deepEqual(nextWorkingLoad(117.5, 'squat', true), { from: 259, start: 260, to: 265, unit: 'lb', approx: true });
+  assert.deepEqual(nextWorkingLoad(110, 'squat', true), { from: 243, start: 245, to: 250, unit: 'lb', approx: true }); // 242.5 lb logged as 243
   assert.deepEqual(nextWorkingLoad(80, 'bench press', true), { from: 176, start: 175, to: 180, unit: 'lb', approx: true }); // 1 lb off the grid still moved the start
   assert.deepEqual(nextWorkingLoad(82.5, 'bench press', true), { from: 182, start: 180, to: 185, unit: 'lb', approx: true });
-  // Every start is on the grid and every target is exactly one step above it (below the cap), whatever the lift and the load; the target is above today's load.
+  // Every start is on the grid and every target is exactly one step above it (below the cap), whatever the lift and the load; the start is the NEAREST grid value,
+  // so the real step from today's load is 1.25-3.75 kg (2.5-7.5 lb).
   for (let kg = 20; kg <= 250; kg += 0.5) {
     for (const key of ['squat', 'bench press', 'overhead press', 'deadlift']) {
       const m = nextWorkingLoad(kg, key, false);
       assert.equal(m.start % 2.5, 0, `${key} ${kg} kg -> start ${m.start}`);
       assert.equal(m.to - m.start, 2.5, `${key} ${kg} kg -> ${m.start} -> ${m.to}`);
-      assert.ok(m.to > m.from && m.to - m.from <= 2.5, `${key} ${kg} kg -> ${m.to}: the real step from the logged load is never more than one step`);
-      assert.ok(m.start <= m.from, `${key} ${kg} kg -> start ${m.start} rounds DOWN to the grid`);
+      assert.ok(m.to - m.from >= 1.25 - 1e-9 && m.to - m.from <= 3.75 + 1e-9, `${key} ${kg} kg -> ${m.to}: the real step from the logged load is 1.25-3.75 kg`);
+      assert.ok(Math.abs(m.start - m.from) <= 1.25 + 1e-9, `${key} ${kg} kg -> start ${m.start} is the nearest grid value`);
       assert.equal(m.approx, m.start !== m.from, `${key} ${kg} kg approx`);
       const lb = nextWorkingLoad(kg, key, true);
       assert.equal(lb.start % 5, 0, `${key} ${kg} kg -> start ${lb.start} lb`);
       assert.equal(lb.to - lb.start, 5, `${key} ${kg} kg -> ${lb.start} -> ${lb.to} lb`);
-      assert.ok(lb.to > lb.from && lb.to - lb.from <= 5, `${key} ${kg} kg -> ${lb.to} lb: the real step from the logged load is never more than 5 lb`);
-      assert.ok(lb.start <= lb.from, `${key} ${kg} kg -> start ${lb.start} lb rounds DOWN to the grid`);
+      assert.ok(lb.to - lb.from >= 2.5 - 1e-9 && lb.to - lb.from <= 7.5 + 1e-9, `${key} ${kg} kg -> ${lb.to} lb: the real step from the logged load is 2.5-7.5 lb`);
+      assert.ok(Math.abs(lb.start - lb.from) <= 2.5 + 1e-9, `${key} ${kg} kg -> start ${lb.start} lb is the nearest grid value`);
       assert.equal(lb.approx, lb.start !== lb.from, `${key} ${kg} kg approx lb`);
     }
   }

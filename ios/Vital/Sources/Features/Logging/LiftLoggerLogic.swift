@@ -240,15 +240,17 @@ enum LiftLoggerLogic {
 
     /// The load the next-load step starts from, as the server's `nextWorkingLoad`
     /// (`start` in `lib/liftChange.ts`): the last load rounded to 0.5 kg / 1 lb
-    /// (`roundToPlate`), then rounded DOWN to the step grid (2.5 kg / 5 lb). The
-    /// review prints "bench ~190 → 195 lb" for a bench logged at 193 lb — one
-    /// exact step from a load plates can make, and never more than one step above
-    /// the load that was lifted (rounding to the nearest grid point gave
-    /// "~195 → 200", a +7). The "Last … @ X" caption keeps the load as logged.
+    /// (`roundToPlate`), then snapped to the NEAREST step grid value (2.5 kg /
+    /// 5 lb). The review prints "bench ~195 → 200 lb" for a bench logged at
+    /// 193 lb — one exact step from a load plates can make, and a real step from
+    /// the load that was lifted of half to one-and-a-half grid steps (1.25–3.75 kg,
+    /// 2.5–7.5 lb). Rounding DOWN gave "~255 → 260 lb" after a 259 lb set (+1) and
+    /// "~190 → 195" after 193 (+2), steps that were no progression. The
+    /// "Last … @ X" caption keeps the load as logged.
     static func nextLoadStart(after lastLoad: Double, key: String, system: UnitSystem) -> Double {
         let step = progressionStep(forKey: key, system: system)
         let from = roundToPlate(lastLoad, system: system)
-        return (from / step + 1e-9).rounded(.down) * step
+        return (from / step + 1e-9).rounded() * step
     }
 
     /// `true` whenever `nextLoadStart` is not the last load as logged (rounded to
@@ -260,10 +262,10 @@ enum LiftLoggerLogic {
 
     /// The load to try after a clean session, exactly as the server computes the
     /// review's "Squat 110 → 112.5 kg" (`nextWorkingLoad` in `lib/liftChange.ts`):
-    /// the last load rounded to 0.5 kg / 1 lb, rounded down to the 2.5 kg / 5 lb
-    /// grid (`nextLoadStart`) and stepped exactly once (80 → 82.5, 81 → 82.5,
-    /// 101 → 102.5; 185 lb → 190, 187 lb → 190, 243 lb → 245), capped at the
-    /// logger's maximum and never below the rounded last load.
+    /// the last load rounded to 0.5 kg / 1 lb, snapped to the nearest 2.5 kg / 5 lb
+    /// grid value (`nextLoadStart`) and stepped exactly once (80 → 82.5, 81 → 82.5,
+    /// 81.5 → 85, 101 → 102.5; 185 lb → 190, 187 lb → 190, 193 lb → 200, 243 lb →
+    /// 250), capped at the logger's maximum and never below the rounded last load.
     static func nextLoad(after lastLoad: Double, key: String, system: UnitSystem) -> Double {
         let step = progressionStep(forKey: key, system: system)
         let from = roundToPlate(lastLoad, system: system)
