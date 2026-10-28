@@ -963,7 +963,8 @@ invariant(['weight_loss_logged'], 'the calorie adherence line counts "in the las
     for (const r of snap.card?.reasons ?? []) {
       if (r.kind !== 'calorie_adherence') continue;
       seen++;
-      if (/this week/.test(r.text) || !/in the last 7 days/.test(plain(r.text)) || r.tone !== 'neutral') out.push({ snap, detail: `[${r.tone}] "${visible(r.text)}"` });
+      // (An eat-more step is graded over the days since it began - "since Jun 5" - until it is a week old: wave 24w.)
+      if (/this week/.test(r.text) || !/in the last 7 days|logged days since [A-Z][a-z]{2} \d{1,2}$/.test(plain(r.text)) || r.tone !== 'neutral') out.push({ snap, detail: `[${r.tone}] "${visible(r.text)}"` });
     }
   }
   assert.ok(seen > 0, `${name}: no adherence line appeared, so this invariant checked nothing`);
@@ -1037,7 +1038,7 @@ invariant(WEIGHT, "a calorie figure that moves 100+ kcal between two reached / m
     if (snap.weekday !== 'Mon') continue;
     const plan = snap.card?.weightRead?.plan;
     const kcal = plan != null && (plan.state === 'reached' || plan.state === 'maintenance') ? plan.action.kcalTarget ?? null : null;
-    if (prev != null && kcal != null && plan != null && Math.abs(kcal - prev.kcal) >= 100 && !/replaces|instead of|last week/i.test(plain(plan.action.text))) {
+    if (prev != null && kcal != null && plan != null && Math.abs(kcal - prev.kcal) >= 100 && !/replaces|instead of|last week|without the step/i.test(plain(plan.action.text))) {
       out.push({ snap, detail: `Mon ${prev.snap.date} ${prev.kcal} kcal -> Mon ${snap.date} ${kcal} kcal without saying so: "${visible(plan.action.text)}"` });
     }
     prev = kcal != null ? { snap, kcal } : null;
@@ -2997,7 +2998,7 @@ invariant(W23_LOGGERS, 'P2-A: "You\'ve held about 84 kg on ~X kcal" names the ma
     due++;
     const texts = [...(snap.card?.reasons ?? []).map(r => r.text), snap.review?.review.nextWeek ?? ''];
     // The first such Monday NAMES the target; the Mondays after it keep that level ("Stay at ~2,050 kcal - your maintenance").
-    const re = due === 1 ? /you've held|keep your calorie target where it is|already at maintenance/i : /you've held|stay at ~[\d,]+\s?kcal — your maintenance|keep your calorie target where it is|already at maintenance/i;
+    const re = due === 1 ? /you(?:'ve)? held|keep your calorie target where it is|already at maintenance/i : /you(?:'ve)? held|stay at ~[\d,]+\s?kcal — your maintenance|keep your calorie target where it is|already at maintenance/i;
     if (!texts.some(t => re.test(plain(t)))) {
       out.push({ snap, detail: `two held weeks (${w1.toFixed(1)}, ${w2.toFixed(1)} kg), ${logged} logged days of 14, but the card says: ${texts.map(t => `"${visible(t)}"`).join(' | ')}` });
     }
@@ -3910,3 +3911,92 @@ invariant(RUNNERS, 'P3-e: in the taper and race week the long-run line never rep
   }
   return out;
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// wave 24w: weight round 6. One block, at the END of the file.
+//   P2-1  the easing step reads the food log: "Reached ~2,150 on N of M logged days since <start>" (never "stayed within", never days before the step), "the step you
+//         started" only when the logs since it began show it, and a held weight on a step that was never taken is "without the step", not "replaces the step".
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+import { PARTIAL_LOG_KCAL_THRESHOLD } from '../brain/weightSignals';
+
+const W24_LOGGERS: readonly ScenarioName[] = ['weight_loss_logged', 'weight_loss_obedient'];
+const W24_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const w24Date = (day: string): string => `${W24_MONTHS[Number(day.slice(5, 7)) - 1]} ${Number(day.slice(8, 10))}`;
+const w24Kcal = (n: number): string => n.toLocaleString('en-US');
+
+/** The scenario's logged kcal on the days from `from` to `to` (inclusive), the way the plan and the card count a logged day. */
+function w24Logged(name: ScenarioName, from: string, to: string): number[] {
+  return buildScenario(name).intake.filter(i => i.day >= from && i.day <= to && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD).map(i => i.kcal);
+}
+const w24Mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+invariant(W24_LOGGERS, 'P2-1: "the step you started" is said only when the logs since the step began show it (3+ logged days, their mean at least the step\'s low end - 50)', (snaps, name) => {
+  const out: Violation[] = [];
+  let claims = 0;
+  for (const snap of snaps) {
+    const step = snap.card?.weightRead?.plan?.step;
+    if (step?.loKcal == null) continue;
+    const claim = allTexts(snap).find(t => /the step you started/.test(plain(t.text)));
+    if (claim == null) continue;
+    claims++;
+    const logged = w24Logged(name, step.since, addDays(mondayOfDate(snap.date), -1));
+    if (logged.length < 3 || w24Mean(logged) < step.loKcal - 50) {
+      out.push({ snap, detail: `${claim.where}: "${visible(claim.text)}" but ${logged.length} logged day(s) since ${step.since} average ${logged.length > 0 ? Math.round(w24Mean(logged)) : 'n/a'} kcal (step low end ${step.loKcal})` });
+    }
+  }
+  if (name === 'weight_loss_obedient') assert.ok(claims > 0, `${name}: the step was never claimed, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(W24_LOGGERS, 'P2-1: while an eat-more step is given or standing, the adherence line is "Reached ~2,150 kcal on N of M logged days since <start>" over the days on or after the start only, and absent under 3 logged days', (snaps, name) => {
+  const scn = buildScenario(name);
+  const budget = scn.budget.targetKcal as number;
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    const step = plan?.step;
+    if (plan == null || step == null || step.loKcal == null || step.loKcal <= budget || (step.phase !== 'given' && step.phase !== 'standing')) continue;
+    if (snap.card?.verdict === 'reached') continue; // a reached card carries no adherence line (its three reasons are the reach, the position and the next step)
+    const adherence = snap.card?.reasons.find(r => r.kind === 'calorie_adherence');
+    const weekAgo = addDays(snap.date, -6);
+    const from = step.since > weekAgo ? step.since : weekAgo;
+    const logged = w24Logged(name, from, snap.date);
+    if (logged.length < 3) {
+      if (adherence != null) out.push({ snap, detail: `only ${logged.length} logged day(s) since ${step.since}, yet "${visible(adherence.text)}"` });
+      continue;
+    }
+    seen++;
+    const hit = logged.filter(k => k >= step.loKcal! * 0.95).length;
+    const window = step.since > weekAgo ? `since ${w24Date(step.since)}` : 'in the last 7 days';
+    const expected = `Reached ~${w24Kcal(step.loKcal)} kcal on ${hit} of ${logged.length} logged days ${window}`;
+    if (adherence == null || plain(adherence.text) !== expected) out.push({ snap, detail: `expected "${expected}" but the card says ${adherence == null ? 'nothing' : `"${visible(adherence.text)}"`}` });
+  }
+  assert.ok(seen > 0, `${name}: no card graded an eat-more step, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(W24_LOGGERS, 'P2-1: a held weight on a step that was never taken ("You held 84 kg on ~2,050 kcal without the step") is never "it replaces the step"; one on a step that was taken is never "without the step"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const stepLo = (scn.budget.targetKcal as number) + 150;
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    if (plan?.step == null) continue;
+    const text = plain(plan.action.text);
+    if (!/(?:^|— )[Yy]ou(?:'ve)? held/.test(text)) continue;
+    const logged = w24Logged(name, plan.step.since, addDays(mondayOfDate(snap.date), -1));
+    if (logged.length < 3) continue;
+    seen++;
+    const taken = w24Mean(logged) >= stepLo - 50;
+    if (!taken && (!/without the step/.test(text) || /replaces/.test(text))) out.push({ snap, detail: `the logs since ${plan.step.since} average ${Math.round(w24Mean(logged))} kcal (the step was ${stepLo}+) but the plan says "${visible(plan.action.text)}"` });
+    if (taken && /without the step/.test(text)) out.push({ snap, detail: `the logs since ${plan.step.since} average ${Math.round(w24Mean(logged))} kcal (the step was taken) but the plan says "${visible(plan.action.text)}"` });
+  }
+  assert.ok(seen > 0, `${name}: no plan named a held weight on logged intake, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P2-1: no card headline says "keep to your easing step" (it is "stay at ~2,150-2,200 kcal", or "keep your daily snack" for a user who logs no food)', snaps =>
+  snaps.filter(s => /keep to your easing step/.test(plain(s.card?.headline ?? ''))).map(snap => ({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}"` })));

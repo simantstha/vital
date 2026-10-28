@@ -102,10 +102,12 @@ import {
 import {
   FAT_LOSS_MIN_PCT,
   PLATEAU_SPAN_DAYS,
+  STEP_REACHED_FRACTION,
   WEEK_MEAN_MIN_WEIGH_INS,
   fmtWeekday,
   weightWeekPlan,
   type WeightPlanPace,
+  type WeightPlanStep,
   type WeightWeekPlan,
 } from './weightWeekPlan';
 import {
@@ -1049,6 +1051,38 @@ function calorieAdherenceStats(input: GoalProgressInput, levelKcal: number | nul
   return { target, hit, logged: logged.length, avgKcal, frac: hit / logged.length, level };
 }
 
+/**
+ * An eat-more step (wave 24w): "Reached ~2,150 kcal on 4 of 5 logged days since Jun 5". Only the logged days on or after the day the step began
+ * count (a day eaten against the old budget is never judged against the new level), and "reached" is the right word for an instruction to
+ * eat MORE - not "stayed within". After the step's first week the window is the last 7 days. Null under 3 logged days.
+ */
+function stepAdherenceReason(input: GoalProgressInput, step: WeightPlanStep): GoalProgressReason | null {
+  const lo = step.loKcal;
+  if (lo == null) return null;
+  const logged = lastSevenIntake(input).filter(
+    d => d.day >= step.since && d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD,
+  );
+  if (logged.length < MIN_LOGGED_DAYS_FOR_ADHERENCE) return null;
+  const reached = logged.filter(d => (d.kcal as number) >= lo * STEP_REACHED_FRACTION).length;
+  const startedThisWeek = step.since > addDays(input.todayKey, -6);
+  const window = startedThisWeek ? `since ${fmtDate(step.since, input.todayKey)}` : 'in the last 7 days';
+  return {
+    kind: 'calorie_adherence',
+    text: `Reached ~${withUnit(fmtKcal(lo), 'kcal')} on ${reached} of ${logged.length} logged ${plural(logged.length, 'day')} ${window}`,
+    tone: 'neutral',
+  };
+}
+
+/** The adherence line of a weight-loss week: the step toward maintenance is graded as a step (see `stepAdherenceReason`), anything else against its level or the budget. */
+function weightAdherenceReason(input: GoalProgressInput, plan: WeightWeekPlan): GoalProgressReason | null {
+  const step = plan.step;
+  const budget = input.budget?.targetKcal;
+  if (step != null && step.loKcal != null && budget != null && step.loKcal > budget && (step.phase === 'given' || step.phase === 'standing')) {
+    return stepAdherenceReason(input, step);
+  }
+  return calorieAdherenceReason(input, step?.loKcal ?? null);
+}
+
 function calorieAdherenceReason(input: GoalProgressInput, levelKcal: number | null = null): GoalProgressReason | null {
   const stats = calorieAdherenceStats(input, levelKcal);
   if (stats == null) return null;
@@ -1868,7 +1902,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     && assessWeekendOvereating(toSignalPoints(input.intakeDays.filter(d => d.day < input.todayKey))) != null;
   const { weekend, underEating } = signalReasons(weekendSteady ? signals : signals.filter(s => s.kind !== 'weekend_overeating'));
   // The week's plan may state a calorie level above the budget (the step toward maintenance): the days are counted against it.
-  const adherence = calorieAdherenceReason(input, plan.step?.loKcal ?? null);
+  const adherence = weightAdherenceReason(input, plan);
   const tdee = tdeeReason(input);
   const toGo = Math.abs(w.neededKg ?? 0);
   const pace = plan.pace;
@@ -1930,9 +1964,13 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     // dates give (the card does not turn "too fast" for the last few days and "reached" right after).
     // The week the step is given it starts the easing; the weeks after, it is a level to keep until the step is read (wave 23w).
     const standing = plan.step != null && plan.step.phase !== 'given';
+    // A standing step says what to eat, not "your easing step" (wave 24w): the level, or the snack for someone who logs no food.
+    const level = plan.step?.loKcal != null && plan.step.hiKcal != null
+      ? `stay at ~${plan.step.loKcal === plan.step.hiKcal ? withUnit(fmtKcal(plan.step.hiKcal), 'kcal') : `${fmtKcal(plan.step.loKcal)}–${withUnit(fmtKcal(plan.step.hiKcal), 'kcal')}`}`
+      : 'keep your daily snack';
     return {
       verdict: plan.verdict,
-      headline: clip(standing ? 'Nearly there — keep to your easing step' : 'Nearly there — start easing calories toward maintenance'),
+      headline: clip(standing ? `Nearly there — ${level}` : 'Nearly there — start easing calories toward maintenance'),
       reasons: build(rate, action),
     };
   }
