@@ -3514,6 +3514,18 @@ test('B8. reached: "within 1 kg of 84 kg", and a loss still past the ceiling say
   assert.equal(p.verdict, 'reached');
   const warn = p.reasons.find(r => r.kind === 'rate');
   assert.ok(warn, JSON.stringify(p.reasons));
-  assert.match(warn!.text, /above the 1% a week ceiling — ease calories toward maintenance$/);
+  // Wave 24w (P3-1): the reach step ("switch to maintenance - keep the daily snack...") IS the instruction, so the rate warning does not add a second
+  // one: it says the step covers it.
+  assert.ok(p.weightRead?.plan?.step != null, 'the reach carries the maintenance step');
+  assert.match(warn!.text, /above the 1% a week ceiling — your easing step covers this$/);
+  assert.doesNotMatch(warn!.text, /ease calories/);
   assert.equal(warn!.tone, 'watch');
+  // A budget that already is maintenance has no step, so the warning is the one instruction.
+  const noStep = computeGoalProgress(youngGoal(80, {
+    target: { weightKg: 84, date: addDays(TODAY, 10), weeklySessions: 3 },
+    weightReadings: readings,
+    budget: { ...BUDGET_2000, formulaTdee: 2000 },
+  }));
+  assert.equal(noStep.weightRead?.plan?.step, null);
+  assert.match(noStep.reasons.find(r => r.kind === 'rate')!.text, /above the 1% a week ceiling — ease calories toward maintenance$/);
 });

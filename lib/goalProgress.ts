@@ -1611,13 +1611,14 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
  * a pace wobbling around 1% never flips the tone from one day to the next; with the call on, a pace between 0.9% and the ceiling
  * keeps the watch ("close to the ceiling", hysteresis) and is not called "safe".
  * `easeToMaintenance`: the target is reached and the loss is still past the ceiling, so the warning says what to do.
+ * `stepCovers` (wave 24w): ...and the plan already gives the easing step, which is that instruction - the warning says so instead of adding another.
  * `other` (wave 22w): the pace a week earlier, when "on pace" rests on two paces that straddle the date - the rate is then the honest
  * range ("Down 0.37-0.58 kg/wk"), not one number that lands weeks off the date it is called on track for.
  */
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepCovers?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
   if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
@@ -1630,7 +1631,8 @@ function paceReason(
   if (pace.kgPerWeek < 0) {
     if (opts.tooFast && abs > band.maxPct) {
       tone = 'watch';
-      text += `, above the ${band.maxPct}% a week ceiling${opts.easeToMaintenance ? ' — ease calories toward maintenance' : ''}`;
+      // While the plan's easing step is the instruction, the warning adds no second one (wave 24w): the step covers it.
+      text += `, above the ${band.maxPct}% a week ceiling${opts.stepCovers ? ' — your easing step covers this' : opts.easeToMaintenance ? ' — ease calories toward maintenance' : ''}`;
     } else if (opts.tooFast && abs >= band.minPct) {
       tone = 'watch';
       text += `, close to the ${band.maxPct}% a week ceiling`;
@@ -1921,8 +1923,10 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     // The goal is done: lead with the reach, never show continued loss as a
     // green "inside the safe band", and say what to do next. A safety watch
     // (under-eating, still losing past the ceiling) still gets the second slot.
+    // One calorie instruction per card (wave 24w): while the step is given or standing it is the instruction; once it is read there is none to repeat.
+    const stepActive = plan.step != null && (plan.step.phase === 'given' || plan.step.phase === 'standing');
     const stillFast = pace != null && plan.tooFast && pace.kgPerWeek < 0
-      ? paceReason(input, pace, { tooFast: true, easeToMaintenance: true })
+      ? paceReason(input, pace, { tooFast: true, easeToMaintenance: plan.step == null, stepCovers: stepActive })
       : null;
     const watch = underEating ?? stillFast;
     const when = w.reachedAt ? ` (${fmtDate(w.reachedAt, input.todayKey)})` : '';
