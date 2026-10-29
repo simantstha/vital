@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   computeGoalProgress as computeGoalProgressRaw,
   HEADLINE_MAX_CHARS,
+  REBUILD_HEADLINE_MAX_CHARS,
   isRunningWorkoutType,
   isStrengthWorkoutType,
   longRunTargetKm,
@@ -67,7 +68,8 @@ function base(over: Partial<GoalProgressInput> = {}): GoalProgressInput {
 }
 
 function assertWellFormed(p: GoalProgress): void {
-  assert.ok(p.headline.length > 0 && p.headline.length <= HEADLINE_MAX_CHARS, `headline length: "${p.headline}"`);
+  // (A building-back headline that names the lift furthest behind may run to REBUILD_HEADLINE_MAX_CHARS, wave 24s.)
+  assert.ok(p.headline.length > 0 && p.headline.length <= (p.verdict === 'building' ? REBUILD_HEADLINE_MAX_CHARS : HEADLINE_MAX_CHARS), `headline length: "${p.headline}"`);
   assert.ok(p.reasons.length <= 3, 'at most 3 reasons');
   for (const r of p.reasons) {
     assert.ok(['good', 'watch', 'neutral'].includes(r.tone));
@@ -2250,8 +2252,8 @@ test('return from a break: "Building back", not "Stalled" — verdict building, 
     'bench press': [lw('2026-08-17', 100), lw('2026-08-24', 102), lw('2026-08-31', 104), lw('2026-09-07', 106), lw('2026-09-28', 100), lw('2026-10-05', 100)],
   }));
   assert.equal(p.verdict, 'building');
-  // Every lift is rebuilding and the bench is furthest behind the headline squat: the headline says so (wave 23s).
-  assert.equal(p.headline, 'Building back — Squat est. 1RM 136 of 142 kg (bench furthest at 94%)');
+  // Every lift is rebuilding and the bench is furthest behind the headline squat: the headline says so (wave 23s), in ONE phrasing (wave 24s).
+  assert.equal(p.headline, 'Building back — Squat est. 1RM 136 of 142 kg (bench furthest behind, 94%)');
   assert.ok(p.reasons.every(r => r.tone !== 'watch'), JSON.stringify(p.reasons));
   assert.equal(p.reasons[0].kind, 'lift');
   assert.equal(p.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best'); // 136 / 142 rounds to 96 (wave 21: not floored)
@@ -2362,25 +2364,25 @@ test('return from a break, lift by lift: several lifts back and one behind, and 
   // Nothing back yet: the headline lift's own "Building back" line, then where every other rebuilding lift stands (wave 22s: whatever the gap).
   const none = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(140, 142) }));
   assert.equal(none.verdict, 'building');
-  assert.equal(none.headline, 'Building back — Squat est. 1RM 136 of 142 kg (deadlift furthest, 90%)');
+  assert.equal(none.headline, 'Building back — Squat est. 1RM 136 of 142 kg (deadlift furthest behind, 90%)');
   assert.equal(none.reasons[0].text, 'Squat est. 1RM 136 kg, 96% of your 142 kg pre-break best');
   assert.equal(none.reasons[1].text, 'Deadlift 90% of its pre-break est. 1RM');
   // Only 2 points apart (96% / 94%) it is still there: the line no longer comes and goes with a session (days 71-78).
   const close = computeGoalProgress(longBreakInput({ squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(147, 149) }));
   assert.equal(close.reasons[1].text, 'Deadlift 94% of its pre-break est. 1RM');
-  // Two other lifts: one lowercase list line, "of pre-break est. 1RM"; the headline names the furthest (wave 23s).
+  // Two other lifts: one list line starting in sentence case, "of pre-break est. 1RM"; the headline names the furthest (wave 23s).
   const three = computeGoalProgress(longBreakInput({
     squat: [...LONG_BREAK_SQUAT.slice(0, 4), lw('2026-09-21', 134), lw('2026-09-28', 136)], deadlift: longBreakDeadlift(147, 149),
     'bench press': [lw('2026-08-03', 100), lw('2026-08-10', 102), lw('2026-08-17', 104), lw('2026-08-24', 106), lw('2026-09-21', 99), lw('2026-09-28', 100)],
   }));
-  assert.equal(three.reasons[1].text, 'bench 94%, deadlift 94% of pre-break est. 1RM');
-  assert.match(three.headline, /^Building back — Squat est\. 1RM 136 of 142 kg \((?:bench|deadlift) furthest(?: at|,) 94%\)$/);
+  assert.equal(three.reasons[1].text, 'Bench 94%, deadlift 94% of pre-break est. 1RM');
+  assert.match(three.headline, /^Building back — Squat est\. 1RM 136 of 142 kg \((?:bench|deadlift) furthest behind, 94%\)$/);
   // An accessory never holds the claim back: lat pulldown at 90% does not stop "Back above".
   const accessory = computeGoalProgress(longBreakInput({ squat: LONG_BREAK_SQUAT, 'lat pulldown': [lw('2026-08-17', 80), lw('2026-08-24', 85), lw('2026-09-21', 70)] }));
   assert.equal(accessory.headline, 'Back above your pre-break best — Squat est. 1RM 145 kg (was 142 kg)');
 });
 
-test('the comeback sentence: "above" only when every named lift is above its printed number, "at or above" for a mix, sentence case (wave 22s)', () => {
+test('the comeback sentence: "above" only when every named lift is above its printed number, a mix names each lift\'s own relation, sentence case (waves 22s, 24s)', () => {
   const ret = (exercise: string, name: string, pre: number, recent: number, regained: boolean) =>
     ({ exercise, name, breakDays: 15, endedOn: '2026-05-10', preBreakKg: pre, recentKg: recent, pct: Math.floor((recent / pre) * 100), regained });
   const squatAbove = ret('squat', 'Squat', 142, 145.2, true);
@@ -2390,8 +2392,11 @@ test('the comeback sentence: "above" only when every named lift is above its pri
   assert.equal(mixedReturnLead([squatAbove, deadlift], undefined, false)?.text, 'Squat back above pre-break; deadlift at 98%');
   assert.equal(mixedReturnLead([squatAbove, benchAbove, deadlift], undefined, false)?.text, 'Squat and bench back above pre-break; deadlift at 98%');
   assert.equal(mixedReturnLead([benchAt, deadlift], undefined, false)?.text, 'Bench back at pre-break; deadlift at 98%');
-  // A mix of one above and one exactly at: neither "above" (bench is not) nor "at" (squat is above).
-  assert.equal(mixedReturnLead([benchAt, squatAbove, deadlift], undefined, false)?.text, 'Bench and squat back at or above pre-break; deadlift at 98%');
+  // A mix of one above and one exactly at: neither "above" (bench is not) nor "at" (squat is above), and not the hedge "at or above" (wave 24s P3-9): each is named.
+  assert.equal(mixedReturnLead([benchAt, squatAbove, deadlift], undefined, false)?.text, 'Bench back at pre-break, squat above pre-break; deadlift at 98%');
+  assert.equal(mixedReturnLead([squatAbove, benchAt, deadlift], undefined, false)?.text, 'Squat back above pre-break, bench at pre-break; deadlift at 98%');
+  // `maxAhead` 1 (the card's headline when the numbers need the room) names the first lift alone, with its own relation.
+  assert.equal(mixedReturnLead([squatAbove, benchAt, deadlift], undefined, false, 1)?.text, 'Squat back above pre-break; deadlift at 98%');
   // The numbers are as printed: 111.2 kg shows as 111, so it is "at", not above 111.
   assert.equal(mixedReturnLead([benchAt, deadlift], undefined, false)?.text.includes(' at pre-break'), true);
 });

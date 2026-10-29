@@ -958,7 +958,7 @@ export interface DeloadCue {
 
 /**
  * The proactive deload: after DELOAD_CUE_STREAK_WEEKS straight weeks of heavier loads ending at the reviewed week the next-week cue is
- * "Deload week: ~85-90% of last week's loads, 2 working sets - then back to Squat 112.5 kg, ..." (a lifter who adds 2.5 kg to every lift every
+ * "Deload week: ~85-90% of last week's loads, 2 working sets - then back to squat 112.5 kg, ..." (a lifter who adds 2.5 kg to every lift every
  * week for 14 weeks was only ever praised for a deload, never sent to one). Never while rebuilding after a break. The resume loads are the
  * pre-deload top loads of the lifts trained that week (`cuedLifts`); the week after the deload goes back to exactly these.
  */
