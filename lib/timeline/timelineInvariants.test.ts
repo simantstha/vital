@@ -2820,28 +2820,32 @@ invariant(LIFTERS, 'a review read on a Monday she has already lifted does not te
   return out;
 });
 
-// ── The first time "est. 1RM" reaches a lifter it is explained, once: in the Next-week row of the first weekly review that shows an
-// est. 1RM stat (iOS shows nextWeek verbatim, unlimited lines; the stat tile's comparison is capped at two lines and the card shows
-// three reasons). Never on the card (that would repeat daily), never in a later review.
+// ── The first time "est. 1RM" reaches a lifter it is explained, once. Wave 23s put the sentence in the Next-week row of the first weekly review that shows an est. 1RM
+// stat; the term first appears on the CARD a week earlier (day 7: "This week: Squat est. 1RM +3 kg vs last week"), so wave 24s P3-5 moved it there: a card reason on
+// every day of the goal's first lift-comparison week (from the day the card first shows "est. 1RM" to that Sunday), never again, and the review carries it only when the
+// card did not (`cardExplainedEst1rm`). Counted from the snapshots themselves.
 const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
 
-invariant(LIFTERS, 'est. 1RM is explained once: in the first weekly review that shows an est. 1RM stat, never on the card and never again', (snaps, name) => {
+invariant(LIFTERS, 'est. 1RM is explained once: by a card reason in the goal\'s first lift-comparison week, never in a later week and never in a review the card already covered', (snaps, name) => {
   const out: Violation[] = [];
-  const firstWithStat = snaps.find(s => s.review?.review.stats.some(st => st.label.endsWith('est. 1RM')));
-  const holders: DaySnapshot[] = [];
+  const firstWithTerm = snaps.find(s => s.card?.reasons.some(r => /est\. 1RM/.test(plain(r.text)) && r.kind !== 'explainer'));
+  assert.ok(firstWithTerm, `${name}: the card never showed an est. 1RM line`);
+  const week = mondayOfDate((firstWithTerm as DaySnapshot).date);
+  let explained = 0;
   for (const snap of snaps) {
-    for (const t of allTexts(snap)) {
-      if (!/most you could lift once/.test(plain(t.text))) continue;
-      if (!t.where.startsWith('review.')) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" explains est. 1RM outside the review` });
-      else if (!holders.includes(snap)) holders.push(snap);
+    const line = snap.card?.reasons.find(r => r.kind === 'explainer');
+    const inWeek = snap.date >= (firstWithTerm as DaySnapshot).date && snap.date <= addDays(week, 6);
+    if (inWeek && snap.card && !line) out.push({ snap, detail: `the first lift-comparison week (from ${(firstWithTerm as DaySnapshot).date}) has no explainer reason: ${JSON.stringify(snap.card.reasons.map(r => r.text))}` });
+    if (line) {
+      explained++;
+      if (!inWeek) out.push({ snap, detail: `the explainer is on the card outside the first lift-comparison week (${week})` });
+      if (plain(line.text) !== EST_1RM_EXPLAINER) out.push({ snap, detail: `explainer text "${visible(line.text)}"` });
+      if (snap.card && snap.card.reasons.indexOf(line) > 1) out.push({ snap, detail: 'the explainer is not directly under the lift line it explains' });
     }
+    for (const t of reviewTexts(snap)) if (/most you could lift once/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" explains est. 1RM again, the card already did` });
+    for (const t of coachTexts(snap)) if (/most you could lift once/.test(plain(t.text)) && !(inWeek && snap.card?.reasons.some(r => r.kind === 'explainer'))) out.push({ snap, detail: `${t.where} repeats the explainer outside its week` });
   }
-  assert.ok(firstWithStat, `${name}: no review showed an est. 1RM stat`);
-  if (holders.length !== 1 || holders[0] !== firstWithStat) {
-    out.push({ snap: firstWithStat, detail: `the explainer should be in the first review with an est. 1RM stat (${describeDay(firstWithStat)}) and nowhere else, found on: ${holders.map(describeDay).join(', ') || 'no day'}` });
-  } else if (!plain(firstWithStat.review?.review.nextWeek ?? '').endsWith(EST_1RM_EXPLAINER)) {
-    out.push({ snap: firstWithStat, detail: `review.nextWeek should end "${EST_1RM_EXPLAINER}": "${visible(firstWithStat.review?.review.nextWeek ?? '')}"` });
-  }
+  assert.ok(explained >= 3, `${name}: only ${explained} card day(s) carried the explainer, so this invariant checked (almost) nothing`);
   return out;
 });
 
@@ -4116,6 +4120,45 @@ invariant(LIFTERS, 'P3-8: an adherence line is never amber under a "Progressing"
     for (const r of card.reasons) if (r.kind === 'adherence' && r.tone === 'watch') out.push({ snap, detail: `"${visible(card.headline)}" over amber "${visible(r.text)}"` });
   }
   assert.ok(progressing > 0, `${name}: no Progressing day, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P3-6. lifter_obedient day 70-76: "+12 kg vs 4 weeks ago (139 → 151 kg)" when the 139 was set five weeks back (the ill week has no squat). The comparison window keeps its
+// maths (iOS mirrors it); only the label changes: "vs 4 weeks ago" is printed only when the lift was trained in the week 4 weeks before the recent window, else "vs wk of Aug 31"
+// names the Monday of the baseline week actually used. Checked against the scenario's own rows, on the card (reason and headline), the review stat and the coach lines.
+const MONTH_ABBR_24S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthDay24s = (day: string): string => `${MONTH_ABBR_24S[Number(day.slice(5, 7)) - 1]} ${Number(day.slice(8, 10))}`;
+
+invariant(LIFTERS, 'P3-6: "vs 4 weeks ago" is printed only when the lift was trained 4 weeks before the recent window; otherwise the label names the baseline week ("vs wk of Apr 6")', (snaps, name) => {
+  const scn = buildScenario(name);
+  const display = new Map(scn.sets.map(x => [x.display.toLowerCase(), x.exercise]));
+  const out: Violation[] = [];
+  let labels = 0;
+  // `lastWeek`: the review cuts its lift data at the reviewed week (a session on its own Monday is not in it), the card reads everything up to today.
+  const check = (snap: DaySnapshot, where: string, text: string, anchor: string, lastWeek = anchor): void => {
+    const trained = (exercise: string, monday: string): boolean => monday <= lastWeek && weekTopKg24s(name, exercise, monday) != null;
+    const m = /^(?:[^—]+ — )?(?:This week: |Last week: )?([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM [+−-]?\d+ (?:kg|lb)?\s?(vs 4 weeks ago|vs wk of ([A-Z][a-z]{2} \d+))/.exec(plain(text));
+    if (!m) return;
+    const exercise = display.get(m[1].toLowerCase());
+    if (!exercise) return;
+    // The end of the recent window: the newest trained week among the anchor and the 2 before it.
+    const end = [0, 7, 14].map(o => addDays(anchor, -o)).find(w => trained(exercise, w));
+    if (end == null) return;
+    labels++;
+    const fourAgo = addDays(end, -28);
+    const baseline = [fourAgo, addDays(end, -35)].find(w => trained(exercise, w));
+    if (baseline == null) return;
+    if (m[2] === 'vs 4 weeks ago' && !trained(exercise, fourAgo)) out.push({ snap, detail: `${where}: "${visible(text)}" says 4 weeks ago, but ${m[1]} was not trained in the week of ${monthDay24s(fourAgo)} (the baseline is the week of ${monthDay24s(baseline)})` });
+    if (m[3] != null && (trained(exercise, fourAgo) || m[3] !== monthDay24s(baseline))) out.push({ snap, detail: `${where}: "${visible(text)}" names the week of ${m[3]}, the baseline week is ${monthDay24s(baseline)} (4 weeks back ${trained(exercise, fourAgo) ? 'was trained' : 'is empty'})` });
+  };
+  for (const snap of snaps) {
+    const anchor = mondayOfDate(snap.date);
+    for (const t of cardTexts(snap)) check(snap, t.where, t.text, anchor);
+    for (const t of coachTexts(snap)) if (t.where.startsWith('coach')) check(snap, t.where, t.text.replace(/^\s*-\s*/, ''), anchor);
+    const r = snap.review?.review;
+    if (r) for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) check(snap, `review.stat ${st.label}`, `${st.label} ${st.value} ${st.comparison}`, addDays(r.weekStart, 7), r.weekStart);
+  }
+  assert.ok(labels > 10, `${name}: only ${labels} 4-week labels were checked, so this invariant checked (almost) nothing`);
   return out;
 });
 

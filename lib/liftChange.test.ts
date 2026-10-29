@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   shiftDay,
-  DELOAD_CUE_HEAD, afterProactiveDeload, heavierLoadStreak, proactiveDeload,
+  DELOAD_CUE_HEAD, afterProactiveDeload, heavierLoadStreak, liftBaselineLabel, liftBaselineWeek, proactiveDeload,
   cuedLifts, easedLoad, findRecentBreak, headlineLeader, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
   furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
   liftReturnStates, liftShortName, liftTrainedAtWorkingWeight, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, shortWeekLoadToLift, weekOverWeekWording,
@@ -18,6 +18,27 @@ const wk = (weekStart: string, e: number | null): LiftWeekPoint => ({ weekStart,
 test('bench: best of last 2 weeks vs best of the 2 weeks ending 4 weeks ago', () => {
   const c = liftChange4w([wk('2026-08-31', 100), wk('2026-09-07', 102.1), wk('2026-09-28', 107.9), wk('2026-10-05', 105)], ANCHOR);
   assert.deepEqual(c, { baselineKg: 102.1, recentKg: 107.9, changeKg: 5.8 });
+});
+
+test('liftBaselineWeek / liftBaselineLabel: "vs 4 weeks ago" unless that week is empty, then the week the baseline came from (label only: liftChange4w is untouched) (wave 24s)', () => {
+  // ANCHOR 10-05: the recent window ends 10-05, its 4-weeks-ago week is 09-07, the one before 08-31.
+  const full = [wk('2026-08-31', 100), wk('2026-09-07', 102.1), wk('2026-09-28', 107.9), wk('2026-10-05', 105)];
+  assert.deepEqual(liftBaselineWeek(full, ANCHOR), { weekStart: '2026-09-07', fourWeeksAgo: true });
+  assert.equal(liftBaselineLabel(full, ANCHOR), 'vs 4 weeks ago');
+  // 09-07 empty (an ill week): the baseline is the week of Aug 31, five weeks back, and the label says so. The number is liftChange4w's, unchanged.
+  const gap = [wk('2026-08-31', 139), wk('2026-09-28', 148), wk('2026-10-05', 151)];
+  assert.deepEqual(liftBaselineWeek(gap, ANCHOR), { weekStart: '2026-08-31', fourWeeksAgo: false });
+  assert.equal(liftBaselineLabel(gap, ANCHOR), 'vs wk of Aug 31');
+  assert.deepEqual(liftChange4w(gap, ANCHOR), { baselineKg: 139, recentKg: 151, changeKg: 12 });
+  // Both weeks trained and the older one is the better: still "vs 4 weeks ago" (the 4-weeks-ago week has data; the number is the best of the two, as before).
+  const older = [wk('2026-08-31', 110), wk('2026-09-07', 102), wk('2026-10-05', 105)];
+  assert.equal(liftBaselineLabel(older, ANCHOR), 'vs 4 weeks ago');
+  assert.deepEqual(liftBaselineWeek(older, ANCHOR), { weekStart: '2026-08-31', fourWeeksAgo: true });
+  // No comparison: nothing to name.
+  assert.equal(liftBaselineWeek([wk('2026-09-14', 100), wk('2026-10-05', 101)], ANCHOR), null);
+  assert.equal(liftBaselineLabel([wk('2026-09-14', 100), wk('2026-10-05', 101)], ANCHOR), 'vs 4 weeks ago');
+  // A one-digit day has no leading zero.
+  assert.equal(liftBaselineLabel([wk('2026-04-06', 139), wk('2026-05-11', 151)], '2026-05-11'), 'vs wk of Apr 6');
 });
 
 test('squat: a decline is reported as a negative change', () => {

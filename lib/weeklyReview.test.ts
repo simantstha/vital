@@ -900,6 +900,11 @@ test('est. 1RM is explained once: the review of the lifter\'s second week of lif
   assert.ok(!off.nextWeek.includes('most you could lift once'), off.nextWeek);
   // Weight loss and the other goals never carry it.
   assert.ok(!computeWeeklyReview(weightLossInput({ weightReadings: weigh([...PREV, ...WEEK], () => 82) })).nextWeek.includes('most you could lift once'));
+  // The goal card carries it first (wave 24s P3-5: its first lift-comparison week); the review keeps the sentence only when the card, as of the reviewed
+  // Sunday, did not (`cardExplainedEst1rm`).
+  const told = computeWeeklyReview(priyaWeek({ cardExplainedEst1rm: true }));
+  assert.ok(!told.nextWeek.includes('most you could lift once'), told.nextWeek);
+  assert.equal(told.nextWeek, "Back to 4 this week — don't make up the missed ones, starting today.");
 });
 
 test('the day suggested for the missed active day is the weekday with the fewest sessions over the two weeks (general goal)', () => {
