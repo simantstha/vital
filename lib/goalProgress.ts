@@ -150,6 +150,7 @@ import {
   PEAK_PLAN_SLACK_KM,
   PHASE_CEILING_TOLERANCE,
   holdOverrunRead,
+  longRunPeakReachedOn,
   midWeekRestartText,
   restOfWeekPhrase,
   weekLimitFraction,
@@ -366,6 +367,8 @@ export interface GoalWeekPlan {
   midWeekRestart?: { fullKm: number; km: number; longCapKm: number; pending: boolean };
   /** Additive (wave 24e): last week's km (the compact plan's coach lines compare a hold with it: "an easier week" only when the hold really is easier). */
   lastKm?: number;
+  /** Additive (wave 24e): last week was a cutback week (the coach's hold line says "over the cutback", not "over the safe step"). */
+  lastCutback?: boolean;
   /**
    * Additive (wave 23e): the week after a cutback steps from the last full week before it, not from the cutback: `stepPct` is against `stepBaseKm`
    * ("+9% on your last full week (23 km)"). Absent otherwise.
@@ -2851,6 +2854,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.cutback != null ? { cutback: true } : {}),
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.last != null ? { lastKm: plan.last.km } : {}),
+            ...(plan.last?.cutback === true ? { lastCutback: true } : {}),
             ...(plan.restart?.midWeek != null ? { midWeekRestart: { fullKm: plan.restart.midWeek.fullKm, km: plan.restart.midWeek.km, longCapKm: plan.restart.midWeek.longCapKm, pending: plan.restart.midWeek.pending } } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
             ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
@@ -3140,11 +3144,17 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
   const peakBy = addDays(race.date, -raceRules(race.distanceKm).peakLongRunLeadDays);
   // Wave 23e P3-i: a peak date is promised only if the plan's long-run step (+2 km on each Sunday, this week's only while its long run is still to come)
   // gets there by then; otherwise it is "peak target 15 km", with no date to miss ("build to 15 km by early Jun", then a 14 km peak "done" in the taper).
-  const sundays = (): string => addDays(weekStart(input.todayKey), enduranceCtx(input).plan?.longRunAhead === false ? 13 : 6);
+  // Wave 24e: and the plan's ACTUAL next long runs decide it, held weeks included (this week's long run as the plan has it, the cutback weeks that hold it):
+  // `longRunPeakReachedOn`. Without a plan (nothing measured yet) the flat step stands.
+  const ec = enduranceCtx(input);
   let reachedOn: string | null = null;
-  for (let step = 0, km = lr.lastKm, sunday = sundays(); step < 12 && reachedOn == null; step++, sunday = addDays(sunday, 7)) {
-    km = longRunStepKm(km, lr.targetPeakKm);
-    if (km >= lr.targetPeakKm - 1e-9) reachedOn = sunday;
+  if (ec.plan != null) {
+    reachedOn = longRunPeakReachedOn(ec.plan, lr.lastKm, lr.targetPeakKm, peakBy, input.race ?? null);
+  } else {
+    for (let step = 0, km = lr.lastKm, sunday = addDays(weekStart(input.todayKey), 6); step < 12 && reachedOn == null; step++, sunday = addDays(sunday, 7)) {
+      km = longRunStepKm(km, lr.targetPeakKm);
+      if (km >= lr.targetPeakKm - 1e-9) reachedOn = sunday;
+    }
   }
   const goal = peakBy >= input.todayKey && reachedOn != null && reachedOn <= peakBy
     ? `build to ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))} by ${looseMonthPosition(peakBy)}`
@@ -3179,6 +3189,9 @@ function changeClause(changePct: number | null, asPlanned = false, fullWeek: str
   // A cutback week is a planned drop, not a lapse.
   return ` (${changePct > 0 ? '+' : '−'}${Math.abs(changePct)}%${asPlanned && changePct < 0 ? ', as planned' : ''})`;
 }
+
+/** The first letter upper-cased (a clause that now starts a sentence). */
+const capitalize = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** On a break: if the break was an illness, the restart waits for the body. */
 const ILLNESS_GUARD = "If you were ill, wait until you've been symptom-free for 24–48 h first";
@@ -3539,12 +3552,13 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     if (plan.upTo) {
       const ceilingAdvice = weekdayOf(input.todayKey) === 0 ? "keep tomorrow's run easy and stay at the ceiling next week" : restOfWeek;
       return finish('holding', `Well over the ceiling — ${done} of up to ~${fmt(target)}. Stay at ~${fmt(target)} next week`, body(
-        { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's ceiling; big jumps raise injury risk — ${ceilingAdvice}`, tone: 'watch' },
+        { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's ceiling; big jumps raise injury risk. ${capitalize(ceilingAdvice)}`, tone: 'watch' },
       ));
     }
-    return finish('holding', `Over the safe step — ${done} of ~${fmt(target)}. Hold ~${fmt(nextHold)} next week`, body(
+    return finish('holding', `Over the ${plan.cutback != null ? 'cutback' : 'safe step'} — ${done} of ~${fmt(target)}. Hold ~${fmt(nextHold)} next week`, body(
       // (Wave 23e P3-g: in a cutback week the number is the cutback, not "the safe step".)
-      { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's ${plan.cutback != null ? 'cutback' : 'safe step'}; big jumps raise injury risk — ${advice}`, tone: 'watch' },
+      // (Wave 24e: two sentences - the warning, then what to do - not one run-on joined by two dashes.)
+      { kind: 'volume', text: `${fmt(doneKm)} is ${fmt(doneKm - target)} over this week's ${plan.cutback != null ? 'cutback' : 'safe step'}; big jumps raise injury risk. ${capitalize(advice)}`, tone: 'watch' },
     ));
   }
 
@@ -3654,7 +3668,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
           : `Last week's ${fmt(hold.spikeKm)} was over the safe step of ~${fmt(hold.spikeStepKm)}`,
         tone: 'watch',
       };
-      return finish('holding', `Over the safe step last week — hold ~${fmt(target)} this week`, stepWarn != null
+      return finish('holding', `Over the ${plan.last?.cutback === true ? 'cutback' : 'safe step'} last week — hold ~${fmt(target)} this week`, stepWarn != null
         ? body(stepWarn, [jumpInfo, planLine])
         : body(jumpInfo, [planLine]));
     }

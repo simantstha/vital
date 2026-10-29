@@ -203,7 +203,7 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
       if (plan.overCapRead === 'well') {
         return `- This week's target: stay at ~${t} — last week was well over its comeback ceiling (a spike); do not build on the jump, and do not praise the extra distance${strides}`;
       }
-      return `- This week's target: hold ~${t} — last week was over the safe step; do not push higher or step up from the jump${strides}`;
+      return `- This week's target: hold ~${t} — last week was over the ${plan.lastCutback === true ? 'cutback' : 'safe step'}; do not push higher or step up from the jump${strides}`;
     case 'restart': {
       // Wave 23e P3-h: on a break the plan's long run comes from the week's own number, but the line quotes the RESTART number (a lower band past two weeks
       // off): the long run shown with it is at most 40% of that number ("restart at ~12 km; long run 4.5 km", never 6.5 km = 54%).

@@ -971,6 +971,13 @@ export const RESTART_LONG_RUN_MAX_SHARE = 0.4;
  * only when the week before graded good; otherwise it is repeated.
  */
 export const COMEBACK_WEEKS = 3;
+/**
+ * Wave 24e: the comeback does not lapse on the calendar. After the three rungs it goes on - the target stays a ceiling ("up to ~17 km", "back toward your usual
+ * ~22 km") - until the week just run is back at this share of the pre-break median (or `COMEBACK_MAX_WEEKS` weeks have passed). It used to end after three weeks
+ * at 15 of a usual 22 km, and the same 17 km changed from a ceiling into a bar ("+13% step").
+ */
+export const COMEBACK_BACK_FRACTION = 0.9;
+export const COMEBACK_MAX_WEEKS = 8;
 export const COMEBACK_RUNGS = [0.8, 1] as const;
 /** No run for this many days is a break (more for a runner who normally runs less often, see `breakThreshold`). */
 export const BREAK_DAYS = 7;
@@ -1981,7 +1988,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       // A comeback week read against its "up to" ceiling C (km run A): within it, "a touch over" (rule 2), or "well over" (rule 3 -
       // that one is a spike and became the hold branch above).
       const capRead = prevPlan != null && prevIsTraining ? comebackCapRead(prevPlan, prev.km, ctx.units) : 'within';
-      if (from != null && from.weeksSince + 1 <= COMEBACK_WEEKS) {
+      if (from != null && (from.weeksSince + 1 <= COMEBACK_WEEKS || (from.weeksSince + 1 <= COMEBACK_MAX_WEEKS && prev.km < from.medianKm * COMEBACK_BACK_FRACTION))) {
         // A rung is climbed only when the week before graded good (a touch over its ceiling still does); otherwise it is repeated.
         const rung = prevGrade?.level === 'good' ? nextRung(from.fraction) : from.fraction;
         const rungKm = roundWeekTargetKm(from.medianKm * rung, ctx.units);
@@ -2291,6 +2298,50 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     unitsPerKm: ctx.units,
   };
   return { ...base, purpose: purposeLine(base) };
+}
+
+/**
+ * Wave 24e: the Sunday on which the plan's own long run first reaches `targetPeakKm` - the plan's ACTUAL next long runs, held weeks included, not a flat "+2 km a Sunday":
+ * this week's long run as the plan has it (held after a jump, a cutback or a restart cap, trimmed to what is left), then +2 km on each coming Sunday except the cutback
+ * weeks the calendar brings (they hold the long run: every 4th week after 3 build weeks, 2 when a cutback is owed, never the last build week before a taper). Null when it
+ * is not reached by `byDay` (the peak date) or the taper starts first. `lastKm` is the longest run of the last 14 days. This week's Sunday counts only while this week's
+ * long run is still to come.
+ */
+export function longRunPeakReachedOn(
+  plan: Pick<EnduranceWeekPlan, 'weekStart' | 'longRunKm' | 'longRunAhead' | 'buildWeeks' | 'cutbackOwed' | 'kind'>,
+  lastKm: number,
+  targetPeakKm: number,
+  byDay: string,
+  race: { date: string | null; distanceKm: number | null } | null,
+  maxWeeks = 14,
+): string | null {
+  const windDownAt = (monday: string): boolean => race?.date != null && isWindDownPhase(racePhase(race.date, monday, race.distanceKm));
+  let monday = plan.weekStart;
+  let km = lastKm;
+  let builds = plan.buildWeeks;
+  for (let k = 0; k < maxWeeks; k++) {
+    const sunday = addDayKey(monday, 6);
+    if (sunday > byDay || windDownAt(monday)) return null;
+    if (k === 0) {
+      if (plan.longRunAhead !== false) {
+        const planned = plan.longRunKm ?? 0;
+        if (planned >= targetPeakKm - 1e-9) return sunday;
+        km = Math.max(planned, 0) > 0 ? planned : km;
+      }
+    } else {
+      const cutbackWeek = ((absoluteWeek(monday) % CUTBACK_EVERY_WEEKS) + CUTBACK_EVERY_WEEKS) % CUTBACK_EVERY_WEEKS === CUTBACK_EVERY_WEEKS - 1;
+      const held = cutbackWeek && builds >= (plan.cutbackOwed && k === 1 ? OWED_CUTBACK_AFTER_BUILD_WEEKS : CUTBACK_EVERY_WEEKS - 1) && !windDownAt(addDayKey(monday, 7));
+      if (held) builds = 0;
+      else {
+        km = longRunStepKm(km, targetPeakKm);
+        builds++;
+        if (km >= targetPeakKm - 1e-9) return sunday;
+      }
+    }
+    monday = addDayKey(monday, 7);
+    if (k === 0) builds = plan.kind === 'build' || plan.kind === 'maintain' || plan.kind === 'hold' ? plan.buildWeeks : 0;
+  }
+  return null;
 }
 
 /**

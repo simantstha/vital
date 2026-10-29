@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addDayKey, enduranceWeekPlan, type PlanRun } from './enduranceProgression';
+import { addDayKey, enduranceWeekPlan, longRunPeakReachedOn, type PlanRun } from './enduranceProgression';
 
 const WEEK1 = '2026-09-14';
 const monday = (n: number): string => addDayKey(WEEK1, 7 * (n - 1));
@@ -129,4 +129,40 @@ test('imperial: the held long run is never past the peak the goal fits (9.5 mi a
   const p = onPlanPlan(75, MI);
   assert.ok((p.longRunKm ?? 0) * MI <= 9 + 1e-6, `${(p.longRunKm ?? 0) * MI} mi`);
   assert.match(nbsp(p.purpose), /long run 9 mi/);
+});
+
+// ── wave 24e group 3: comeback ───────────────────────────────────────────────
+
+test('the comeback ladder stays alive until the runner is back at ~90% of the usual week - the "up to" ceiling never turns into a bar after 3 weeks at 15 of a usual 22 km', () => {
+  // Weeks 1-6 build (15..25, the median of the last four is 22), weeks 7-8 are empty, week 9 restarts (12 km), then 13, 14, 15 km: still 68% of the usual 22 km.
+  const history = (kms: number[]): PlanRun[] => runsFor([15, 17, 19, 21, 23, 25, 0, 0, ...kms]);
+  const plans = (kms: number[]) => planOf(history(kms), 9 + kms.length, 0);
+  const w12 = plans([12, 13, 14]);
+  assert.equal(w12.comeback?.weeksSince, 3);
+  assert.equal(w12.upTo, true);
+  // The fourth week after the restart: 15 km run, 68% of the usual week - still a ceiling ("up to"), still "back toward your usual ~22 km".
+  const w13 = plans([12, 13, 14, 15]);
+  assert.equal(w13.comeback?.weeksSince, 4, 'the ladder ended after three weeks');
+  assert.equal(w13.upTo, true);
+  assert.match(nbsp(w13.purpose), /^Up to ~\d+ km this week: .*back toward your usual ~22 km/);
+  // Back at 90% of the usual week (20 of 22) the comeback is over: the plain step again, a bar.
+  const done = plans([12, 15, 18, 20]);
+  assert.equal(done.comeback, null);
+  assert.equal(done.upTo, false);
+});
+
+test('a peak date is promised from the plan\'s ACTUAL next long runs, held weeks included: the cutback week in between holds the long run one Sunday', () => {
+  const runs = runsFor([15, 17, 19, 21, 23]);
+  const plan = planOf(runs, 5, 0); // Monday 2026-10-12; the calendar's cutback week is Monday 2026-10-19
+  const lastKm = 8.4;
+  const flat = (): string => { // the old model: +2 km on every Sunday, this week's included
+    let km = lastKm;
+    for (let sunday = addDayKey(monday(5), 6), i = 0; i < 14; sunday = addDayKey(sunday, 7), i++) { km = Math.min(15, km + 2); if (km >= 15) return sunday; }
+    return 'never';
+  };
+  const real = longRunPeakReachedOn(plan, lastKm, 15, '2026-12-31', null);
+  assert.ok(real != null, 'never reached');
+  assert.equal(real, addDayKey(flat(), 7), `flat ${flat()}, the plan's ${real}`);
+  // A peak date before it is not promised at all (null), the cutback week having held the long run.
+  assert.equal(longRunPeakReachedOn(plan, lastKm, 15, flat(), null), null);
 });
