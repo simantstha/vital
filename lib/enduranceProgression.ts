@@ -587,6 +587,26 @@ export const HOLD_KEPT_FRACTION = 1.05;
 export const HOLD_LONG_RUN_SLACK_KM = 0.5;
 
 /**
+ * Wave 24e: ONE tolerance per plan kind, shared by the rest-of-week trim ("keep Sunday's long run to ~6 km") and by the grading of the finished week.
+ * It used to be two numbers: the trim let a hold week reach 110% of its number while the hold counted as kept only to 105%, so a runner who obeyed
+ * Saturday's "long run 11 km" ended at 27 of ~25 and was told "above the hold". The most a week may reach, as a multiple of its number:
+ *  - hold: 1.05 (`HOLD_KEPT_FRACTION`, what `holdOverrun` grades);
+ *  - taper: 1.0 (the number itself; a taper is graded 'over' far above that, the trim is the careful side);
+ *  - every other kind (build, maintain, a cutback, a comeback ceiling, restart, rebuild): 1.10 (`PHASE_CEILING_TOLERANCE`, which a cutback's
+ *    "ran as a normal week" and a comeback's "a touch over" start at).
+ */
+export function weekLimitFraction(kind: EnduranceWeekKind): number {
+  if (kind === 'hold') return HOLD_KEPT_FRACTION;
+  if (kind === 'taper') return 1;
+  return PHASE_CEILING_TOLERANCE;
+}
+
+/** A normal week is on plan from this share of its number (the good bar); what is left under it is "done": at most 10% of the number. */
+export const WEEK_ON_PLAN_FRACTION = 0.9;
+/** Wave 24e: "this week's km are done" - the km left are at most this share of the week's number, the band the review grades as on plan. */
+export const WEEK_DONE_BAND = 1 - WEEK_ON_PLAN_FRACTION;
+
+/**
  * Wave 23e: a hold week is "on plan" only if it was held - at most 105% of its number and a long run at most 0.5 km over the held one. A hold the
  * runner built through ("28 of ~25 km, long run 12 against 11") is neither on plan nor praised as held. `longestRunKm` is the week's longest run
  * (null = unknown: only the km are judged). The long run the hold asked for is the plan's own, before any trim of the week's last days.
@@ -775,7 +795,7 @@ export interface EnduranceWeekPlan {
    * Restart (or rebuild-from-rest) weeks: why, the median weekly km (before the break) the restart target is a share
    * of, the share the restart used (the gap length decides it) and the gap in days when it was a gap.
    */
-  restart: { reason: 'break' | 'low_week' | 'no_runs'; medianKm: number; fraction: number; gapDays: number | null } | null;
+  restart: { reason: 'break' | 'low_week' | 'no_runs'; medianKm: number; fraction: number; gapDays: number | null; midWeek?: { fullKm: number; daysLeft: number; km: number; longCapKm: number; pending: boolean } } | null;
   /**
    * The weeks right after a restart climb back to the pre-break median in rungs (restart, then 80%, then 100%):
    * the median, the rung this week uses (share of the median) and how many weeks after the restart it is (1-3).
@@ -872,8 +892,37 @@ export interface EnduranceWeekPlan {
    * taper), so the long run is cut to what is left - or skipped when under 3 km (2 mi) is. `longRunKm`, `longRun.nextKm`, the plan line, the
    * coach and the card's remaining-km line all say that ONE number. `fullKm` is the long run the week would otherwise plan.
    */
-  longRunTrim: { fullKm: number; doneKm: number; remainingKm: number; weekDone: boolean; today: boolean } | null;
+  longRunTrim: RestOfWeekBudget | null;
   unitsPerKm: number;
+}
+
+/**
+ * Wave 24e: THE rest-of-week budget (`longRunTrim`) - what is left of this week, worked out once and worded by `restOfWeekPhrase` for every surface (the
+ * card's remaining-km line, the plan line, the coach lines, the headline) and graded by the same tolerance (`weekLimitFraction`) the review uses.
+ */
+export interface RestOfWeekBudget {
+  /** The long run the week would otherwise plan. */
+  fullKm: number;
+  /** The week's km so far; on the week's last day the km through yesterday (Sunday keeps Saturday's number). */
+  doneKm: number;
+  /** The week's number minus `doneKm`, km (0 when passed). */
+  remainingKm: number;
+  /** The km left are at most 10% of the week's number (`WEEK_DONE_BAND`): the review grades this as on plan. */
+  weekDone: boolean;
+  /** The week's last day: the only run day left is today. */
+  today: boolean;
+  /** The runner's usual run days still ahead (from their last weeks); today's counts while its run is not in. */
+  daysLeft: number;
+  /** The weekday ("Saturday") when exactly one usual run day is left; null otherwise. */
+  day: string | null;
+  /** Not done, but under 3 km (2 mi) left: one short easy run. */
+  small: boolean;
+  /** `small`, and the week already sits in the plan's good band: resting is fine too. */
+  easyOk: boolean;
+  /** The last day, and today's run is in: the numbers are the morning's (Saturday's). */
+  afterRun: boolean;
+  /** The most the week may reach: the number x `weekLimitFraction(kind)`. */
+  limitKm: number;
 }
 
 /** A sick or very light week (no long gap) is "restarted" from this share of the recent median week. */
@@ -889,6 +938,8 @@ export const RESTART_HOLD_GAP_DAYS = 7;
 export const RESTART_MID_FRACTION = 0.75;
 export const RESTART_LONG_GAP_DAYS = 14;
 export const RESTART_LONG_FRACTION = 0.55;
+/** Wave 24e: a restart whose first run back falls on this weekday (Monday = 0; Thursday) or later is scaled to the days left of that week. */
+export const MID_WEEK_RESTART_FROM_DOW = 3;
 /** Wave 23e P3-h: a long run quoted next to a restart number is at most this share of it (floored to the half km / mile): 12 km restart -> 4.5 km, never 6.5 (54%). */
 export const RESTART_LONG_RUN_MAX_SHARE = 0.4;
 /**
@@ -923,7 +974,7 @@ const MAX_PLAN_DEPTH = 8;
 const MEDIAN_WEEKS = 4;
 const MAX_LOOKBACK_WEEKS = 16;
 /** Good / mixed shares of a week's target. */
-const GOOD_FRACTION = 0.9;
+const GOOD_FRACTION = WEEK_ON_PLAN_FRACTION;
 const MIXED_FRACTION = 0.6;
 const RESTART_GOOD_FRACTION = 0.6;
 const RESTART_MIXED_FRACTION = 0.3;
@@ -1353,6 +1404,96 @@ export function easedOffLine(nextPhase: 'taper' | 'race_week' = 'taper', unitsPe
   return `${nextPhase === 'taper' ? 'Taper' : 'Race week'} starts tomorrow — no need to make up this week's ${distanceUnit(unitsPerKm) === 'km' ? 'km' : 'miles'}`;
 }
 
+/** What the wording of the budget reads (the goal card's compact copy of `RestOfWeekBudget` carries the same fields; the newer ones are optional there). */
+export interface RestOfWeekWording {
+  remainingKm: number;
+  weekDone: boolean;
+  today: boolean;
+  daysLeft?: number;
+  day?: string | null;
+  small?: boolean;
+  easyOk?: boolean;
+}
+
+/** Wave 24e: the wording of a restart that begins mid-week. `pending`: still on a break, what to take if the runner starts today; else the week as it is. */
+export function midWeekRestartText(
+  mw: { fullKm: number; km: number; longCapKm: number },
+  unitsPerKm: number,
+  form: 'stub' | 'pending',
+): string {
+  const cap = mw.longCapKm > 0 ? mw.longCapKm : mw.km;
+  const n = Math.max(1, Math.ceil(mw.km / cap - 1e-9));
+  const runs = n <= 1 ? 'one or two easy runs' : `${n - 1}–${n} easy runs`;
+  const tail = `in ${runs}, nothing over ~${formatKm(cap, unitsPerKm)}; the restart week (~${formatKm(mw.fullKm, unitsPerKm)}) starts Monday`;
+  return form === 'pending'
+    ? `Starting today? ~${formatKm(mw.km, unitsPerKm)} over the rest of this week ${tail}`
+    : `Restart mid-week: ~${formatKm(mw.km, unitsPerKm)} this week ${tail}`;
+}
+
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
+
+/** `km` in display units, rounded DOWN to 0.5 of the unit: the runner is never told to run more than is left. */
+function floorUnits(km: number, units: number): number {
+  return Math.floor(km * units * 2 + 1e-9) / 2;
+}
+
+/**
+ * Wave 24e: the ONE wording of the rest-of-week budget, read by the card's remaining-km line (`card`), the plan line (`plan`), the coach's target line
+ * (`coach`) and the headline (`headline`) - so they cannot disagree:
+ *  - done (at most 10% of the week left): "this week's km are done; skip the long run (rest or a 20-min jog)";
+ *  - under 3 km (2 mi) left: "~2 km left - one short easy run" (resting is fine too only when the week already sits in the plan's good band);
+ *  - exactly one usual run day left: "keep Sunday's long run to ~6 km" (the day is named only then);
+ *  - otherwise the total: "6 km left this week - one easy run of ~6 km, or two of ~3 km".
+ * `longRunKm` is the plan's (trimmed) long run, null when none is planned.
+ */
+export function restOfWeekPhrase(
+  trim: RestOfWeekWording,
+  opts: { unitsPerKm: number; longRunKm: number | null; longRunAhead: boolean; form: 'card' | 'coach' | 'headline' | 'plan'; targetKm?: number | null },
+): string {
+  const u = opts.unitsPerKm;
+  const unit = distanceUnit(u);
+  const left = withUnit(floorUnits(trim.remainingKm, u), unit);
+  const target = opts.targetKm != null ? withUnit(round1(opts.targetKm * u), unit) : null;
+  const stays = opts.form === 'coach' && target != null ? ` so the week stays at ~${target}` : '';
+  const sep = ':';
+  switch (restOfWeekKind(trim, opts.longRunKm)) {
+    case 'done': {
+      const rest = opts.longRunAhead ? 'skip the long run (rest or a 20-min jog)' : 'rest or an easy 20-min jog';
+      if (opts.form === 'headline') return "this week's km are done";
+      if (opts.form === 'coach') return `the week's km are done: ${rest}, no catch-up volume`;
+      return `this week's km are done; ${rest}`;
+    }
+    case 'small': {
+      const rest = trim.easyOk ? ' or rest, either is fine' : '';
+      const small = withUnit(round1(trim.remainingKm * u), unit);
+      if (opts.form === 'headline') return `~${small} left`;
+      return `~${small} left${sep} one short easy run${rest}${opts.form === 'coach' ? ', no catch-up volume' : ''}`;
+    }
+    case 'named': {
+      const lr = opts.longRunKm as number;
+      const day = trim.day === undefined ? 'Sunday' : trim.day;
+      const when = trim.today ? "today's" : `${day}'s`;
+      const word = trim.today || day === 'Sunday' ? longRunWord(lr, u) : 'run';
+      return `keep ${when} ${word} to ~${formatTargetLongRun(lr, u)}${stays}`;
+    }
+    case 'total': {
+      const half = withUnit(floorUnits(trim.remainingKm / 2, u), unit);
+      if (opts.form === 'headline') return `${left} left this week`;
+      return `${left} left${opts.form === 'plan' ? '' : ' this week'}${sep} one easy run of ~${left}, or two of ~${half}${stays ? `,${stays}` : ''}`;
+    }
+  }
+}
+
+/** Which wording the budget gets (see `restOfWeekPhrase`): the day is named only when exactly one usual run day is left and a trimmed long run is planned for it. */
+export function restOfWeekKind(trim: RestOfWeekWording, longRunKm: number | null): 'done' | 'small' | 'named' | 'total' {
+  if (trim.weekDone) return 'done';
+  if (trim.small) return 'small';
+  // (A budget without a rhythm - older payloads - is the long run's Sunday, as before wave 24e.)
+  const daysLeft = trim.daysLeft ?? 1;
+  const day = trim.day === undefined ? 'Sunday' : trim.day;
+  return daysLeft === 1 && day != null && longRunKm != null && longRunKm > 0 ? 'named' : 'total';
+}
+
 /** One line of "what this week is for" (units-aware, U+00A0 between a number and its unit). */
 function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const u = plan.unitsPerKm;
@@ -1367,6 +1508,12 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   if (plan.longRunTrim?.weekDone) {
     const head = plan.cutback != null ? 'Cutback week: ' : plan.kind === 'taper' ? 'Taper: ' : plan.kind === 'hold' ? 'Hold week: ' : '';
     return `${head}~${formatKm(t ?? plan.goalKm, u)} this week, done — no long run (rest or a 20-min jog)`;
+  }
+  // Wave 24e: the km left are a total (several usual run days are left, or under 3 km): the plan line says that number, never a long run of its own.
+  const trimKind = plan.longRunTrim != null ? restOfWeekKind(plan.longRunTrim, plan.longRunKm) : null;
+  if (plan.longRunTrim != null && (trimKind === 'small' || trimKind === 'total')) {
+    const head = plan.cutback != null ? 'Cutback week: ' : plan.kind === 'taper' ? 'Taper: ' : plan.kind === 'hold' ? 'Hold week: ' : '';
+    return `${head}~${formatKm(t ?? plan.goalKm, u)} this week, ${restOfWeekPhrase(plan.longRunTrim, { unitsPerKm: u, longRunKm: plan.longRunKm, longRunAhead: false, form: 'plan' })}`;
   }
   if (plan.easingOff != null) return plan.easingOff.lastDay ? easedOffLine(plan.preTaper?.nextPhase ?? 'taper', u) : easingOffLine(plan.easingOff, plan.preTaper?.nextPhase ?? 'taper', u);
   switch (plan.kind) {
@@ -1401,6 +1548,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       if (plan.hold?.skippedCutback) return `Your cutback became a normal week — fine. Hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `, ${lrPart}` : ''} — an easier week before building again${strides}`;
       return `Hold ~${formatKm(t ?? plan.goalKm, u)} this week, no step up after last week's jump${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
     case 'restart':
+      if (plan.restart?.midWeek != null && !plan.restart.midWeek.pending) return midWeekRestartText(plan.restart.midWeek, u, 'stub');
       if (plan.restartLong) return `Two weeks off — restart a bit lower, ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
       return `Restart at ~${formatKm(t ?? plan.restartKm, u)} this week with easy runs${lrPart ? `; ${lrPart}` : ''}`;
     case 'rebuild': {
@@ -1548,6 +1696,21 @@ function priorWeekProfiles(ctx: PlanCtx, w: string): number[][] {
   return out;
 }
 
+/**
+ * Wave 24e: the weekdays (Monday = 0) still ahead on which the runner USUALLY runs, read from their last weeks (up to 4 training weeks): a weekday they
+ * ran on in at least half of them. Today counts while its run is not in. With no history to read a rhythm from, Sunday (the long run's day) is the one day left.
+ */
+function usualRunDaysLeft(ctx: PlanCtx, w: string, dowToday: number, ranToday: boolean): number[] {
+  const profiles = priorWeekProfiles(ctx, w);
+  if (profiles.length === 0) return [6];
+  const need = Math.ceil(profiles.length / 2);
+  const out: number[] = [];
+  for (let d = ranToday ? dowToday + 1 : dowToday; d <= 6; d++) {
+    if (profiles.filter(p => p[d] > 0.05).length >= need) out.push(d);
+  }
+  return out;
+}
+
 function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekPlan {
   const info = phaseAt(ctx, w);
   const prevStart = addDayKey(w, -7);
@@ -1667,7 +1830,15 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     if (inRebuild) rebuild = { daysSince: daysAfterRace as number };
     let triggered: { reason: 'break' | 'low_week' | 'no_runs'; target: { km: number; medianKm: number; fraction: number }; gapDays: number | null } | null = null;
     restartWindow = prev.km < MIN_BASE_WEEK ? beforeWindow : breakWindow;
-    if (prev.km < MIN_BASE_WEEK) {
+    if (prevPlan?.restart?.midWeek != null && !prevPlan.restart.midWeek.pending && prevIsTraining && prev.km >= MIN_BASE_WEEK) {
+      // Wave 24e: last week was the stub of a restart that began mid-week ("~10 km over the rest of this week; the restart week (~18 km) starts Monday"):
+      // THIS week is that restart week, at the full number. (The next rung then builds from it, as it always did.)
+      triggered = {
+        reason: 'break',
+        target: { km: prevPlan.restart.midWeek.fullKm, medianKm: prevPlan.restart.medianKm, fraction: prevPlan.restart.fraction },
+        gapDays: null,
+      };
+    } else if (prev.km < MIN_BASE_WEEK) {
       // An empty week: the gap runs from the last run before it (an almost-empty week still counts as 8+ days).
       const before = lastRunBefore(ctx, w);
       const gap = before == null ? null : Math.max(RESTART_HOLD_GAP_DAYS + 1, dayIndex(w) - dayIndex(before));
@@ -1701,6 +1872,25 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       kind = rebuild ? 'rebuild' : 'restart';
       targetKm = restartKm;
       mode = 'restart';
+      // Wave 24e: a restart that BEGINS mid-week is scaled to the days left: round(restart x days left / 7) - 18 km is a week's worth, not what four days
+      // (Thursday to Sunday) right after a break can carry. `pending`: no run back yet this week (the break card says what to take if the runner starts
+      // today); once the first run is in, the week's target IS the scaled number and the next Monday is the full restart week.
+      const weekRunDays = ctx.runs.filter(r => r.day >= w && r.day <= asOf && r.day !== ctx.raceDate).map(r => r.day).sort();
+      const firstRun = weekRunDays[0] ?? null;
+      const lastBefore = lastRunBefore(ctx, w);
+      const dowFirst = firstRun == null ? null : dayIndex(firstRun) - dayIndex(w);
+      const dowToday = dayIndex(asOf) - dayIndex(w);
+      const pending = firstRun == null && depth === 0 && ctx.today >= w && ctx.today <= weekEnd && dowToday >= MID_WEEK_RESTART_FROM_DOW && dowToday <= 5;
+      if (lastBefore != null) {
+        const startDow = dowFirst ?? (pending ? dowToday : null);
+        // (A restart on Thursday to Saturday only: from Tuesday or Wednesday most of the week is still there, and on Sunday the week is over.)
+        if (startDow != null && startDow >= MID_WEEK_RESTART_FROM_DOW && startDow <= 5 && dayIndex(firstRun ?? asOf) - dayIndex(lastBefore) >= breakAt) {
+          const daysLeft = 7 - startDow;
+          const km = Math.min(restartKm, roundWeekTargetKm((restartKm * daysLeft) / 7, ctx.units));
+          restart.midWeek = { fullKm: restartKm, daysLeft, km, longCapKm: floorLongRunKm(km * LONG_RUN_RESTART_WEEK_SHARE, ctx.units), pending: firstRun == null };
+          if (firstRun != null) targetKm = km;
+        }
+      }
     } else if (prevPlan != null && prevIsTraining && prevPlan.targetKm != null && prevGrade?.gap === 'spike') {
       // `spikeStepKm` is the target last week was graded against (a cutback week's is the cutback number, what its cards and its
       // review quoted). The hold itself steps up from the step the progression had planned: after a cutback that is the week it
@@ -1863,37 +2053,57 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     }
   }
 
-  // Wave 23e: the week's long run against what is left of the week. A long run that would carry the week past 110% of its number (the
-  // number itself in a taper) is cut to what is left, or skipped when under 3 km (2 mi) is: ONE number for the plan line, the coach, the
-  // card's remaining-km line and the headline (they used to say "long run 10 km" next to "keep the rest to one short easy run").
+  // The race phase's shape and the band the week is graded against (the rest-of-week budget below reads the band's good bar).
+  const windInfo: EnduranceWeekPlan['wind'] = wind ? { phase: wind.phase as 'taper' | 'race_week' | 'recovery', info: wind, peakKm: ctx.peakKm ?? ctx.goalKm } : null;
+  const band = bandFor(targetKm, ctx, medianKm, windInfo, mode, { comebackFromKm: comeback != null ? prev.km : null, cutbackNormalKm: cutback?.normalKm ?? null });
+
+  // Wave 23e / 24e: THE rest-of-week budget (`RestOfWeekBudget`). A long run that would carry the week past its limit (the number x the kind's ONE tolerance,
+  // `weekLimitFraction`) is cut to what is left, or the km are given as a total; at most 10% left is "done", under 3 km (2 mi) left one short run. ONE number
+  // for the plan line, the coach, the card's remaining-km line and the headline (they used to say "long run 10 km" next to "keep the rest to one short easy run").
+  // On the week's LAST day the budget is read as of that morning (the km through yesterday): Sunday keeps Saturday's number, run or not.
   let longRunAhead = false;
-  let longRunTrim: EnduranceWeekPlan['longRunTrim'] = null;
+  let longRunTrim: RestOfWeekBudget | null = null;
   if (depth === 0 && ctx.today >= w && ctx.today <= weekEnd && kind !== 'baseline' && kind !== 'race_week' && kind !== 'recovery' && plannedNextKm != null) {
+    const lastDay = ctx.today === weekEnd;
     const longestToday = Math.max(0, ...ctx.runs.filter(r => r.day >= w && r.day <= ctx.today && r.day !== ctx.raceDate).map(r => r.km));
     // The week's long run is run when a run of (nearly) its planned length is in: a 7 km Tuesday run is not the 9 km Sunday long run. On the last
     // day any run logged TODAY is the long run (a 12 km Sunday run against a planned 14 is the long run run short, not one still to come).
-    const ranOnLastDay = ctx.today === weekEnd && ctx.runs.some(r => r.day === ctx.today && r.day !== ctx.raceDate);
+    const ranOnLastDay = lastDay && ctx.runs.some(r => r.day === ctx.today && r.day !== ctx.raceDate);
     longRunAhead = longestToday < plannedNextKm * LONG_RUN_DONE_FRACTION && !ranOnLastDay;
-    const doneNow = weekRuns(ctx, w).km;
+    const budgetRuns = ctx.runs.filter(r => r.day >= w && r.day <= (lastDay ? addDayKey(ctx.today, -1) : ctx.today) && r.day !== ctx.raceDate);
+    const longestThen = Math.max(0, ...budgetRuns.map(r => r.km));
+    const doneNow = budgetRuns.reduce((a, r) => a + r.km, 0);
     if (lightWeek == null && easingOff == null && !onBreak && targetKm != null) {
       const left = Math.max(0, targetKm - doneNow);
       const stub = (ctx.units < 1 ? LONG_RUN_TRIM_MIN_MI : LONG_RUN_TRIM_MIN_KM) / ctx.units;
-      const limit = kind === 'taper' ? targetKm : targetKm * PHASE_CEILING_TOLERANCE;
-      // (a) the long run still to come would carry the week past its number; (b) before the last day, the week's km are all but run, wherever the long run was.
-      const tooMuch = longRunAhead && doneNow + plannedNextKm > limit + 1e-9;
-      const allButRun = ctx.today < weekEnd && left < stub - 1e-9;
+      const limit = targetKm * weekLimitFraction(kind);
+      // (a) the long run still to come would carry the week past its limit; (b) the week's km are all but run (under 3 km left), wherever the long run was.
+      const tooMuch = longestThen < plannedNextKm * LONG_RUN_DONE_FRACTION && doneNow + plannedNextKm > limit + 1e-9;
+      const allButRun = left < stub - 1e-9;
       if (tooMuch || allButRun) {
+        const weekDone = left <= targetKm * WEEK_DONE_BAND + 1e-9 || floorLongRunKm(left, ctx.units) <= 0;
+        const small = !weekDone && left < stub - 1e-9;
+        const dow = dayIndex(ctx.today) - dayIndex(w);
+        const usual = lastDay || kind === 'taper' ? [6] : usualRunDaysLeft(ctx, w, dow, ctx.runs.some(r => r.day === ctx.today && r.day !== ctx.raceDate));
         longRunTrim = {
           fullKm: plannedNextKm,
           doneKm: round1(doneNow),
           remainingKm: round1(left),
-          weekDone: left < stub - 1e-9 || floorLongRunKm(left, ctx.units) <= 0,
-          today: dayIndex(ctx.today) - dayIndex(w) === 6,
+          weekDone,
+          today: lastDay,
+          daysLeft: usual.length,
+          day: usual.length === 1 ? WEEKDAY_NAMES[usual[0]] : null,
+          small,
+          easyOk: small && band.goodFromKm > 0 && doneNow >= band.goodFromKm - 1e-9,
+          afterRun: ranOnLastDay,
+          limitKm: round1(limit),
         };
       }
     }
   }
-  const trimmedKm = longRunTrim == null ? null : longRunTrim.weekDone ? null : floorLongRunKm(longRunTrim.remainingKm, ctx.units);
+  const trimLongKm = longRunTrim == null ? null : floorLongRunKm(longRunTrim.remainingKm, ctx.units);
+  // Only a named day carries a (trimmed) long run of its own; a total or a done week plans none.
+  const trimmedKm = longRunTrim == null || restOfWeekKind(longRunTrim, trimLongKm) !== 'named' ? null : trimLongKm;
   const untrimmedNextKm = lightWeek != null && lightWeek.longRunCapKm != null ? lightWeek.longRunCapKm : plannedNextKm;
   const nextKm = longRunTrim != null ? trimmedKm : untrimmedNextKm;
   const raceTargetKm = lr0.targetPeakKm != null && peakInfo != null && lr0.targetPeakKm === peakInfo.peakKm ? peakInfo.raceTargetKm : null;
@@ -1938,7 +2148,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       // Wave 22e: was the peak the long run the plan asked for? At most that week's planned long run (and the peak target) + 0.5 km, and at
       // most half of its week. "Peak reached" is praise only for a run that kept to the plan.
       const peakWeekPlan = pw === w || depth >= MAX_PLAN_DEPTH ? null : planWeek(ctx, pw, depth + 1);
-      const plannedKm = peakWeekPlan?.longRunKm ?? (pw === w ? plannedNextKm : null);
+      // (This week's own long run is the one Saturday's trim named, when it named one: "longer than the 9 km plan", not the 12 km the week started with.)
+      const plannedKm = peakWeekPlan?.longRunKm ?? (pw === w ? trimmedKm ?? plannedNextKm : null);
       const weekKm = Math.max(weekRuns(ctx, pw).km, floorFor(pw));
       const sharePct = weekKm > 0 ? Math.round((peakRun.km / weekKm) * 100) : 0;
       // (A week with under 3 run days has no rhythm to hold a plan or a share against: the long run is most of it by nature, as for the watch note.)
@@ -1963,8 +2174,6 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     peakOversized,
     peakPlan,
   };
-  const windInfo: EnduranceWeekPlan['wind'] = wind ? { phase: wind.phase as 'taper' | 'race_week' | 'recovery', info: wind, peakKm: ctx.peakKm ?? ctx.goalKm } : null;
-  const band = bandFor(targetKm, ctx, medianKm, windInfo, mode, { comebackFromKm: comeback != null ? prev.km : null, cutbackNormalKm: cutback?.normalKm ?? null });
   // The last day of a pre-taper week that is done and short: it is "easing off" too (not a target still to hit), so the headline, the plan line
   // and the coach all say the same thing ("Taper starts tomorrow - no need to make up this week's km").
   if (depth === 0 && preTaper != null && wind == null && lightWeek == null && targetKm != null && ctx.today === weekEnd) {
