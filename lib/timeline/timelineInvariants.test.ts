@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { TAPER_GOOD_MIN_FRACTION, longRunStepKm, racePhaseInfo } from '../enduranceProgression';
 import { weekFitsSessionTarget, type GoalLiftReturn } from '../goalProgress';
-import { liftLapseMinDays, liftReturnDisplay, liftShortName } from '../liftChange';
+import { easedLoad, liftLapseMinDays, liftReturnDisplay, liftShortName, nextWorkingLoad } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline, stepDay } from './engine';
@@ -1570,10 +1570,11 @@ invariant(LIFTERS, 'headlineLift does not change on a day with no strength sessi
 });
 
 // A comeback sentence that names the lifts already back ("Squat and bench back at pre-break; deadlift at 98%") says "above" only when every
-// named lift is above its pre-break number as printed, "at" only when every one is exactly at it, and "at or above" for a mix - the card
-// said "Squat back above pre-break" on Friday and "...back at pre-break" on Sunday for the same squat (145 vs 142 kg) - and writes the names
-// in sentence case: "Bench and squat", not "Bench Press and squat". Checked on the card headline and on the review headline.
-invariant(LIFTERS, 'a "back at / above / at or above pre-break" sentence matches the printed numbers of the lifts it names, in sentence case', (snaps, name) => {
+// named lift is above its pre-break number as printed, "at" only when every one is exactly at it - the card said "Squat back above pre-break" on
+// Friday and "...back at pre-break" on Sunday for the same squat (145 vs 142 kg) - and writes the names in sentence case: "Bench and squat",
+// not "Bench Press and squat". Wave 24s P3-9: a mix is never the hedge "back at or above pre-break": each lift is named with its own relation
+// ("Squat back above pre-break, bench at pre-break; deadlift at 98%"). Checked on the card headline and on the review headline.
+invariant(LIFTERS, 'a "back at / above pre-break" sentence matches the printed numbers of the lifts it names, lift by lift, in sentence case (never "at or above")', (snaps, name) => {
   const imperial = buildScenario(name).profile.units === 'imperial';
   const shown = (r: { preBreakKg: number; recentKg: number }): { pre: number; recent: number } => {
     const f = imperial ? 2.20462 : 1;
@@ -1582,14 +1583,21 @@ invariant(LIFTERS, 'a "back at / above / at or above pre-break" sentence matches
   const out: Violation[] = [];
   let sentences = 0;
   const check = (snap: DaySnapshot, where: string, text: string, rets: Array<{ exercise: string; name: string; preBreakKg: number; recentKg: number; regained: boolean }> | null | undefined): void => {
-    const m = /(?:^|, )([A-Z][^;]*?) back (at or above|above|at) pre-break;/.exec(plain(text));
+    const plainText = plain(text);
+    if (/at or above/.test(plainText)) out.push({ snap, detail: `${where}: "${visible(text)}" hedges "at or above" instead of naming each lift` });
+    const m = /(?:^|, )([A-Z][^;]*?) pre-break;/.exec(plainText);
     if (!m || !rets) return;
     sentences++;
-    const named = rets.filter(r => r.regained && m[1].toLowerCase().split(/, | and /).some(n => r.name.toLowerCase() === n || (r.exercise === 'bench press' && n === 'bench')));
-    if (named.length === 0) return;
-    const rel = named.every(r => shown(r).recent > shown(r).pre) ? 'above' : named.every(r => shown(r).recent <= shown(r).pre) ? 'at' : 'at or above';
-    if (m[2] !== rel) out.push({ snap, detail: `${where}: "${visible(text)}" says "${m[2]}" but ${named.map(r => `${r.name} ${shown(r).recent} vs ${shown(r).pre}`).join(', ')}` });
-    if (!/^[A-Z][^A-Z]*$/.test(m[1])) out.push({ snap, detail: `${where}: "${visible(text)}" names the lifts "${m[1]}" (not sentence case)` });
+    // "Squat back above pre-break, bench at pre-break" -> segments "Squat back above" and "bench at" (the last lacks " pre-break", cut by the regex).
+    for (const segment of m[1].split(/ pre-break, /)) {
+      const seg = /^(.+?) (?:back )?(above|at)$/.exec(segment);
+      if (!seg) { out.push({ snap, detail: `${where}: "${visible(text)}": segment "${segment}" is not "<lifts> [back] above|at"` }); continue; }
+      const named = rets.filter(r => r.regained && seg[1].toLowerCase().split(/, | and /).some(n => r.name.toLowerCase() === n || (r.exercise === 'bench press' && n === 'bench')));
+      if (named.length === 0) continue;
+      const rel = named.every(r => shown(r).recent > shown(r).pre) ? 'above' : named.every(r => shown(r).recent <= shown(r).pre) ? 'at' : 'mixed';
+      if (seg[2] !== rel) out.push({ snap, detail: `${where}: "${visible(text)}" says "${seg[2]}" for ${seg[1]} but ${named.map(r => `${r.name} ${shown(r).recent} vs ${shown(r).pre}`).join(', ')}` });
+      if (!/^[A-Z][^A-Z]*$/.test(seg[1]) && segment === m[1].split(/ pre-break, /)[0]) out.push({ snap, detail: `${where}: "${visible(text)}" names the lifts "${seg[1]}" (not sentence case)` });
+    }
   };
   for (const snap of snaps) {
     if (snap.card) check(snap, 'card.headline', snap.card.headline, snap.card.liftReturns);
@@ -2582,7 +2590,7 @@ invariant(['lifter_obedient'], 'the loads a review prescribes are the loads she 
     const nextMonday = addDays(r.weekStart, 7);
     // The ill week is the one week she is not following the prescription (its loads are a single volume session), on either side of it.
     if (nextMonday === OBEDIENT_ILL_START || r.weekStart === OBEDIENT_ILL_START) continue;
-    // A deload cue names the loads she goes back to AFTER the deload week ("then back to Squat 125 kg"): wave 24s P2-A checks them two weeks on.
+    // A deload cue names the loads she goes back to AFTER the deload week ("then back to squat 125 kg"): wave 24s P2-A checks them two weeks on.
     if (/^Deload week:/.test(plain(r.nextWeek))) continue;
     for (const m of plain(r.nextWeek).matchAll(/\b(squat|bench|deadlift)\s+(~?)(\d+(?:\.\d+)?)(?:\s?→\s?(\d+(?:\.\d+)?))?\s?kg\b/gi)) {
       const exercise = exerciseOf[liftWord(m[1])];
@@ -2728,11 +2736,12 @@ function standingLine(snap: DaySnapshot): string | null {
   const rets = snap.card?.liftReturns;
   if (!rets || rets.length < 2 || rets.some(r => r.regained)) return null;
   const others = rets.slice(1);
-  const list = others.map(r => `${others.length > 1 ? liftShortName(r.exercise) : r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ');
+  const names = others.map(r => `${others.length > 1 ? liftShortName(r.exercise) : r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ');
+  const list = `${names.charAt(0).toUpperCase()}${names.slice(1)}`; // sentence case (wave 24s P3-1)
   return others.length > 1 ? `${list} of pre-break est. 1RM` : `${list} of its pre-break est. 1RM`;
 }
 
-invariant(LIFTERS, 'while every lift is rebuilding the standing line is "bench 95%, deadlift 94% of pre-break est. 1RM": lowercase, est. 1RM, the same % in kg and lb', (snaps, name) => {
+invariant(LIFTERS, 'while every lift is rebuilding the standing line is "Bench 95%, deadlift 94% of pre-break est. 1RM": sentence case, est. 1RM, the same % in kg and lb', (snaps, name) => {
   const out: Violation[] = [];
   let days = 0;
   for (const snap of snaps) {
@@ -2784,8 +2793,9 @@ invariant(LIFTERS, 'while every lift is rebuilding the card and review headlines
 
 // ── Day 70: the Monday review said "2nd week off — book one easy session today at ~90% … (Squat ~102.5 kg)" on the Monday she had already
 // squatted 110 kg. A review read on a day she has already lifted (the loader reads her sets relative to the real clock, and the review is
-// recomputed when opened) never tells her to start today; after a week without a session it says she is already back, and names the session.
-invariant(LIFTERS, 'a review read on a Monday she has already lifted does not say "today" (a week off: "You\'re already back — Monday\'s 110 kg squat was your first session; …")', (snaps, name) => {
+// recomputed when opened) never tells her to start today; after a week without a session it says she is already back, and names the session
+// ("today's 110 kg squat", wave 24s: it is read that same Monday). "today" only ever appears as "today's".
+invariant(LIFTERS, 'a review read on a Monday she has already lifted does not tell her to start today (a week off: "You\'re already back — today\'s 110 kg squat was your first session; …")', (snaps, name) => {
   const scn = buildScenario(name);
   const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
   const out: Violation[] = [];
@@ -2793,14 +2803,14 @@ invariant(LIFTERS, 'a review read on a Monday she has already lifted does not sa
   for (const snap of snaps) {
     const r = snap.review?.review;
     if (!r || !trained.has(snap.date)) continue;
-    if (/\btoday\b/i.test(plain(r.nextWeek))) out.push({ snap, detail: `she lifted on ${snap.date}, but review.nextWeek says "${visible(r.nextWeek)}"` });
+    if (/\btoday\b(?!'s)/i.test(plain(r.nextWeek))) out.push({ snap, detail: `she lifted on ${snap.date}, but review.nextWeek says "${visible(r.nextWeek)}"` });
     if (r.weekGap?.kind === 'sessions' && r.weekGap.done === 0) {
       weeksOff++;
       const imperial = scn.profile.units === 'imperial';
       const lifted = scn.sets.filter(x => !x.isWarmup && x.day === snap.date && x.loadKg != null).map(x => (imperial ? Math.round((x.loadKg as number) * 2.20462) : (x.loadKg as number)));
-      const head = /^You're already back — Monday's (\d+(?:\.\d+)?)\s(?:kg|lb) \w+(?: and \d+(?:\.\d+)?\s(?:kg|lb) [\w ]+)? (?:was|were) your first session; /.exec(plain(r.nextWeek));
-      if (!head) out.push({ snap, detail: `a week off, then a session on the review's Monday: review.nextWeek "${visible(r.nextWeek)}" should open "You're already back — Monday's … was your first session; …"` });
-      else if (!lifted.includes(Number(head[1]))) out.push({ snap, detail: `review.nextWeek names ${head[1]} but she lifted ${lifted.join(', ')} that Monday` });
+      const head = /^You're already back — today's ~?(\d+(?:\.\d+)?)\s(?:kg|lb) \w+(?: and ~?\d+(?:\.\d+)?\s(?:kg|lb) [\w ]+)? (?:was|were) your first session; /.exec(plain(r.nextWeek));
+      if (!head) out.push({ snap, detail: `a week off, then a session on the review's Monday: review.nextWeek "${visible(r.nextWeek)}" should open "You're already back — today's … was your first session; …"` });
+      else if (!lifted.some(l => Math.abs(l - Number(head[1])) <= (imperial ? 2.5 : 1.25) + 1e-9)) out.push({ snap, detail: `review.nextWeek names ${head[1]} but she lifted ${lifted.join(', ')} that Monday` });
     }
   }
   if (name === 'lifter') assert.ok(weeksOff > 0, `${name}: no week off was followed by a session on the review's Monday, so this invariant checked nothing`);
@@ -3976,9 +3986,94 @@ invariant(['lifter_short_week', 'lifter_obedient'], 'P3-7: a short-week review n
   return out;
 });
 
+// ── P3-1. Comeback copy (lifter / lifter_imperial, day 70-83): a line starts in sentence case ("Bench 95%, deadlift 94% of pre-break est. 1RM", it was
+// "bench 95%, …"), and the lift furthest behind is named in ONE phrasing everywhere - "(deadlift furthest behind, 94%)" - on the card, the review
+// and the coach (it was "(bench furthest at 95%)", "(deadlift furthest, 94%)" and "(deadlift furthest at 94%)" depending on the room).
+invariant(LIFTERS, 'P3-1: every card reason starts in sentence case, and "furthest" is always "(<lift> furthest behind, N%)"', (snaps, name) => {
+  const out: Violation[] = [];
+  let furthest = 0;
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (!/^[A-Z0-9]/.test(plain(r.text))) out.push({ snap, detail: `card reason (${r.kind}) does not start in sentence case: "${visible(r.text)}"` });
+    }
+    for (const t of allTexts(snap)) {
+      for (const m of plain(t.text).matchAll(/\(([^()]*furthest[^()]*)\)/g)) {
+        furthest++;
+        if (!/^[a-z ]+ furthest behind, \d+%$/.test(m[1])) out.push({ snap, detail: `${t.where}: "(${visible(m[1])})" is not "(<lift> furthest behind, N%)"` });
+      }
+    }
+  }
+  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(furthest > 0, `${name}: no "furthest" clause appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// ... and a lift name is lower-case wherever it is not at the start of a line, a sentence or after a colon / dash ("— then back to squat 125 kg, bench 105 kg and
+// deadlift 145 kg", "at ~90% of your last working weights (squat ~102.5 kg, bench ~80 kg)"): the cue read "then back to squat 125 kg" mid-sentence. Review prose and card lines.
+invariant(LIFTERS, 'P3-1: a lift name is capitalised only at the start of a line or sentence (or after a colon / dash), never mid-sentence', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    const texts: Text[] = [...(cardTexts(snap).filter(t => t.where.startsWith('card.reasons'))), ...reviewTexts(snap).filter(t => /^review\.(nextWeek|win|slip)$/.test(t.where))];
+    for (const t of texts) {
+      const text = plain(t.text);
+      for (const m of text.matchAll(/\b(Squat|Bench|Deadlift|Overhead press)\b/g)) {
+        const before = text.slice(Math.max(0, (m.index ?? 0) - 2), m.index);
+        if ((m.index ?? 0) === 0 || /^(\. |: |— )$/.test(before)) continue;
+        out.push({ snap, detail: `${t.where}: "${visible(t.text)}" capitalises "${m[1]}" mid-sentence` });
+      }
+    }
+  }
+  return out;
+});
+
+// ── P3-2. "You're already back" (day 70): read that same Monday, so "today's 110 kg squat and 85 kg bench were your first session"; the load of the main lift not
+// yet done is given ("deadlift ~122.5 kg next": about 95% of its last working load, on the plate grid), and a lift has ONE figure: the squat's is the same grid
+// start the next review's cue quotes ("~245 lb" here and in "Squat ~245 → 250 lb"), not "243 lb" in one place and "~240" in the other.
+invariant(LIFTERS, 'P3-2: a week off then a session on the review\'s Monday: "today\'s" lifts quote the cue\'s figure, and the lift not yet done gets its ~95% load', (snaps, name) => {
+  const scn = buildScenario(name);
+  const imperial = scn.profile.units === 'imperial';
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done !== 0) continue;
+    const trainedToday = scn.sets.some(x => !x.isWarmup && x.day === snap.date);
+    if (!trainedToday) continue;
+    checked++;
+    const text = plain(r.nextWeek);
+    const topToday = (exercise: string): number | null => {
+      const loads = scn.sets.filter(x => x.exercise === exercise && !x.isWarmup && x.day === snap.date && x.loadKg != null).map(x => x.loadKg as number);
+      return loads.length > 0 ? Math.max(...loads) : null;
+    };
+    const lastTop = (exercise: string): number | null => {
+      for (let back = 0; back < 12; back++) { const kg = weekTopKg24s(name, exercise, addDays(r.weekStart, -7 * back)); if (kg != null) return kg; }
+      return null;
+    };
+    const lead = /^You're already back — today's ([^;]*?) (?:was|were) your first session; ([^.]*)\./.exec(text);
+    if (!lead) { out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}" does not open with "You're already back — today's … first session; …"` }); continue; }
+    for (const m of lead[1].matchAll(/(~?)(\d+(?:\.\d+)?) (kg|lb) (squat|bench|deadlift)/g)) {
+      const exercise = LIFT_EXERCISE_24S[m[4]];
+      const kg = topToday(exercise);
+      if (kg == null) continue;
+      const want = nextWorkingLoad(kg, exercise, imperial);
+      if (Number(m[2]) !== want.start || (m[1] === '~') !== want.approx) out.push({ snap, detail: `today's ${m[0]}: the cue quotes ${want.approx ? '~' : ''}${want.start} ${want.unit} for the same set (review.nextWeek "${visible(r.nextWeek)}")` });
+    }
+    // The main lifts not lifted today and trained before: "deadlift ~122.5 kg next" (about 95% of the last working load).
+    for (const exercise of ['squat', 'bench press', 'deadlift']) {
+      if (topToday(exercise) != null) continue;
+      const kg = lastTop(exercise);
+      if (kg == null) continue;
+      const eased = easedLoad(kg, 0.95, imperial);
+      const word = exercise === 'bench press' ? 'bench' : exercise;
+      if (!new RegExp(`${word} ~${eased.value} ${eased.unit}`).test(text)) out.push({ snap, detail: `${exercise} was not lifted today (last working load ${kg} kg) but review.nextWeek has no "${word} ~${eased.value} ${eased.unit}": "${visible(r.nextWeek)}"` });
+    }
+  }
+  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(checked > 0, `${name}: no week off was followed by a session on the review's Monday, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P2-A. A proactive deload. lifter_obedient added +2.5 kg to every lift every week for 14 weeks (bench 80 → 110 kg; the day-98 cue was "bench 110 → 112.5 kg")
 // and the app only ever praised a deload ("good timing after 3 straight weeks of heavier loads"), it never prescribed one. After 5 straight weeks in which
-// the next-load cue stepped up, the next review's cue is "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 125 kg, …"; the
+// the next-load cue stepped up, the next review's cue is "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 125 kg, …"; the
 // card and the coach lines carry it all week; the week after praises the deload and goes back to the loads the cue named.
 type CueKind24s = 'deload' | 'step' | 'rebuild-step' | 'other';
 
@@ -4294,6 +4389,38 @@ invariant(WEIGHT, 'P3-7: the review of a return week (1-2 weigh-ins after a gap 
   }
   assert.ok(seen > 0, `${name}: no return week had an unsufficient review, so this invariant checked nothing`);
   return out;
+});
+
+//   harness  weight_loss_obedient: the input notes are neutral (the profile is male), and the 30-minute walks start only when "if still flat in 2 weeks" has stood on the
+//            card for 14 days (the plateau persisted); here it ends on day 62 (moving again), so no walk is ever added.
+
+test('wave 24w harness: the weight_loss_obedient input notes and title use neutral pronouns (the profile is male)', () => {
+  const scn = buildScenario('weight_loss_obedient');
+  const text = [scn.title, ...scn.inputNotes].join('\n');
+  assert.equal(scn.profile.sex, 'male');
+  assert.doesNotMatch(text, /\b(?:she|her|hers|herself)\b/i, `gendered pronouns in: ${text.match(/.{0,40}\b(?:she|her|hers|herself)\b.{0,40}/i)?.[0]}`);
+});
+
+test('wave 24w harness: weight_loss_obedient adds the two 30-minute walks only when "if still flat in 2 weeks" has stood on the card for 14 days in a row', () => {
+  const snaps = runTimeline('weight_loss_obedient');
+  const conditional = snaps.map(s => /if still flat in 2 weeks, [^.]*30-minute walks/.test(plain(s.card?.weightRead?.plan?.action.text ?? '')));
+  // The longest run of days the conditional ask stood on the card, and the first day it was due (14 days into the run).
+  let best = { start: -1, len: 0 };
+  for (let i = 0; i < snaps.length; i++) {
+    if (!conditional[i]) continue;
+    let j = i;
+    while (j + 1 < snaps.length && conditional[j + 1]) j++;
+    if (j - i + 1 > best.len) best = { start: i, len: j - i + 1 };
+    i = j;
+  }
+  assert.ok(best.len > 0, 'the plateau step with the conditional walks never appeared, so this test checked nothing');
+  const walks = buildScenario('weight_loss_obedient').workouts.filter(w => w.type === 'Walking').map(w => w.day).sort();
+  if (best.len < 14) {
+    assert.deepEqual(walks, [], `the conditional ask stood ${best.len} day(s) (from ${snaps[best.start].date}) - under 14, so no walk is due; walks on ${walks.slice(0, 4).join(', ')}`);
+  } else {
+    const due = snaps[best.start + 14].date;
+    assert.ok(walks.length === 0 || walks[0] >= due, `the first walk ${walks[0]} comes before the day the ask was due (${due})`);
+  }
 });
 
 // ═══ WAVE 24e (ENDURANCE): ROUND 6 ═════════════════════════════════════════════════════════════════════════

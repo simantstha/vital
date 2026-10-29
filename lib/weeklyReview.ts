@@ -413,7 +413,17 @@ interface Week {
   /** Days on/after signup only (== set when no signupDay). */
   eligible: Set<string>;
   /** Muscle: the session already logged on the review's own Monday, if any (wave 23s; see `readMondaySession`). */
-  monday?: { lifts: string[] } | null;
+  monday?: MondaySession | null;
+}
+
+/** The session already logged on the review's own Monday (wave 23s, 24s): see `readMondaySession`. */
+interface MondaySession {
+  /** The heaviest sets of up to two main lifts, as the next review's cue quotes them ("110 kg squat", "~245 lb bench"); empty when unknown or when Monday is not her only session. */
+  lifts: string[];
+  /** The main lifts in rotation she has not lifted yet, with ~95% of their last working load ("deadlift ~122.5 kg"). */
+  remaining: string[];
+  /** Monday is her only session of the week, so the review (read that Monday) calls it "today's"; otherwise it is "Monday's". */
+  today: boolean;
 }
 
 function makeWeek(weekStart: string, signupDay?: string | null): Week {
@@ -2539,9 +2549,12 @@ function liftNames(input: WeeklyReviewInput, keys: string[]): string[] {
   return keys.map((key, i) => (i === 0 ? liftDisplayName(key, input.exerciseDisplay) : liftShortName(key, input.exerciseDisplay)));
 }
 
-/** "Squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg": one entry per lift, the first by its display name and the rest by the short spoken one. */
-function loadsList(input: WeeklyReviewInput, entries: Array<{ key: string; load: NextLoad }>): string {
-  const names = liftNames(input, entries.map(e => e.key));
+/**
+ * "Squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg": one entry per lift, the first by its display name and the rest by the short spoken one.
+ * `midSentence` (wave 24s): the list does not start a sentence ("— then back to squat 125 kg, bench 105 kg and deadlift 145 kg"), so every lift is lower-case.
+ */
+function loadsList(input: WeeklyReviewInput, entries: Array<{ key: string; load: NextLoad }>, midSentence = false): string {
+  const names = midSentence ? entries.map(e => liftShortName(e.key, input.exerciseDisplay)) : liftNames(input, entries.map(e => e.key));
   const parts = entries.map((e, i) => `${names[i]} ${withUnit(e.load.from, e.load.unit)}`);
   return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
@@ -2567,14 +2580,14 @@ function afterDeloadNextWeek(input: WeeklyReviewInput, week: Week): string | nul
 
 /**
  * The proactive deload cue (wave 24s): after 5 straight weeks of heavier loads (lib/liftChange.ts `proactiveDeload`) the next week is a deload,
- * not a sixth step - "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 112.5 kg, bench 92.5 kg and deadlift
+ * not a sixth step - "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 112.5 kg, bench 92.5 kg and deadlift
  * 132.5 kg." The goal card carries the same lead-in all week (`DELOAD_CUE_HEAD`). Null when the run is shorter, while
  * rebuilding after a break, or without a known load.
  */
 function deloadCueNextWeek(input: WeeklyReviewInput, week: Week): string | null {
   const cue = proactiveDeload(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: stillRebuilding(input) });
   if (!cue) return null;
-  return `${DELOAD_CUE_HEAD} — then back to ${cue.resume.length > 0 ? loadsList(input, cue.resume) : 'full loads'}.`;
+  return `${DELOAD_CUE_HEAD} — then back to ${cue.resume.length > 0 ? loadsList(input, cue.resume, true) : 'full loads'}.`;
 }
 
 /**
@@ -2608,7 +2621,8 @@ function easedLoadsText(input: WeeklyReviewInput, week: Week): string | null {
     if (keys.length >= MAX_CUED_LIFTS) break;
     if (!keys.includes(key) && latestTopLoadKg(input.progression[key] ?? [], week.days[0]) != null) keys.push(key);
   }
-  const names = liftNames(input, keys);
+  // Inside the parentheses of a sentence ("… of your last working weights (squat ~102.5 kg, bench ~80 kg)"): every lift is lower-case (wave 24s).
+  const names = keys.map(key => liftShortName(key, input.exerciseDisplay));
   const parts = keys.map((key, i) => {
     const eased = easedLoad(latestTopLoadKg(input.progression[key], week.days[0]) as number, 0.9, isImperial(input));
     return `${names[i]} ~${withUnit(eased.value, eased.unit)}`;
@@ -2621,23 +2635,40 @@ function easedLoadsText(input: WeeklyReviewInput, week: Week): string | null {
  * clock and the review is recomputed when it is opened, so a lifter who trained that morning is in `strengthDays` and in the next week's
  * bucket of `progression`: a "starting today" or "book one easy session today" is then stale (wave 23s, lifter day 70: "book one easy
  * session today at ~90% (Squat ~102.5 kg)" on the Monday she had squatted 110 kg). `lifts` names the heaviest sets of up to two main
- * lifts ("110 kg squat"), only while Monday is her only session of that week (a bucket also holding later days would misdate the loads).
- * Read from the raw input, before `progression` is cut at the reviewed week (`computeWeeklyReview`).
+ * lifts, only while Monday is her only session of that week (a bucket also holding later days would misdate the loads). Wave 24s: the loads
+ * are the grid start the next review's cue quotes ("~245 lb squat", not "243 lb" here and "~240" there), the review is read that same Monday
+ * so it says "today's" (`today`), and `remaining` gives the main lifts not lifted yet their load: ~95% of the last working load on the
+ * plate grid ("deadlift ~122.5 kg"). Read from the raw input, before `progression` is cut at the reviewed week (`computeWeeklyReview`).
  */
-function readMondaySession(input: WeeklyReviewInput, week: Week): { lifts: string[] } | null {
+function readMondaySession(input: WeeklyReviewInput, week: Week): MondaySession | null {
   const monday = liftAnchor(week);
   const days = sessionDays(input).filter(d => d >= monday && d <= addDays(monday, 6));
   if (!days.includes(monday)) return null;
-  const unit = isImperial(input) ? 'lb' : 'kg';
+  const imperial = isImperial(input);
+  const unit = imperial ? 'lb' : 'kg';
   const lifts: string[] = [];
-  if (new Set(days).size === 1) {
-    for (const key of rankLifts(input.progression, addDays(monday, 7)).filter(isMainLift)) {
-      const top = input.progression[key]?.find(w => w.weekStart === monday)?.topLoadKg;
+  const remaining: string[] = [];
+  const today = new Set(days).size === 1;
+  if (today) {
+    const ranked = rankLifts(input.progression, addDays(monday, 7)).filter(isMainLift);
+    const mondayTop = (key: string): number | null => input.progression[key]?.find(w => w.weekStart === monday)?.topLoadKg ?? null;
+    for (const key of ranked) {
+      const top = mondayTop(key);
       if (top == null || top <= 0 || lifts.length >= 2) continue;
-      lifts.push(`${withUnit(isImperial(input) ? Math.round(top * KG_TO_LB) : round1(top), unit)} ${liftShortName(key, input.exerciseDisplay)}`);
+      const load = nextWorkingLoad(top, key, imperial);
+      lifts.push(`${load.approx ? '~' : ''}${withUnit(load.start, unit)} ${liftShortName(key, input.exerciseDisplay)}`);
+    }
+    if (lifts.length > 0) {
+      for (const key of ranked) {
+        if (mondayTop(key) != null) continue;
+        const last = latestTopLoadKg(input.progression[key] ?? [], week.days[0]);
+        if (last == null) continue;
+        const eased = easedLoad(last, 0.95, imperial);
+        remaining.push(`${liftShortName(key, input.exerciseDisplay)} ~${withUnit(eased.value, eased.unit)}`);
+      }
     }
   }
-  return { lifts };
+  return { lifts, remaining, today };
 }
 
 /** The one-time explainer for the term the lifter meets first in the review (wave 23s). */
@@ -2661,10 +2692,17 @@ function progressionUpTo(progression: ProgressionSummary, weekStart: string): Pr
   return Object.fromEntries(Object.entries(progression).map(([key, weeks]) => [key, weeks.filter(w => w.weekStart <= weekStart)]));
 }
 
-/** "You're already back — Monday's 110 kg squat was your first session" (two lifts: "… and 85 kg bench were …"; none known: "Monday's session"). */
-function alreadyBackLead(back: { lifts: string[] }): string {
-  if (back.lifts.length === 0) return "You're already back — Monday's session was your first session";
-  return `You're already back — Monday's ${back.lifts.join(' and ')} ${back.lifts.length === 1 ? 'was' : 'were'} your first session`;
+/** "You're already back — today's 110 kg squat and 85 kg bench were your first session" (one lift: "was"; none known: "today's session was your first"; not her only session: "Monday's"). */
+function alreadyBackLead(back: MondaySession): string {
+  const when = back.today ? "today's" : "Monday's";
+  if (back.lifts.length === 0) return `You're already back — ${when} session was your first`;
+  return `You're already back — ${when} ${back.lifts.join(' and ')} ${back.lifts.length === 1 ? 'was' : 'were'} your first session`;
+}
+
+/** "deadlift ~122.5 kg next", "deadlift ~122.5 kg and bench ~85 kg next": the loads of the main lifts not lifted yet. */
+function remainingLoadsText(back: MondaySession): string {
+  const list = back.remaining.length <= 1 ? back.remaining.join('') : `${back.remaining.slice(0, -1).join(', ')} and ${back.remaining[back.remaining.length - 1]}`;
+  return `${list} next`;
 }
 
 /**
@@ -2674,11 +2712,17 @@ function alreadyBackLead(back: { lifts: string[] }): string {
  * off asks for one easy session first.
  */
 function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number): string {
-  // She is already back (a session on the review's own Monday): nothing to "book today" - say so, and name it.
+  // She is already back (a session on the review's own Monday): nothing to "book today" - say so, name it, give the load of the lift not yet done, keep the loads.
   const back = week.monday ?? null;
   if (back != null) {
     const off = weeksOffRunning(input, week);
-    return `${alreadyBackLead(back)}; ${off >= 2 ? `build back toward ${target} a week` : `make it ${target} this week`}, adding load only when every set feels solid.`;
+    const keep = back.lifts.length > 0;
+    const goal = off >= 2 ? `build back toward ${target} a week` : keep ? `make it ${target} sessions` : `make it ${target} this week`;
+    const tail = `${goal}, adding load only when every set feels solid.`;
+    if (!keep) return `${alreadyBackLead(back)}; ${tail}`;
+    return back.remaining.length > 0
+      ? `${alreadyBackLead(back)}; ${remainingLoadsText(back)}. Keep these loads this week: ${tail}`
+      : `${alreadyBackLead(back)}; keep these loads this week: ${tail}`;
   }
   const loads = easedLoadsText(input, week);
   const weights = loads ? ` (${loads})` : '';

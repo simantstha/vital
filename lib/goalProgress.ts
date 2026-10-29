@@ -2174,13 +2174,14 @@ function returnLiftNames(rets: GoalLiftReturn[], exerciseDisplay: Record<string,
 /**
  * The comeback sentence when SOME main lifts are back at their pre-break best
  * and one is not: "Squat back above pre-break; deadlift at 98%" — the lifts that
- * are back first ("at", "at or above" or "above" by their printed numbers), then the
- * lift furthest behind with its percentage of the SHOWN numbers
- * (lib/liftChange.ts liftReturnDisplay); "above" only when every named lift is
- * above its printed pre-break number, "at or above" for a mix. Shared by the goal card and the weekly
- * review. `maxAhead` limits how many of the lifts that are back are named (the
- * card's headline drops to one to fit the numbers). Null unless the returns are
- * mixed (some back, some not).
+ * are back first, then the lift furthest behind with its percentage of the SHOWN
+ * numbers (lib/liftChange.ts liftReturnDisplay). "above" / "at" is said by the
+ * printed numbers: lifts that share a relation share a clause ("Squat and bench
+ * back above pre-break"), and a mix names each lift's own ("Squat back above
+ * pre-break, bench at pre-break") — never the hedge "back at or above pre-break"
+ * (wave 24s). Shared by the goal card and the weekly review. `maxAhead` limits how
+ * many of the lifts that are back are named (the card's headline drops to one to
+ * fit the numbers). Null unless the returns are mixed (some back, some not).
  */
 export function mixedReturnLead(
   rets: readonly GoalLiftReturn[],
@@ -2192,11 +2193,16 @@ export function mixedReturnLead(
   const ahead = rets.filter(r => r.regained).slice(0, maxAhead);
   if (behind == null || ahead.length === 0) return null;
   const shown = liftReturnDisplay(behind, imperial);
-  // "above" only when every named lift is above its pre-break number as printed, "at" only when every one is exactly there.
-  const aboveCount = ahead.filter(r => { const n = liftReturnDisplay(r, imperial); return n.recent > n.pre; }).length;
-  const rel = aboveCount === ahead.length ? 'above' : aboveCount === 0 ? 'at' : 'at or above';
+  // "above" only for a lift above its pre-break number as printed, "at" for one exactly there; the lifts keep their order, a relation is said once.
+  const rel = (r: GoalLiftReturn): 'above' | 'at' => { const n = liftReturnDisplay(r, imperial); return n.recent > n.pre ? 'above' : 'at'; };
+  const groups: Array<{ rel: 'above' | 'at'; lifts: GoalLiftReturn[] }> = [];
+  for (const r of ahead) {
+    const g = groups.find(x => x.rel === rel(r));
+    if (g) g.lifts.push(r); else groups.push({ rel: rel(r), lifts: [r] });
+  }
+  const clause = groups.map((g, i) => `${i === 0 ? `${returnLiftNames(g.lifts, exerciseDisplay)} back` : returnLiftNames(g.lifts, exerciseDisplay).toLowerCase()} ${g.rel} pre-break`).join(', ');
   return {
-    text: `${returnLiftNames(ahead, exerciseDisplay)} back ${rel} pre-break; ${liftShortName(behind.exercise, exerciseDisplay)} at ${shown.pct}%`,
+    text: `${clause}; ${liftShortName(behind.exercise, exerciseDisplay)} at ${shown.pct}%`,
     behind,
     shown,
   };
@@ -2214,14 +2220,19 @@ export function furthestBehindNote(rets: readonly GoalLiftReturn[], exerciseDisp
   return { short: liftShortName(worst.exercise, exerciseDisplay), pct: liftReturnDisplay(worst, false).pct };
 }
 
+/** The longest the building-back headline gets: the furthest-behind clause is worth ten characters more than the usual 70 (the iOS row wraps to two lines). */
+export const REBUILD_HEADLINE_MAX_CHARS = 80;
+
 /**
  * "Building back — Squat est. 1RM 136 of 142 kg pre-break", with the furthest-behind lift named when it fits in `max` characters after
- * `prefix`: "… pre-break (deadlift furthest at 94%)", else without "pre-break", else the shortest form "(deadlift furthest, 94%)"; else the
- * plain line. Shared by the goal card and the weekly review.
+ * `prefix`: "… pre-break (deadlift furthest behind, 94%)", else without "pre-break"; else the plain line. ONE phrasing of the clause everywhere
+ * (wave 24s: it used to shorten to "furthest at 94%" and "furthest, 94%" depending on the room, so the card, the review and the coach read three
+ * different sentences for the same fact). Shared by the goal card and the weekly review.
  */
 export function rebuildLineWithFurthest(lead: string, note: { short: string; pct: number } | null, prefix: string, max: number): string {
   if (note) {
-    for (const text of [`${lead} pre-break (${note.short} furthest at ${note.pct}%)`, `${lead} (${note.short} furthest at ${note.pct}%)`, `${lead} (${note.short} furthest, ${note.pct}%)`]) {
+    const clause = `(${note.short} furthest behind, ${note.pct}%)`;
+    for (const text of [`${lead} pre-break ${clause}`, `${lead} ${clause}`]) {
       if (prefix.length + text.length <= max) return text;
     }
   }
@@ -2259,7 +2270,7 @@ function liftReturnOutcome(rets: GoalLiftReturn[], input: GoalProgressInput): { 
   if (furthestBehindReturn(rets) != null) {
     // The 142 is an estimated 1RM, not a bodyweight or a load: say so ("Squat est. 1RM 136 of 142 kg pre-break").
     const lead = `Building back — ${r.name} est. 1RM ${recent} of ${withUnit(pre, unit)}`;
-    return { verdict: 'building', headline: clip(rebuildLineWithFurthest(lead, furthestBehindNote(rets, input.exerciseDisplay), '', HEADLINE_MAX_CHARS)) };
+    return { verdict: 'building', headline: rebuildLineWithFurthest(lead, furthestBehindNote(rets, input.exerciseDisplay), '', REBUILD_HEADLINE_MAX_CHARS) };
   }
   const above = rets.every(x => { const n = returnNumbers(x, input); return n.recent > n.pre; });
   if (!above) {
@@ -2283,10 +2294,10 @@ function liftReturnReasons(rets: GoalLiftReturn[], input: GoalProgressInput, unp
   const back = rets.find(r => r.regained);
   if (behind != null && back == null && rets.length > 1) {
     const others = rets.slice(1);
-    // No numbers on this line, so the share is of whole kg whatever the unit (a lb lifter reads the same 95% as a kg one); a list is lowercase
-    // ("bench 95%, deadlift 94% of pre-break est. 1RM"), one lift keeps its sentence-case name.
+    // No numbers on this line, so the share is of whole kg whatever the unit (a lb lifter reads the same 95% as a kg one); a list names the lifts by
+    // their short spoken names but starts in sentence case ("Bench 95%, deadlift 94% of pre-break est. 1RM"), one lift keeps its sentence-case name.
     const standing = others.map(r => `${others.length > 1 ? liftShortName(r.exercise, input.exerciseDisplay) : r.name} ${liftReturnDisplay(r, false).pct}%`).join(', ');
-    return [liftReturnReason(rets[0], input), { kind: 'lift', text: `${standing} ${others.length === 1 ? 'of its' : 'of'} pre-break est. 1RM`, tone: 'neutral' }];
+    return [liftReturnReason(rets[0], input), { kind: 'lift', text: `${standing.charAt(0).toUpperCase()}${standing.slice(1)} ${others.length === 1 ? 'of its' : 'of'} pre-break est. 1RM`, tone: 'neutral' }];
   }
   let picked: GoalLiftReturn[];
   if (behind != null && back != null) picked = [behind, back];
