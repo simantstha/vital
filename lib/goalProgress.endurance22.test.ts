@@ -141,7 +141,7 @@ test('a cutback week that ran far past its lowered number says so on the card, i
 test('the Monday after a skipped cutback holds at the week the cutback replaced - "Your cutback became a normal week" (22e, wave 23e: no guilt)', () => {
   const monday = '2026-10-26';
   const card = computeGoalProgress(input(weeks(monday, [[], wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }));
-  assert.equal(card.verdict, 'holding');
+  assert.equal(card.verdict, 'building'); // (wave 24e: the hold after a cutback that became a normal week is the plan, not a warning)
   assert.equal(card.headline, 'Your cutback became a normal week — hold ~25 km this week');
   assert.equal(card.distance!.stepTargetKm, 25);
   assert.equal(card.distance!.plan?.kind, 'hold');
@@ -149,7 +149,7 @@ test('the Monday after a skipped cutback holds at the week the cutback replaced 
   const info = card.reasons.find(r => r.kind === 'volume')!;
   assert.equal(info.text, "Last week's 25 km ran as a normal week, not the ~20 km cutback — your bar stays ~25 km");
   assert.equal(info.tone, 'neutral');
-  assert.match(card.reasons.find(r => r.kind === 'plan')!.text, /^Your cutback became a normal week — fine\. Hold ~25 km this week, long run [\d.]+ km — an easier week before building again$/);
+  assert.match(card.reasons.find(r => r.kind === 'plan')!.text, /^Your cutback became a normal week — fine\. Hold ~25 km this week, long run [\d.]+ km — no 10% step on top of it$/);
   // A kept cutback builds on the week before it (23 -> 25), as before.
   const kept = computeGoalProgress(input(weeks(monday, [[], wk(20), wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey: monday }));
   assert.equal(kept.distance!.plan?.kind, 'build');

@@ -423,6 +423,24 @@ test('muscle: weight gain at/above the top of the band is a watch reason', () =>
   assert.match(rate!.text, /above the 0\.5% of bodyweight a week that keeps gain lean/);
 });
 
+test('a lifter\'s weight rate: kg and percent are both "about" (not "about 0.1 kg/wk (0.16% of bodyweight)"), a flat trend quotes no figure, a band edge keeps its exact percent (wave 24s)', () => {
+  const rate = (days: number, kgPerDay: number, over: Partial<GoalProgressInput> = {}) => computeGoalProgress(base({
+    goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 4 }, weightReadings: ramp(days, 80, kgPerDay), ...over,
+  })).reasons.find(r => r.kind === 'rate');
+  // 0.12 kg a week is 0.15% of 80 kg: the kg is rounded to 0.1, so the percent says "about" too, to one decimal.
+  assert.match(rate(21, 0.027)!.text, /^Trend weight up about 0\.1 kg\/wk \(about 0\.2% of bodyweight\) over \d+ days, on pace for lean gain \(0\.1–0\.5% of bodyweight a week\)$/);
+  assert.match(rate(28, 0.04)!.text, /^Trend weight up about 0\.2 kg\/wk \(about 0\.2% of bodyweight\) over /);
+  // A flat trend is "flat": no 0.03 kg/wk, no 0.04%, in kg or in pounds.
+  assert.match(rate(12, 0.0005)!.text, /^Trend weight flat over \d+ days, slower than lean gain \(0\.1–0\.5% of bodyweight a week\)$/);
+  assert.match(rate(12, 0.0005, { unitSystem: 'imperial' })!.text, /^Trend weight flat over \d+ days, slower than lean gain /);
+  // Pounds: both "about" as well.
+  assert.match(rate(21, 0.027, { unitSystem: 'imperial' })!.text, /^Trend weight up about 0\.3 lb\/wk \(about 0\.2% of bodyweight\) over /);
+  // Just under the 0.1% floor (0.09%) rounds to "0.1" and would read as inside the band next to "slower than lean gain": the exact percent stays.
+  assert.match(rate(28, 0.0145)!.text, /\(0\.09% of bodyweight\) over \d+ days, slower than lean gain/);
+  // Just over the 0.5% ceiling (0.51%) rounds to "0.5": the exact percent stays beside "above the 0.5% ... that keeps gain lean".
+  assert.match(rate(28, 0.0875)!.text, /\(0\.51% of bodyweight\) over \d+ days, above the 0\.5% of bodyweight a week that keeps gain lean/);
+});
+
 test('muscle: ETA toward the target weight when gaining inside the band', () => {
   const p = computeGoalProgress(base({
     goal: 'muscle',
@@ -2455,7 +2473,7 @@ test('weight rate: under 0.05% a week reads "flat" and every threshold uses the 
   for (let i = 0; i <= 40; i += 1) {
     const r = mk(0.009 + i * 0.0001);
     if (!r) continue;
-    const printed = Number(/\(([\d.]+)% of bodyweight\)/.exec(r.text)![1]);
+    const printed = Number(/\((?:about )?([\d.]+)% of bodyweight\)/.exec(r.text)![1]);
     if (printed >= 0.1) assert.doesNotMatch(r.text, /under the|slower than lean gain/, r.text);
     else assert.match(r.text, /slower than lean gain \(0\.1–0\.5% of bodyweight a week\)|flat/, r.text);
   }

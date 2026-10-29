@@ -149,7 +149,7 @@ import { KM_PER_MILE } from './metricFormat';
 import {
   PEAK_PLAN_SLACK_KM,
   PHASE_CEILING_TOLERANCE,
-  holdOverrun,
+  holdOverrunRead,
   midWeekRestartText,
   restOfWeekPhrase,
   weekLimitFraction,
@@ -183,6 +183,7 @@ import {
   recoveryWeek,
   roundLongRunKm,
   weekStepOrGoalKm,
+  type HoldOverRead,
   type EnduranceWeekKind,
   type EnduranceWeekPlan,
   type LongRunShare,
@@ -363,6 +364,8 @@ export interface GoalWeekPlan {
    * `pending` = still on the break (what to take if the runner starts today), else the week as it is. The next Monday is the full `fullKm` restart week.
    */
   midWeekRestart?: { fullKm: number; km: number; longCapKm: number; pending: boolean };
+  /** Additive (wave 24e): last week's km (the compact plan's coach lines compare a hold with it: "an easier week" only when the hold really is easier). */
+  lastKm?: number;
   /**
    * Additive (wave 23e): the week after a cutback steps from the last full week before it, not from the cutback: `stepPct` is against `stepBaseKm`
    * ("+9% on your last full week (23 km)"). Absent otherwise.
@@ -1019,6 +1022,20 @@ function toSignalPoints(days: GoalProgressIntakeDay[]) {
 /** A weekly weight trend under this share of bodyweight (as printed, 2 decimals) is "flat", not a direction. */
 const RATE_FLAT_PCT = 0.05;
 
+/**
+ * A lifter's weight-rate line (wave 24s): the kg is rounded to 0.1 ("about 0.1 kg/wk"), so a two-decimal percent beside it ("0.16% of bodyweight") disagreed
+ * with it; both are "about" ("about 0.1 kg/wk (about 0.2% of bodyweight)"). A flat trend quotes no figure ("flat 0.07 lb/wk" is just "flat"). The percent
+ * keeps its exact two decimals only where one decimal would land on the other side of a band edge (0.09 would read "0.1" beside "slower than lean gain
+ * (0.1–0.5%)"; 0.52 would read "0.5" beside "above the 0.5%"): the tone is decided on the exact number.
+ */
+function leanRateText(input: GoalProgressInput, w: WeightBlock, abs: number, flat: boolean, dir: string, band: { minPct: number; maxPct: number } | null, span: string): string {
+  if (flat) return `Trend weight flat over ${span}`;
+  const oneDecimal = round1(abs);
+  const crossesEdge = band != null && ((abs < band.minPct && oneDecimal >= band.minPct) || (abs >= band.maxPct && oneDecimal <= band.maxPct));
+  const pct = crossesEdge ? `${abs}%` : `about ${oneDecimal}%`;
+  return `Trend weight ${dir} about ${fmtWeight(input, Math.abs(w.rateKg as number), 1)}/wk (${pct} of bodyweight) over ${span}`;
+}
+
 function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: number; maxPct: number } | null): GoalProgressReason | null {
   if (w.rateKg == null || w.pctBw == null) return null;
   // Thresholds are compared against the number that is printed (2 decimals),
@@ -1032,6 +1049,7 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   // A lifter's slow lean gain is "about 0.4 lb/wk", not a two-decimal "0.37" that reads like a measurement (wave 23s); a flat rate keeps its figure.
   const perWeek = input.goal === 'muscle' && !flat ? `about ${fmtWeight(input, Math.abs(w.rateKg), 1)}` : fmtWeight(input, Math.abs(w.rateKg), 2);
   let text = `Trend weight ${dir} ${perWeek}/wk (${abs}% of bodyweight) over ${span}`;
+  if (input.goal === 'muscle') text = leanRateText(input, w, abs, flat, dir, band, span);
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;
@@ -2588,7 +2606,12 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     };
   }
 
-  if (liftState) return { ...liftState, reasons };
+  // A "Progressing" headline never sits over an amber sessions line (wave 24s P3-8, lifter_short_week day 57: "Progressing — Squat est. 1RM +9 kg" over "11 of 16
+  // planned sessions in 4 weeks (69%)"). The "behind" call is made as of the last day the window learned something while the live count keeps sliding, so the
+  // line is neutral there, as it already is for a stale window (`adherenceDemoted`); a real shortfall turns the verdict to "behind" and the line amber again.
+  const calmed = (verdict: GoalVerdict): GoalProgressReason[] =>
+    verdict === 'progressing' ? reasons.map(r => (r.kind === 'adherence' && r.tone === 'watch' ? { ...r, tone: 'neutral' as const } : r)) : reasons;
+  if (liftState) return { ...liftState, reasons: calmed(liftState.verdict) };
 
   // Lifts are logged but none can be compared yet (the first 4 weeks, or the
   // 4-weeks-ago weeks are empty after a gap): say when the comparison lands and
@@ -2622,7 +2645,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
       return {
         verdict: 'progressing',
         headline: clip(`Progressing — weight up ${shownPct}% a week, inside the gain band`),
-        reasons,
+        reasons: calmed('progressing'),
       };
     }
     return { verdict: 'stalled', headline: clip(`Stalled — weight is not trending up (${shownPct}% a week)`), reasons };
@@ -2827,6 +2850,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.taperHold && plan.wind != null ? { taperHold: true, taperPeakKm: round1(plan.wind.peakKm) } : {}),
             ...(plan.cutback != null ? { cutback: true } : {}),
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
+            ...(plan.last != null ? { lastKm: plan.last.km } : {}),
             ...(plan.restart?.midWeek != null ? { midWeekRestart: { fullKm: plan.restart.midWeek.fullKm, km: plan.restart.midWeek.km, longCapKm: plan.restart.midWeek.longCapKm, pending: plan.restart.midWeek.pending } } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
             ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
@@ -3402,7 +3426,7 @@ function thisWeekDoneOutcome(
   input: GoalProgressInput, plan: EnduranceWeekPlan, grade: WeekGrade, doneKm: number, target: number,
   finish: (verdict: GoalVerdict, headline: string, reasons: GoalProgressReason[]) => Outcome,
   planBody: () => GoalProgressReason[],
-  holdOver = false,
+  holdRead: HoldOverRead | null = null,
 ): Outcome | null {
   const fmt = (km: number): string => fmtDistance(input, km);
   const done = distanceNum(input, doneKm);
@@ -3419,7 +3443,9 @@ function thisWeekDoneOutcome(
   if (grade.level === 'tough') return finish('behind', `Behind — ${done} of ~${fmt(target)} this week`, planBody());
   const read = plan.upTo ? comebackCapRead(plan, doneKm, unitsPerKm(input)) : 'within';
   // Wave 23e: a hold week he built through ("28 of ~25 km, long run 12 against 11") is neither "on plan" nor praised as held.
-  const note = holdOver ? 'above the hold'
+  // (Wave 24e: a hold whose km were kept but whose long run broke it says THAT - "above the hold" is for a week that built past its number.)
+  const note = holdRead?.kind === 'km' ? 'above the hold'
+    : holdRead?.kind === 'long' ? `long run ${fmt(holdRead.longKm)} over the held ${fmt(holdRead.heldKm)}`
     : read !== 'within' ? overCapPhrase(read)
     : grade.level === 'mixed' ? 'a bit under the step'
     : doneKm > target * ABOVE_STEP_FRACTION ? (plan.cutback != null ? 'a normal week' : 'above the step')
@@ -3600,7 +3626,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       // The last day of a hold week: the week is done, so the headline judges THIS week (not the jump two weeks back), as in a build week.
       if (weekdayOf(input.todayKey) === 0 && doneKm > 0 && !longRunPending && current != null && current.level !== 'light') {
         const longestThisWeek = Math.max(0, ...ec.runs.filter(r => r.day >= ec.weekStart && r.day <= input.todayKey && r.day !== input.race?.date).map(r => r.km));
-        const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody, holdOverrun(plan, doneKm, longestThisWeek));
+        const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody, holdOverrunRead(plan, doneKm, longestThisWeek));
         if (thisWeek != null) return thisWeek;
       }
       // A cutback week that ran more than 10% over its lowered number: no +10% build on the skip - hold at the week it replaced.
@@ -3608,7 +3634,8 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
         // (Wave 23e: no guilt. The cutback became a normal week, which is fine; the bar stays where it was.)
         const skippedInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} ran as a normal week, not the ~${fmt(hold.spikeStepKm)} cutback — your bar stays ~${fmt(target)}`, tone: 'neutral' };
         // (With a remaining-km line the plan line follows it: the headline already says the cutback became a normal week.)
-        return finish('holding', `Your cutback became a normal week — hold ~${fmt(target)} this week`, stepWarn != null
+        // (Verdict 'building': the hold after a cutback that became a normal week is the plan, not a warning - a runner who keeps to it is on plan, wave 24e.)
+        return finishB('building', `Your cutback became a normal week — hold ~${fmt(target)} this week`, stepWarn != null
           ? body(stepWarn, [planLine, skippedInfo])
           : body(skippedInfo, [planLine]));
       }
@@ -3691,6 +3718,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   }
   const how = last?.kind === 'baseline' ? ', your baseline'
     : last?.kind === 'restart' || last?.kind === 'rebuild' && plan.restart != null ? ', back after your break'
+    : last?.holdOverRead === 'long' && last.holdLongKm != null && last.holdHeldLongKm != null ? `, long run ${fmt(last.holdLongKm)} over the held ${fmt(last.holdHeldLongKm)}`
     : last?.holdOver && lastPlanKm != null ? `, above the ~${fmt(lastPlanKm)} hold`
     : last?.cutback && !above && level === 'good' ? ', your cutback week'
     : above ? `, above the ~${fmt(lastPlanKm as number)} ${last?.cutback ? 'cutback' : 'step'}`
