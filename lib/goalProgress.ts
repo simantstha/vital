@@ -120,6 +120,7 @@ import {
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
 import {
+  DELOAD_CUE_HEAD,
   isDeloadWeek,
   isLiftProgressing,
   furthestBehindReturn,
@@ -137,6 +138,7 @@ import {
   liftTrainedAtWorkingWeight,
   pickHeadlineLift,
   pickWeekOverWeek,
+  proactiveDeload,
   rankLifts,
   weekOverWeekWording,
   type LiftReturnDisplay,
@@ -2427,6 +2429,13 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     : ret ? liftReturnReasons(rets.length > 0 ? rets : [ret], input, slackWeek ? exercise => !trainedThisWeek(exercise) : undefined) : [liftReasons[0] ?? weekOverWeekReason(input)];
   // "Back after a 15-day break" explains a rebuild; once every pre-break best is regained it is no longer news.
   const returnBreak = ret && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null ? liftReturnBreakReason(ret, input) : null;
+  // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach
+  // lines (they print the card). The same pure rule as the review, read for the last completed week; never while rebuilding after a break.
+  // It stays on a lapsed day too: the week's plan is still the deload.
+  const deloadLine: GoalProgressReason | null =
+    proactiveDeload(input.progression, addDays(weekStart(input.todayKey), -7), { imperial: input.unitSystem === 'imperial', leadKey: null, rebuilding: returnBreak != null }) != null
+      ? { kind: 'deload', text: DELOAD_CUE_HEAD, tone: 'neutral' }
+      : null;
   // A lapse is not a time to praise the scale either: the weight line is neutral and says so.
   const rateLapse = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
   // ... nor a green weight line in a slack week (the scale moved; the sessions did not).
@@ -2439,6 +2448,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   const reasons = windowStale
     ? capReasons([
         ...leadLifts,
+        deloadLine,
         weekSessions ?? sessions,
         ret ? returnBreak : young ? null : adherenceDemoted,
         reachLead,
@@ -2452,6 +2462,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         adherenceLow ? adherence : null,
         weekShort ? weekSessions : null,
         ...leadLifts,
+        deloadLine,
         adherenceLow ? null : sessions,
         reachLead,
         rateTop ? rateShown : null,

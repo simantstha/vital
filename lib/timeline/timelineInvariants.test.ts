@@ -2569,6 +2569,8 @@ invariant(['lifter_obedient'], 'the loads a review prescribes are the loads she 
     const nextMonday = addDays(r.weekStart, 7);
     // The ill week is the one week she is not following the prescription (its loads are a single volume session), on either side of it.
     if (nextMonday === OBEDIENT_ILL_START || r.weekStart === OBEDIENT_ILL_START) continue;
+    // A deload cue names the loads she goes back to AFTER the deload week ("then back to Squat 125 kg"): wave 24s P2-A checks them two weeks on.
+    if (/^Deload week:/.test(plain(r.nextWeek))) continue;
     for (const m of plain(r.nextWeek).matchAll(/\b(squat|bench|deadlift)\s+(~?)(\d+(?:\.\d+)?)(?:\s?→\s?(\d+(?:\.\d+)?))?\s?kg\b/gi)) {
       const exercise = exerciseOf[liftWord(m[1])];
       const prescribed = Number(m[4] ?? m[3]);
@@ -3958,6 +3960,123 @@ invariant(['lifter_short_week', 'lifter_obedient'], 'P3-7: a short-week review n
     }
   }
   assert.ok(loads > 0, `${name}: no short-week review named a plain load, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P2-A. A proactive deload. lifter_obedient added +2.5 kg to every lift every week for 14 weeks (bench 80 → 110 kg; the day-98 cue was "bench 110 → 112.5 kg")
+// and the app only ever praised a deload ("good timing after 3 straight weeks of heavier loads"), it never prescribed one. After 5 straight weeks in which
+// the next-load cue stepped up, the next review's cue is "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 125 kg, …"; the
+// card and the coach lines carry it all week; the week after praises the deload and goes back to the loads the cue named.
+type CueKind24s = 'deload' | 'step' | 'rebuild-step' | 'other';
+
+function cueKind24s(nextWeek: string): CueKind24s {
+  const t = plain(nextWeek);
+  if (/^Deload week:/.test(t)) return 'deload';
+  if (!/→/.test(t) || /hold at/.test(t) || /^Back to full loads/.test(t)) return 'other';
+  return /^Keep rebuilding/.test(t) ? 'rebuild-step' : 'step';
+}
+
+/** The review snapshots of a scenario (Mondays), in order. */
+const reviewSnaps24s = (snaps: DaySnapshot[]): DaySnapshot[] => snaps.filter(s => s.review != null);
+
+invariant(LIFTERS, 'P2-A: no run of more than 6 consecutive step-up next-week cues (the lifter is told to deload before the 6th)', snaps => {
+  const out: Violation[] = [];
+  let run = 0;
+  for (const snap of reviewSnaps24s(snaps)) {
+    const kind = cueKind24s((snap.review as NonNullable<DaySnapshot['review']>).review.nextWeek);
+    run = kind === 'step' || kind === 'rebuild-step' ? run + 1 : 0;
+    if (run > 6) out.push({ snap, detail: `step-up cue number ${run} in a row: "${visible((snap.review as NonNullable<DaySnapshot['review']>).review.nextWeek)}"` });
+  }
+  return out;
+});
+
+invariant(LIFTERS, 'P2-A: after 5 consecutive step-up cues the next review (of a good week) cues a deload week, never a sixth step', (snaps, name) => {
+  const out: Violation[] = [];
+  let run = 0;
+  let deloads = 0;
+  for (const snap of reviewSnaps24s(snaps)) {
+    const r = (snap.review as NonNullable<DaySnapshot['review']>).review;
+    const kind = cueKind24s(r.nextWeek);
+    if (kind === 'deload') deloads++;
+    if (run >= 5 && r.weekRating === 'good' && kind !== 'deload') out.push({ snap, detail: `${run} step-up cues in a row, then "${visible(r.nextWeek)}"` });
+    run = kind === 'step' ? run + 1 : 0;
+  }
+  if (name === 'lifter_obedient') assert.ok(deloads >= 1, `${name}: no deload week was ever cued, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(LIFTERS, 'P2-A: the card and the coach lines carry the deload cue on every day of the week the review cued it, and on no other day', (snaps, name) => {
+  const out: Violation[] = [];
+  const deloadWeeks = reviewSnaps24s(snaps).filter(s => cueKind24s((s.review as NonNullable<DaySnapshot['review']>).review.nextWeek) === 'deload').map(s => s.date);
+  const inDeloadWeek = (date: string): boolean => deloadWeeks.some(m => date >= m && date <= addDays(m, 6));
+  let checked = 0;
+  for (const snap of snaps) {
+    if (!snap.card) continue;
+    const cardLine = snap.card.reasons.find(x => x.kind === 'deload');
+    const coachLine = (snap.coach ?? []).some(t => /Deload week:/.test(plain(t)));
+    if (inDeloadWeek(snap.date)) {
+      checked++;
+      if (!cardLine || !/^Deload week: ~85–90% of last week's loads, 2 working sets$/.test(plain(cardLine.text))) out.push({ snap, detail: `deload-cue week, but the card has: ${JSON.stringify(snap.card.reasons.map(x => x.text))}` });
+      if (!coachLine) out.push({ snap, detail: 'deload-cue week, but the coach goal lines do not mention it' });
+    } else if (cardLine || coachLine) {
+      out.push({ snap, detail: `no deload was cued for this week, but the card / coach says "${visible(cardLine?.text ?? 'coach line')}"` });
+    }
+  }
+  if (name === 'lifter_obedient') assert.ok(checked > 0, `${name}: no deload-cue week was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+/** Every "<lift> <load> <unit>" in `text` (plain loads, no arrow), by lift. */
+function plainLoads24s(text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const m of plain(text).matchAll(/\b(squat|bench|deadlift)\s+(\d+(?:\.\d+)?)\s?(kg|lb)\b/gi)) out.set(LIFT_EXERCISE_24S[m[1].toLowerCase()], Number(m[2]));
+  return out;
+}
+
+invariant(LIFTERS, 'P2-A: the week after a followed deload praises the timing and goes back to exactly the loads the cue named', (snaps, name) => {
+  const out: Violation[] = [];
+  const reviews = reviewSnaps24s(snaps);
+  let checked = 0;
+  reviews.forEach((snap, i) => {
+    const r = (snap.review as NonNullable<DaySnapshot['review']>).review;
+    const prev = i > 0 ? (reviews[i - 1].review as NonNullable<DaySnapshot['review']>).review : null;
+    if (!prev || cueKind24s(prev.nextWeek) !== 'deload' || r.weekRating !== 'light') return;
+    checked++;
+    if (!/^Deload week done — lighter loads, good timing after [5-9] straight weeks of heavier loads\.$/.test(plain(r.win ?? ''))) out.push({ snap, detail: `win after a prescribed deload: "${visible(r.win ?? '(none)')}"` });
+    const promised = plainLoads24s(prev.nextWeek.slice(prev.nextWeek.indexOf('then back to')));
+    const cued = plainLoads24s(r.nextWeek);
+    if (!/^Back to full loads: /.test(plain(r.nextWeek)) || promised.size === 0 || [...promised].some(([lift, load]) => cued.get(lift) !== load)) {
+      out.push({ snap, detail: `the cue promised ${JSON.stringify([...promised])}, the next week says "${visible(r.nextWeek)}"` });
+    }
+  });
+  if (name === 'lifter_obedient') assert.ok(checked > 0, `${name}: no followed deload was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['lifter_obedient'], 'P2-A: the obedient lifter follows a deload cue (about 87.5% of her loads, 2 working sets) and then lifts the loads it named', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let followed = 0;
+  for (const snap of reviewSnaps24s(snaps)) {
+    const r = (snap.review as NonNullable<DaySnapshot['review']>).review;
+    if (cueKind24s(r.nextWeek) !== 'deload') continue;
+    const monday = snap.date;
+    if (monday >= OBEDIENT_ILL_START && monday <= OBEDIENT_ILL_END) continue; // the ill week cannot follow a cue
+    followed++;
+    for (const [exercise, resume] of plainLoads24s(r.nextWeek.slice(r.nextWeek.indexOf('then back to')))) {
+      const before = weekTopKg24s(name, exercise, r.weekStart);
+      const during = weekTopKg24s(name, exercise, monday);
+      const after = weekTopKg24s(name, exercise, addDays(monday, 7));
+      if (before == null || during == null || during > before * 0.9 + 1e-9 || during < before * 0.85 - 1.25) out.push({ snap, detail: `${exercise}: cued ~85-90% of ${before} kg, she lifted ${during ?? 'nothing'} kg in the week of ${monday}` });
+      if (after !== resume) out.push({ snap, detail: `${exercise}: the cue named ${resume} kg to go back to, she lifted ${after ?? 'nothing'} kg in the week of ${addDays(monday, 7)}` });
+      const sets = scn.sets.filter(x => x.exercise === exercise && !x.isWarmup && x.day >= monday && x.day <= addDays(monday, 6));
+      for (const day of new Set(sets.map(x => x.day))) {
+        const n = sets.filter(x => x.day === day).length;
+        if (n > 2) out.push({ snap, detail: `${exercise}: ${n} working sets on ${day} in a deload week (cued 2)` });
+      }
+    }
+  }
+  assert.ok(followed > 0, `${name}: no deload cue was followed, so this invariant checked nothing`);
   return out;
 });
 

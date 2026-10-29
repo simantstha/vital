@@ -14,7 +14,7 @@ import {
   recoveryWeek,
   weekStepOrGoalKm,
 } from '../enduranceProgression';
-import { nextLoadCues, shortWeekLoadCues, shortWeekLoadToLift } from '../liftChange';
+import { DELOAD_CUE_LOAD_FRACTION, afterProactiveDeload, easedLoad, nextLoadCues, proactiveDeload, shortWeekLoadCues, shortWeekLoadToLift } from '../liftChange';
 import { summarizeProgression } from '../progressionMath';
 import { computeProgressFor } from './engine';
 import { obedientDayByDay } from './obedient';
@@ -504,8 +504,13 @@ export const OBEDIENT_SHORT_WEEK = 7;
  * exactly the loads it prescribes for the coming week: the normal next-load step after a full week (`nextLoadCues`), and after a
  * short week the lifts she did not lift heavy repeat their LAST load ("Squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg (your last loads)",
  * `shortWeekLoadCues`). Same four sessions a week as `lifter` (Mon squat + bench, Tue deadlift, Thu bench volume, Sat light squat +
- * deadlift), no deload, no weeks off - and the one bad week (week 7: only Thursday, an illness). Deterministic: the loads are a pure
- * function of the sets so far. The timeline invariants check that the loads she lifts ARE the loads the reviews print.
+ * deadlift) and the one bad week (week 7: only Thursday, an illness). Deterministic: the loads are a pure function of the sets so far.
+ * The timeline invariants check that the loads she lifts ARE the loads the reviews print.
+ *
+ * Wave 24s (P2-A): after 5 straight weeks of heavier loads the review cues a deload week (`proactiveDeload`), and she follows it: ~87.5% of
+ * last week's loads on the 2.5 kg grid, 2 working sets per lift, then back to the pre-deload loads the cue named (`afterProactiveDeload`).
+ * The first cue (the review of week 6) falls in her ill week, which cannot follow it and breaks the run; the second (week 13) is followed in
+ * week 14 and resumed in week 15 - which is why this scenario runs one week longer than `lifter` (15 weeks, to day 105).
  */
 export function lifterObedient(): Scenario {
   const base = lifter();
@@ -514,6 +519,7 @@ export function lifterObedient(): Scenario {
   const roundPlate = (kg: number): number => Math.round(kg / 2.5) * 2.5;
   const displays: Record<string, string> = { squat: 'Squat', 'bench press': 'Bench Press', deadlift: 'Deadlift' };
   const start: Record<string, number> = { squat: 100, 'bench press': 80, deadlift: 120 };
+  const WEEKS = 15;
 
   const pushSets = (day: string, ex: string, n: number, reps: number, load: number, rpe: number, warm = true): void => {
     if (warm) {
@@ -523,8 +529,8 @@ export function lifterObedient(): Scenario {
     for (let i = 0; i < n; i++) sets.push({ day, exercise: ex, display: displays[ex], reps, loadKg: load, rpe, isWarmup: false });
   };
 
-  /** The loads the review of `reviewedWeek` (a Monday) prescribes, by the review's own rules, from the sets logged so far. */
-  const prescribed = (reviewedWeek: string, current: Record<string, number>): Record<string, number> => {
+  /** The loads the review of `reviewedWeek` (a Monday) prescribes, by the review's own rules, from the sets logged so far; `deload` when the coming week is a cued deload. */
+  const prescribed = (reviewedWeek: string, current: Record<string, number>): { loads: Record<string, number>; deload: boolean } => {
     const weekEnd = addDays(reviewedWeek, 6);
     const logged = sets.filter(s => s.day <= weekEnd);
     const progression = summarizeProgression(logged.map(s => ({
@@ -533,41 +539,60 @@ export function lifterObedient(): Scenario {
     const done = new Set(logged.filter(s => !s.isWarmup && s.day >= reviewedWeek).map(s => s.day)).size;
     const opts = { imperial: false, leadKey: null, rebuilding: false };
     const next: Record<string, number> = { ...current };
-    if (done >= 4) {
-      for (const c of nextLoadCues(progression, reviewedWeek, opts)) next[c.key] = c.hold ? c.load.from : c.load.to;
-    } else {
+    if (done < 4) {
       for (const c of shortWeekLoadCues(progression, reviewedWeek, opts)) next[c.key] = shortWeekLoadToLift(c);
+      return { loads: next, deload: false };
     }
-    return next;
+    // A deload week she followed: back to the pre-deload loads the cue named (the step follows the week after).
+    const resume = afterProactiveDeload(progression, reviewedWeek, { imperial: false, leadKey: null });
+    if (resume) {
+      for (const c of resume) next[c.key] = c.load.from;
+      return { loads: next, deload: false };
+    }
+    // After 5 straight weeks of heavier loads the cue is a deload: about 87.5% of last week's loads, 2 working sets.
+    if (proactiveDeload(progression, reviewedWeek, opts)) {
+      for (const key of Object.keys(next)) next[key] = easedLoad(current[key], DELOAD_CUE_LOAD_FRACTION, false).value;
+      return { loads: next, deload: true };
+    }
+    for (const c of nextLoadCues(progression, reviewedWeek, opts)) next[c.key] = c.hold ? c.load.from : c.load.to;
+    return { loads: next, deload: false };
   };
 
   let loads = { ...start };
+  let deload = false;
   const history: string[] = [];
-  for (let w = 1; w <= 14; w++) {
+  for (let w = 1; w <= WEEKS; w++) {
     const monday = addDays(DAY0, (w - 1) * 7);
-    if (w > 1) loads = prescribed(addDays(monday, -7), loads);
-    history.push(`w${w} squat ${loads.squat} / bench ${loads['bench press']} / deadlift ${loads.deadlift}`);
+    if (w > 1) ({ loads, deload } = prescribed(addDays(monday, -7), loads));
+    history.push(`w${w}${deload ? ' (deload)' : ''} squat ${loads.squat} / bench ${loads['bench press']} / deadlift ${loads.deadlift}`);
     const L = (ex: string): number => loads[ex];
+    const nSets = deload ? 2 : 3;
     if (w === OBEDIENT_SHORT_WEEK) {
       pushSets(addDays(monday, 3), 'bench press', 3, 8, roundPlate(L('bench press') * 0.85), 8);
       continue;
     }
-    pushSets(addDays(monday, 0), 'squat', 3, 5, L('squat'), 8);
-    pushSets(addDays(monday, 0), 'bench press', 3, 5, L('bench press'), 8);
+    pushSets(addDays(monday, 0), 'squat', nSets, 5, L('squat'), 8);
+    pushSets(addDays(monday, 0), 'bench press', nSets, 5, L('bench press'), 8);
     pushSets(addDays(monday, 1), 'deadlift', 2, 5, L('deadlift'), 8);
-    pushSets(addDays(monday, 3), 'bench press', 3, 8, roundPlate(L('bench press') * 0.85), 8);
+    pushSets(addDays(monday, 3), 'bench press', nSets, 8, roundPlate(L('bench press') * 0.85), 8);
     pushSets(addDays(monday, 5), 'squat', 2, 5, roundPlate(L('squat') * 0.9), 7, false);
     pushSets(addDays(monday, 5), 'deadlift', 2, 5, roundPlate(L('deadlift') * 0.9), 7, false);
   }
-  notes.push(`Week 1 loads: squat ${start.squat}, bench press ${start['bench press']}, deadlift ${start.deadlift} kg. From week 2 every Monday she lifts the loads the review of the week before prescribes (the real nextLoadCues after a full week, the real shortWeekLoadCues after a short one), top set of the week = that load.`);
+  // `lifter` stops after week 14; the extra week (days 98-104) shows the resume after the week-14 deload, so it needs its three weigh-ins.
+  const weighIns: WeighIn[] = [...base.weighIns];
+  for (const dow of [0, 3, 5]) weighIns.push({ day: addDays(DAY0, 14 * 7 + dow), kg: Math.round((80 + 0.2 * (14 + dow / 7)) * 10) / 10 });
+  notes.push(`Week 1 loads: squat ${start.squat}, bench press ${start['bench press']}, deadlift ${start.deadlift} kg. From week 2 every Monday she lifts the loads the review of the week before prescribes (the real nextLoadCues after a full week, the real shortWeekLoadCues after a short one, the real proactiveDeload after 5 straight weeks of heavier loads), top set of the week = that load.`);
   notes.push(`Week ${OBEDIENT_SHORT_WEEK} (days ${(OBEDIENT_SHORT_WEEK - 1) * 7}-${OBEDIENT_SHORT_WEEK * 7 - 1}): only the Thursday bench volume session (an illness); the Monday, Tuesday and Saturday sessions are dropped. Obedient again from the next Monday.`);
+  notes.push(`Deload: a cued deload week is lifted at ~87.5% of last week's loads (2.5 kg grid) with 2 working sets per lift (3 sessions' worth of volume drops accordingly); the week after goes back to the pre-deload loads the cue named. The week-6 review's deload cue lands in the ill week 7 (she cannot follow it), the week-13 review's is followed in week 14 and resumed in week 15.`);
   notes.push(`Top loads by week: ${history.join('; ')}.`);
 
   return {
     ...base,
     name: 'lifter_obedient',
-    title: `Lifter who does exactly what the app says (4 sessions a week, the prescribed loads, one ill week: week ${OBEDIENT_SHORT_WEEK})`,
+    title: `Lifter who does exactly what the app says (4 sessions a week, the prescribed loads incl. a deload week, one ill week: week ${OBEDIENT_SHORT_WEEK})`,
+    lastDay: WEEKS * 7,
     sets,
+    weighIns,
     inputNotes: [base.inputNotes[0], ...notes, base.inputNotes[base.inputNotes.length - 1]],
   };
 }
