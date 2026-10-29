@@ -73,3 +73,60 @@ test('the first run back on a Sunday never shrinks the week below what it ran (t
   assert.equal(plan.restart?.midWeek, undefined);
   assert.ok((plan.targetKm as number) >= 14, `${plan.targetKm}`);
 });
+
+// ── wave 24e group 2: hold and cutback rules ─────────────────────────────────
+
+import { holdOverrunRead } from './enduranceProgression';
+import { buildScenario } from './timeline/scenarios';
+import { addDays as scnAddDays } from './timeline/types';
+
+const MI = 1 / 1.609344;
+const onPlanRuns = (): PlanRun[] => buildScenario('runner_on_plan').workouts.map(w => ({ day: w.day, km: (w.distanceM as number) / 1000 }));
+const onPlanPlan = (idx: number, unitsPerKm: number) => {
+  const scn = buildScenario('runner_on_plan');
+  const today = scnAddDays(scn.day0, idx);
+  const mon = scnAddDays(scn.day0, Math.floor(idx / 7) * 7);
+  return enduranceWeekPlan({ runs: onPlanRuns().filter(r => r.day <= today), weekStart: mon, goalKm: 30, race: { date: scn.user.raceDate, distanceKm: 21.1 }, today, unitsPerKm, goalStartDay: scn.day0 });
+};
+
+test('a cutback that became a normal week at the GOAL week (30 km) is followed by a maintain week, not a hold below the goal; the cutback is still owed', () => {
+  const p = onPlanPlan(70, 1); // Monday after the second cutback week, run as 30 km (the week it replaced WAS the goal)
+  assert.equal(p.kind, 'maintain');
+  assert.equal(p.hold, null);
+  assert.equal(p.targetKm, 30);
+  assert.equal(p.cutbackOwed, true);
+  assert.equal(nbsp(p.purpose), 'Hold 30 km this week: long run 15 km, the rest easy');
+  assert.doesNotMatch(p.purpose, /easier week|normal week/);
+  // Below the goal it is still a hold (the week of d42: the cutback replaced a 25 km week).
+  const hold = onPlanPlan(42, 1);
+  assert.equal(hold.kind, 'hold');
+  assert.equal(hold.hold?.skippedCutback, true);
+  // Its plan line says why there is no step - and "an easier week" only when it is easier (25 after 25 is not).
+  assert.equal(nbsp(hold.purpose), 'Your cutback became a normal week — fine. Hold ~25 km this week, long run 11 km — no 10% step on top of it');
+});
+
+test('a hold is graded by km first: a long run past the held one breaks it only when oversized (over 55% of the week); "km" and "long" are told apart', () => {
+  const plan = { kind: 'hold' as const, targetKm: 25, longRunKm: 11 };
+  assert.equal(holdOverrunRead(plan, 25, 11), null);
+  assert.equal(holdOverrunRead(plan, 25, 13), null); // 52%: the same rule as a maintain week's
+  assert.deepEqual(holdOverrunRead(plan, 25, 14), { kind: 'long', longKm: 14, heldKm: 11 }); // 56%
+  assert.deepEqual(holdOverrunRead(plan, 27, 11), { kind: 'km' });
+  assert.equal(holdOverrunRead({ kind: 'build' as const, targetKm: 25, longRunKm: 11 }, 40, 30), null);
+});
+
+test('metric and imperial trim the second cutback the same way (Saturday: 15 km in, the 12 km long run would carry the week past 110%); the imperial long run is the half-mile cap, not 7 mi', () => {
+  const km = onPlanPlan(68, 1);
+  const mi = onPlanPlan(68, MI);
+  assert.equal(km.longRunTrim != null, true);
+  assert.equal(mi.longRunTrim != null, true, 'imperial did not trim');
+  assert.equal(nbsp(km.purpose), 'Cutback week: ~24 km, long run 9 km — absorb the last three weeks');
+  assert.equal(nbsp(mi.purpose), 'Cutback week: ~15 mi, long run 5.5 mi — absorb the last three weeks');
+  assert.equal(km.longRunTrim?.fullKm, 12);
+  assert.ok(Math.abs((mi.longRunTrim?.fullKm ?? 0) * MI - 7.5) < 0.01, `${mi.longRunTrim?.fullKm}`);
+});
+
+test('imperial: the held long run is never past the peak the goal fits (9.5 mi against the 9 mi of an 18.6 mi week)', () => {
+  const p = onPlanPlan(75, MI);
+  assert.ok((p.longRunKm ?? 0) * MI <= 9 + 1e-6, `${(p.longRunKm ?? 0) * MI} mi`);
+  assert.match(nbsp(p.purpose), /long run 9 mi/);
+});

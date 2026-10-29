@@ -78,11 +78,12 @@ test('cutback: "Next week" names it, the cutback week itself is graded as its ow
   const normal = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25], { weekStart: '2026-10-19' }));
   assert.equal(normal.weekGap, null);
   assert.equal(normal.weekRating, 'good');
-  assert.equal(normal.win, 'Your cutback became a normal week — fine.');
+  // Wave 24e: no WIN slot (it is fine, not an achievement), a neutral Volume stat, and the neutral note opens "Next week".
+  assert.equal(normal.win, null);
   assert.equal(normal.slip, null);
   assert.match(normal.headline, /^4 sessions, 25 of ~20 km — a normal week, not the cutback · goal 30 km/);
-  assert.equal(normal.stats.find(st => st.label === 'Volume')!.tone, 'good');
-  assert.equal(normal.nextWeek, 'Hold ~25 km next week; long run 10 km — an easier week before building again.');
+  assert.equal(normal.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
+  assert.equal(normal.nextWeek, 'Ran the cutback as a normal week — hold ~25 km next week; long run 10 km, no 10% step on top of it.');
 });
 
 test('strides: the last 2 build weeks before the taper say "plus 4–6 strides after one easy run" in "Next week"', () => {

@@ -61,7 +61,7 @@ test('a hold week kept (25 km, long run at the held one) after a skipped cutback
   const r = computeWeeklyReview(planReview([...SKIPPED_CUTBACK, 25], { weekStart: '2026-10-26' }));
   assert.equal(r.weekRating, 'good');
   assert.equal(r.weekGap, null);
-  assert.equal(r.win, 'Held at ~25 km after the skipped cutback — right call.');
+  assert.equal(r.win, 'Held at ~25 km after the cutback ran as a normal week — right call.');
   assert.doesNotMatch(r.win ?? '', /jump/);
   assert.match(r.headline, /^4 sessions, 25 of ~25 km — on plan · goal 30 km/);
   assert.equal(stat(r, 'Volume')!.tone, 'good');
@@ -80,15 +80,24 @@ test('a hold week built through (28 of ~25 km, long run 11.2 against the held ~1
   assert.doesNotMatch(`${r.headline} ${r.slip} ${r.nextWeek}`, /Held back|exactly right|guilt|skipped/);
 });
 
-test('a hold week whose KM were held but whose long run was not names the long run, in the same factual words', () => {
-  // 25 km, but the Sunday run is 13 km (52% of the week) against a held ~10.
+test('a hold week whose KM were held but whose long run was not names the long run in the headline - never "above the hold" (wave 24e)', () => {
+  // 25 km, but the Sunday run is 14 km (56% of the week: past the 55% every build / maintain / hold week is held to) against a held ~10.
   const weeks = planReview([...SKIPPED_CUTBACK, 25], { weekStart: '2026-10-26' });
-  const workouts = weeks.workouts.map(w => (w.day === '2026-11-01' ? { ...w, distanceKm: 13 } : w.day === '2026-10-31' ? { ...w, distanceKm: 2 } : w));
+  const workouts = weeks.workouts.map(w => (w.day === '2026-11-01' ? { ...w, distanceKm: 14 } : w.day === '2026-10-31' ? { ...w, distanceKm: 1 } : w));
   const r = computeWeeklyReview({ ...weeks, workouts });
-  assert.equal(r.weekRating, 'mixed');
-  assert.equal(r.weekGap?.kind, 'hold');
-  assert.match(r.slip ?? '', /^Held the km, but the long run was 13 km against the held \d+(\.\d)? km$/);
+  // The km were held, so the week is graded like a maintain week with a long run past its plan: good, no slip, no win; the headline says what happened.
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.weekGap, null);
+  assert.equal(r.headline, '4 sessions, 25 of ~25 km — long run 14 km, over the held 10 km · goal 30 km');
+  assert.doesNotMatch(r.headline, /above the hold/);
+  // (The only slip is the long-run rule's own, the same for every build / maintain / hold week: a long run 4 km past its plan is "jumped", hold it next week.)
+  assert.equal(r.slip, 'Long run jumped to 14 km — hold 14 next week.');
   assert.equal(r.win, null);
+  assert.equal(r.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
+  // A long run that is not oversized (13 km = 52%) is not a broken hold at all: the same rule as a maintain week's.
+  const mild = computeWeeklyReview({ ...weeks, workouts: weeks.workouts.map(w => (w.day === '2026-11-01' ? { ...w, distanceKm: 13 } : w.day === '2026-10-31' ? { ...w, distanceKm: 2 } : w)) });
+  assert.equal(mild.weekRating, 'good');
+  assert.doesNotMatch(mild.headline, /over the held|above the hold/);
 });
 
 test('a spike hold kept keeps the spike wording ("after last week\'s jump"); a ceiling hold says it stayed at the ceiling', () => {

@@ -13,7 +13,7 @@ import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline, stepDay } from './engine';
 import { extractInstructions } from './instructions';
-import { COMEBACK_OBEDIENT_ILL_DAYS, OBEDIENT_SHORT_WEEK, SCENARIO_NAMES, buildScenario, type ScenarioName } from './scenarios';
+import { COMEBACK_OBEDIENT_ILL_DAYS, OBEDIENT_SHORT_WEEK, SCENARIO_NAMES, SKIP_THEN_OBEDIENT_SCRIPTED_WEEKS, buildScenario, type ScenarioName } from './scenarios';
 import { addDays, dayDiff, weekdayOf, type DaySnapshot } from './types';
 
 const ALL: readonly ScenarioName[] = SCENARIO_NAMES;
@@ -2026,7 +2026,7 @@ function skippedCutbacks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm
 
 // (Wave 23e: the review no longer grades it mixed with a "Cutback skipped" slip - see the P2-6 invariant at the end of this file - but the week after still holds at the
 // week it replaced and never steps up from the skip.)
-invariant(RUNNERS, 'a cutback that became a normal week (more than 10% over its lowered number) is followed by a hold at the week it replaced - never a +12% build', (snaps, name) => {
+invariant(RUNNERS, 'a cutback that became a normal week (more than 10% over its lowered number) is followed by a hold at the week it replaced - never a +12% build (wave 24e: when the week it replaced WAS the goal there is nothing to hold below: a maintain week, worded and graded as one)', (snaps, name) => {
   const out: Violation[] = [];
   const byDate = new Map(snaps.map(s => [s.date, s]));
   let skipped = 0;
@@ -2035,11 +2035,14 @@ invariant(RUNNERS, 'a cutback that became a normal week (more than 10% over its 
     const nextMonday = byDate.get(addDays(w.monday, 7));
     const plan = nextMonday?.card?.distance?.plan;
     const normalKm = w.targetKm / 0.8;
-    if (nextMonday && plan?.kind !== 'hold') out.push({ snap: nextMonday, detail: `plan kind ${plan?.kind} after ${w.ranKm} of ~${w.targetKm} km (a cutback that became a normal week): "${visible(nextMonday.card?.headline ?? '')}"` });
+    const goalKm = nextMonday?.card?.distance?.targetKm ?? 30;
+    const atGoal = normalKm >= goalKm - 0.5;
+    if (nextMonday && plan?.kind !== (atGoal ? 'maintain' : 'hold')) out.push({ snap: nextMonday, detail: `plan kind ${plan?.kind} after ${w.ranKm} of ~${w.targetKm} km (a cutback that became a normal week): "${visible(nextMonday.card?.headline ?? '')}"` });
     if (nextMonday?.card?.distance && nextMonday.card.distance.stepTargetKm > Math.ceil(normalKm) + 1 + 1e-9) out.push({ snap: nextMonday, detail: `target ${nextMonday.card.distance.stepTargetKm} km steps up after a skipped cutback (the week it replaced was ~${Math.round(normalKm)} km)` });
-    if (nextMonday && !/^Your cutback became a normal week — hold ~/.test(plain(nextMonday.card?.headline ?? ''))) out.push({ snap: nextMonday, detail: `card headline "${visible(nextMonday.card?.headline ?? '')}" does not hold at the week the cutback replaced` });
+    if (nextMonday && !atGoal && !/^Your cutback became a normal week — hold ~/.test(plain(nextMonday.card?.headline ?? ''))) out.push({ snap: nextMonday, detail: `card headline "${visible(nextMonday.card?.headline ?? '')}" does not hold at the week the cutback replaced` });
+    if (nextMonday && atGoal && /cutback became|easier week/.test(plain([nextMonday.card?.headline, ...(nextMonday.card?.reasons.map(r => r.text) ?? [])].join(' | ')))) out.push({ snap: nextMonday, detail: `a week at the goal is a maintain week, but the card still talks of the cutback / an easier week: "${visible(nextMonday.card?.headline ?? '')}"` });
     const review = nextMonday?.review;
-    if (review && review.weekStart === w.monday && !/hold ~|Hold ~/.test(plain(review.review.nextWeek))) out.push({ snap: nextMonday as DaySnapshot, detail: `next week "${visible(review.review.nextWeek)}" does not hold` });
+    if (review && review.weekStart === w.monday && !/hold ~|Hold ~|Hold \d/.test(plain(review.review.nextWeek))) out.push({ snap: nextMonday as DaySnapshot, detail: `next week "${visible(review.review.nextWeek)}" does not hold` });
   }
   if (name === 'runner_on_plan' || name === 'runner_no_race') assert.ok(skipped > 0, `${name}: no cutback was skipped, so this invariant checked nothing`);
   return out;
@@ -3224,7 +3227,7 @@ invariant(WEIGHT, 'P3-H: the coach is never told to "not blame water" outright; 
 // instructions that cannot both be followed. Everything below is endurance-only and lives in this one block (keep it at the END).
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 
-const OBEDIENT = ['runner_on_plan_obedient', 'runner_comeback_obedient'] as const;
+const OBEDIENT = ['runner_on_plan_obedient', 'runner_comeback_obedient', 'runner_skip_then_obedient'] as const;
 
 /** Days the comeback_obedient runner is ill (no run): their week is a rest week, not an obedient one. */
 const w23IllDays = (name: ScenarioName): ReadonlySet<number> => (name === 'runner_comeback_obedient' ? COMEBACK_OBEDIENT_ILL_DAYS : new Set<number>());
@@ -3241,6 +3244,7 @@ invariant(OBEDIENT, 'G1: the runner follows the plan - each finished week is wit
     if (weekdayOf(mon.date) !== 'Mon' || mon.idx === 0) continue;
     const plan = mon.card?.distance?.plan;
     if (plan?.targetKm == null || /^On a break/.test(plain(mon.card?.headline ?? ''))) continue;
+    if (w24OwnWeek(name, mon.idx)) continue; // (wave 24e: the weeks a scenario scripts on purpose are not obedience)
     if (Array.from({ length: 14 }, (_, i) => mon.idx + i).some(i => ill.has(i))) continue; // the week of an illness and the week the runner comes back
     if (addDays(mon.date, 6) > addDays(scn.day0, scn.lastDay)) continue;
     weeks++;
@@ -3332,8 +3336,8 @@ invariant(OBEDIENT, 'G2: a runner who does exactly what the app says is never cr
   for (const v of w23Views(name, snaps, true)) {
     const snap = v.snap;
     // The days of an illness (and the first day back) are the runner's own break, not obedience.
-    if (illNear(snap.idx, 3)) continue;
-    const reviewOfIllWeek = illNear(snap.idx - 1, 7);
+    if (illNear(snap.idx, 3) || w24OwnWeek(name, snap.idx)) continue;
+    const reviewOfIllWeek = illNear(snap.idx - 1, 7) || w24OwnWeek(name, snap.idx - 1);
     for (const t of allTexts(snap)) {
       if (t.where.startsWith('review') && reviewOfIllWeek) continue;
       const m = W23_CRITICISM.exec(plain(t.text));
@@ -3558,23 +3562,35 @@ invariant(RUNNERS, 'P2-5: when the coming week is a comeback rung ("up to ~N km"
 
 const SKIP_GUILT = /\bskipped\b|stays the bar|do not praise|ran well over|above the cutback|Cutback skipped/i;
 
-invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-6: a cutback that became a normal week is "fine": the week is rated good with no slip, the cards and the review say so in plain words ("Your cutback became a normal week - fine"), and "skipped" / "the week it replaced stays the bar" / "do not praise" are gone', (snaps, name) => {
+invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-6: a cutback that became a normal week is "fine" (wave 24e: rated good, NO win and no green Volume - fine is not an achievement - a neutral note opening "Next week", and a factual slip only on the SECOND one in a row): "skipped" / "the week it replaced stays the bar" / "do not praise" are gone', (snaps, name) => {
   const out: Violation[] = [];
   const byDate = new Map(snaps.map(s => [s.date, s]));
   let seen = 0;
+  const all = cutbackWeeks(snaps);
+  const skippedMondays = new Set(skippedCutbacks(snaps).map(w => w.monday));
   for (const w of skippedCutbacks(snaps)) {
     seen++;
+    // Second in a row: the cutback week before this one was a skipped one too (no cutback was taken in between).
+    const earlier = all.filter(c => c.monday < w.monday);
+    const second = earlier.length > 0 && skippedMondays.has(earlier[earlier.length - 1].monday);
     if (SKIP_GUILT.test(plain(w.sunday.card?.headline ?? '')) || !/normal week/.test(plain(w.sunday.card?.headline ?? ''))) out.push({ snap: w.sunday, detail: `Sunday card "${visible(w.sunday.card?.headline ?? '')}" after ${w.ranKm} of ~${w.targetKm} km` });
     const monday = byDate.get(addDays(w.monday, 7));
     if (!monday) continue;
     const rv = monday.review?.weekStart === w.monday ? monday.review.review : null;
     if (rv) {
       if (rv.weekRating !== 'good') out.push({ snap: monday, detail: `review rated ${rv.weekRating}: "${visible(rv.headline)}"` });
-      if (rv.slip) out.push({ snap: monday, detail: `slip "${visible(rv.slip)}"` });
       if (rv.weekGap) out.push({ snap: monday, detail: `weekGap ${JSON.stringify(rv.weekGap)}` });
+      if (second) {
+        if (!/^Second cutback run as a normal week: [\d.]+ (?:km|mi) vs ~[\d.]+ (?:km|mi) planned$/.test(plain(rv.slip ?? ''))) out.push({ snap: monday, detail: `a second cutback in a row run as a normal week has no factual slip: ${rv.slip == null ? 'none' : `"${visible(rv.slip)}"`}` });
+      } else if (rv.slip) out.push({ snap: monday, detail: `slip "${visible(rv.slip)}" on the first cutback run as a normal week` });
       if (SKIP_GUILT.test(plain(rv.headline)) || !/normal week/.test(plain(rv.headline))) out.push({ snap: monday, detail: `review headline "${visible(rv.headline)}"` });
-      if (plain(rv.win ?? '') !== 'Your cutback became a normal week — fine.') out.push({ snap: monday, detail: `win "${visible(rv.win ?? '')}"` });
-      if (!/^Hold ~[\d.]+ (?:km|mi) next week.* — an easier week(?: before building again|, then (?:the taper|race week))/.test(plain(rv.nextWeek))) out.push({ snap: monday, detail: `next week "${visible(rv.nextWeek)}"` });
+      if (rv.win != null) out.push({ snap: monday, detail: `win "${visible(rv.win)}" (a cutback that became a normal week has no WIN slot)` });
+      const volume = rv.stats.find(st => st.label === 'Volume');
+      if (volume?.tone !== 'neutral') out.push({ snap: monday, detail: `Volume stat is ${volume?.tone}: "${visible(volume?.value ?? '')} ${visible(volume?.comparison ?? '')}"` });
+      const goalKm = monday.card?.distance?.targetKm ?? 30;
+      const atGoal = w.targetKm / 0.8 >= goalKm - 0.5;
+      if (!atGoal && !/^Ran the cutback as a normal week — (?:hold ~[\d.]+ (?:km|mi) next week.*no 10% step on top of it|next week's hold \(~[\d.]+ (?:km|mi)\) is your easier week)/.test(plain(rv.nextWeek))) out.push({ snap: monday, detail: `next week "${visible(rv.nextWeek)}" does not open with the neutral note` });
+      if (atGoal && !/^Hold [\d.]+ (?:km|mi);/.test(plain(rv.nextWeek))) out.push({ snap: monday, detail: `next week "${visible(rv.nextWeek)}" is not the maintain week's "Hold N"` });
       if (rv.stats.some(st => st.tone === 'watch')) out.push({ snap: monday, detail: `a watch-toned stat: ${rv.stats.filter(st => st.tone === 'watch').map(st => `${st.label} ${visible(st.value)}`).join(', ')}` });
     }
     // The hold week: every card, coach line and opener of its days.
@@ -3588,6 +3604,10 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-6: a 
       // (A light week / easing-off day keeps its own plan line: the hold's wording is for the weeks that are held.)
       if (day.card?.distance?.plan?.lightWeek || day.card?.distance?.plan?.easingOff) continue;
       if (!/^Your cutback became a normal week — fine\. Hold ~[\d.]+ (?:km|mi) this week/.test(plain(planLine))) out.push({ snap: day, detail: `plan line "${visible(planLine)}"` });
+      // "an easier week" only when the hold really is lighter than the week just run (25 after 25 is not).
+      const lastKm = day.card?.distance?.plan?.lastKm;
+      const holdKm = day.card?.distance?.plan?.targetKm;
+      if (/an easier week/.test(plain(planLine)) && lastKm != null && holdKm != null && lastKm - holdKm < 0.5) out.push({ snap: day, detail: `"an easier week" for a hold of ${holdKm} km after ${lastKm} km: "${visible(planLine)}"` });
       if (day.card?.reasons.some(r => r.tone === 'watch' && /cutback/.test(plain(r.text)))) out.push({ snap: day, detail: 'a watch-toned reason about the cutback' });
     }
   }
@@ -4429,6 +4449,11 @@ test('wave 24w harness: weight_loss_obedient adds the two 30-minute walks only w
 // runner who did EXACTLY what a card said was told off by the next card or the Monday review. G4 is the guard for the whole class; it covers
 // every runner scenario, not just the obedient ones. Every invariant in this block was written BEFORE the rule it locks in (keep it at the END).
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+/** Days of the weeks a scenario SCRIPTS on purpose (runner_skip_then_obedient runs its first weeks, the skipped cutback included, as runner_on_plan does): not obedience. */
+function w24OwnWeek(name: ScenarioName, idx: number): boolean {
+  return name === 'runner_skip_then_obedient' && idx >= 0 && idx < SKIP_THEN_OBEDIENT_SCRIPTED_WEEKS * 7;
+}
 
 /** What a day's instruction says the rest of the week is, as the runner's own rows then did it (km, 0.5 km of slack). */
 const W24_SLACK_KM = 0.5;
