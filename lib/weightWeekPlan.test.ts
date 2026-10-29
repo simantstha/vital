@@ -385,7 +385,8 @@ test('P2-A: the step is read on the first Monday 14+ days after it was given: he
   const food = (n: number) => planAt(calm, n, { reached: true, reachedAt: D(62) });
   assert.equal(plainSpaces(food(62).action.text), 'Set a new target or switch to maintenance — you no longer need a deficit, so add a ~150–200 kcal snack a day (e.g. yogurt and fruit) and watch the weekly average for 2 weeks');
   assert.equal(plainSpaces(food(70).action.text), 'Keep the daily snack (the step you started May 3); we\'ll read it on Mon, May 18');
-  assert.equal(plainSpaces(food(77).action.text), 'Your weekly average held within 0.5 kg — keep that snack, it\'s your maintenance');
+  // (Wave 24w, P3-5: plain words - no "weekly average held within", no "keep that snack, it's".)
+  assert.equal(plainSpaces(food(77).action.text), 'Your weight held — keep eating as you are, snack included; that\'s your maintenance');
   assert.equal(plainSpaces(food(84).action.text), 'Keep the daily snack — it\'s your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act');
   for (const n of [62, 70, 77, 84, 98]) {
     const p = food(n);
