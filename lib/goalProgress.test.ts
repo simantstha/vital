@@ -2678,6 +2678,8 @@ test('A. a pace nothing has confirmed yet makes no call: with only today\'s pace
   assert.equal(p.eta, null);
   assert.equal(p.weightRead?.weeksVsTarget, null);
   assert.match(p.headline, /^Progressing — losing about 0\.5 kg a week$/);
+  // Wave 24w (P3-3): the headline's "about 0.5 kg a week" and the rate line are one figure, rounded the same way ("Down 0.49 kg/wk" next to it was two).
+  assert.match(p.reasons.find(r => r.kind === 'rate')!.text, /^Down about 0\.5 kg\/wk \(0\.\d\d% of bodyweight\) over the last \d weeks?, /);
 });
 
 test('A. one margin: ±7 days is on pace in the card, the same figure the opener and iOS use; weeks are whole and at least 1', () => {

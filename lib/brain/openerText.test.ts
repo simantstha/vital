@@ -333,25 +333,30 @@ test('welcome back after a gap: leads with the change on the scale since the las
   });
   assert.equal(
     goalOpenerLine(back(1), 'metric'),
-    'Welcome back — the scale is down 1.1 kg since May 10 — progress now counts from your latest reading; keep weighing in so your trend catches up.',
+    'Welcome back — you\'re 1.1 kg lighter than on May 10; weigh in a couple more mornings.',
   );
   assert.equal(requiredOpenerLine(back(1), 'weight_loss', 'metric'), goalOpenerLine(back(1), 'metric'));
   assert.equal(
     goalFallbackOpener(back(1), 'weight_loss', 'metric'),
-    'Welcome back — the scale is down 1.1 kg since May 10 — progress now counts from your latest reading; keep weighing in so your trend catches up. What would you like to dig into?',
+    'Welcome back — you\'re 1.1 kg lighter than on May 10; weigh in a couple more mornings. What would you like to dig into?',
   );
   assert.equal(
     goalOpenerLine({ ...back(1), weightRead: { ...back(1).weightRead!, returned: { gapDays: 12, sinceDay: '2026-05-10', sinceKg: 85.0, weighInsSince: 1 } } }, 'metric'),
-    'Welcome back — the scale is up 0.4 kg since May 10 — progress now counts from your latest reading; keep weighing in so your trend catches up.',
+    'Welcome back — you\'re 0.4 kg heavier than on May 10; weigh in a couple more mornings.',
   );
   assert.equal(
     goalOpenerLine({ ...back(1), weightRead: { ...back(1).weightRead!, returned: { gapDays: 12, sinceDay: '2026-05-10', sinceKg: 86.5, weighInsSince: 1 } } }, 'imperial'),
-    'Welcome back — the scale is down 2.4 lb since May 10 — progress now counts from your latest reading; keep weighing in so your trend catches up.',
+    'Welcome back — you\'re 2.4 lb lighter than on May 10; weigh in a couple more mornings.',
   );
   // Still returning on the second weigh-in back (the card's "returning" state lasts until 3 are back): not "pace settles after 3 weeks".
   assert.equal(
     goalOpenerLine(back(2), 'metric'),
-    'Welcome back — the scale is down 1.1 kg since May 10 — progress now counts from your latest reading; keep weighing in so your trend catches up.',
+    'Welcome back — you\'re 1.1 kg lighter than on May 10; weigh in a couple more mornings.',
+  );
+  // The scale back where it was: said plainly.
+  assert.equal(
+    goalOpenerLine({ ...back(1), weightRead: { ...back(1).weightRead!, returned: { gapDays: 12, sinceDay: '2026-05-10', sinceKg: 85.4, weighInsSince: 1 } } }, 'metric'),
+    'Welcome back — your weight is about the same as on May 10; weigh in a couple more mornings.',
   );
 });
 

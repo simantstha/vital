@@ -22,7 +22,7 @@ import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget,
 import { KG_TO_LB, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, raceLabel, rebuildLineWithFurthest } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
-import { dayNumber, meanOver, rawPlateau } from './weightPace';
+import { WEIGH_IN_GAP_DAYS, dayNumber, meanOver, rawPlateau } from './weightPace';
 import { isInstruction, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
@@ -1223,7 +1223,9 @@ function weekendGap(input: WeeklyReviewInput, week: Week): number | null {
   const logged = loggedIntake(input.intakeDays, week);
   const weekend = logged.filter(d => d.day === week.days[5] || d.day === week.days[6]).map(d => d.kcal as number);
   const weekday = logged.filter(d => d.day !== week.days[5] && d.day !== week.days[6]).map(d => d.kcal as number);
-  if (weekend.length === 0 || weekday.length < MIN_INTAKE_DAYS) return null;
+  // A weight-loss weekend pattern rests on both weekend days (wave 24w): one logged Saturday is a day, not a pattern.
+  const minWeekendDays = input.goal === 'weight_loss' ? 2 : 1;
+  if (weekend.length < minWeekendDays || weekday.length < MIN_INTAKE_DAYS) return null;
   return Math.round((mean(weekend) as number) - (mean(weekday) as number));
 }
 
@@ -1929,6 +1931,9 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
 function weekendSlip(input: WeeklyReviewInput, week: Week): string | null {
   if (input.goal !== 'weight_loss' && input.goal !== 'muscle') return null;
   if (reachedWeek(input, week) != null) return null; // the deficit is over: no weekend-vs-weekday scolding
+  // An eat-more step is the coming week's plan (wave 24w): eating more at the weekend is the instruction, not a slip.
+  const step = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
+  if (step != null && (step.phase === 'given' || step.phase === 'standing')) return null;
   const gap = weekendGap(input, week);
   return gap != null && gap >= WEEKEND_GAP_MIN_KCAL ? `Weekends ran +${withUnit(fmtKcal(gap), 'kcal')} over your weekdays.` : null;
 }
@@ -2939,9 +2944,24 @@ function muscleSessionsOnly(input: WeeklyReviewInput, week: Week, cands: Candida
   return weekSessionCount(input, week) >= Math.min(target, MIN_DATA_DAYS);
 }
 
+/**
+ * The return week (wave 24w): a weight-loss user whose weigh-ins in the reviewed week are the first after a gap of 7+ days without one. Returns how many
+ * weigh-ins the week held (their review fills in next Monday), else 0.
+ */
+function returnWeekWeighIns(input: WeeklyReviewInput, week: Week): number {
+  if (input.goal !== 'weight_loss') return 0;
+  const inWeek = weekWeighIns(input, week);
+  if (inWeek.length === 0) return 0;
+  const before = computeWeightTrend(input.weightReadings).days.filter(d => d.day < inWeek[0].day && !week.set.has(d.day));
+  const prev = before.length > 0 ? before[before.length - 1].day : null;
+  return prev != null && dayNumber(inWeek[0].day) - dayNumber(prev) - 1 >= WEIGH_IN_GAP_DAYS ? inWeek.length : 0;
+}
+
 function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysWithData: number, statCount: number): WeeklyReview {
   // A weight-loss user who has weighed in before but not once last week (wave 23w): say what is missing and that the plan waits for it.
   const noWeighIns = input.goal === 'weight_loss' && input.weightReadings.length > 0 && weekWeighIns(input, week).length === 0;
+  const returned = returnWeekWeighIns(input, week);
+  const welcomeBack = `Welcome back — ${returned === 1 ? 'one weigh-in' : `${returned} weigh-ins`} last week; your review fills in next Monday`;
   return {
     weekStart: week.days[0],
     weekEnd: week.days[6],
@@ -2949,7 +2969,7 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
     verdict: input.weightPlan?.verdict ?? input.verdict,
     weekRating: null,
     weekGap: null,
-    headline: noWeighIns ? 'No weigh-ins last week — your plan picks up when you weigh in' : 'Not enough data for a weekly review yet',
+    headline: noWeighIns ? 'No weigh-ins last week — your plan picks up when you weigh in' : returned > 0 ? welcomeBack : 'Not enough data for a weekly review yet',
     stats: [],
     win: null,
     slip: null,

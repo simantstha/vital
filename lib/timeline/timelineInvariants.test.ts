@@ -4303,3 +4303,77 @@ invariant(['weight_loss'], 'P3-5: a non-logger\'s kept maintenance step reads "Y
   assert.ok(said > 0, `${name}: the new wording never appeared, so this invariant checked nothing`);
   return out;
 });
+
+//   P3-3  the rate in a "losing about 0.6 kg a week" headline and the card's rate line are one figure ("Down about 0.6 kg/wk (0.64% of bodyweight)"), not 0.58 and 0.6.
+//   P3-4  the welcome-back opener is one short clause ("Welcome back — you're 1.1 kg lighter than on May 10; weigh in a couple more mornings.").
+//   P3-6  the review's "Weekends ran +N kcal over your weekdays" rests on two logged weekend days, and is not said while an eat-more step is the plan.
+//   P3-7  the review of a return week (1-2 weigh-ins after a gap) welcomes the user back instead of "Not enough data for a weekly review yet".
+
+invariant(WEIGHT, 'P3-3: when the headline says "losing about X kg a week" the rate line says "Down about X kg/wk (...% of bodyweight)", the same figure rounded the same way', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const m = /losing about ([\d.]+) (kg|lb) a week/.exec(plain(snap.card?.headline ?? ''));
+    if (m == null) continue;
+    seen++;
+    const rate = (snap.card?.reasons ?? []).find(r => r.kind === 'rate');
+    if (rate == null || !new RegExp(`^Down about ${m[1].replace('.', '\\.')} ${m[2]}/wk \\([\\d.]+% of bodyweight\\)`).test(plain(rate.text))) {
+      out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" but the rate line is "${visible(rate?.text ?? '(none)')}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no headline quoted "losing about X a week", so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-4: the welcome-back opener is "Welcome back — you\'re 1.1 kg lighter than on May 10; weigh in a couple more mornings." and leaves "progress now counts from your latest reading" to the card', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const line = plain(snap.opener?.required ?? '');
+    if (!/^Welcome back — (?:the scale|you['’]re|your weight)/.test(line)) continue;
+    seen++;
+    if (!/^Welcome back — (?:you['’]re [\d.]+ (?:kg|lb) (?:lighter|heavier) than on|your weight is about the same as on) [A-Z][a-z]{2} \d{1,2}; weigh in a couple more mornings\.$/.test(line)) {
+      out.push({ snap, detail: `opener "${visible(line)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no welcome-back opener, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-6: the review\'s "Weekends ran +N kcal over your weekdays" rests on two logged weekend days, and is not said while an eat-more step is the plan', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (rv == null || !/Weekends ran/.test(plain(rv.review.slip ?? ''))) continue;
+    seen++;
+    const sat = addDays(rv.weekStart, 5);
+    const sun = addDays(rv.weekStart, 6);
+    const logged = scn.intake.filter(i => (i.day === sat || i.day === sun) && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD).length;
+    const step = snap.card?.weightRead?.plan?.step;
+    if (logged < 2) out.push({ snap, detail: `"${visible(rv.review.slip ?? '')}" on ${logged} logged weekend day(s) of the week of ${rv.weekStart}` });
+    if (step != null && step.loKcal != null && (step.phase === 'given' || step.phase === 'standing')) out.push({ snap, detail: `"${visible(rv.review.slip ?? '')}" while the plan is the eat-more step "${visible(snap.card?.weightRead?.plan?.action.text ?? '')}"` });
+  }
+  if (name === 'weight_loss_logged') assert.ok(seen > 0, `${name}: no review said "Weekends ran", so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'P3-7: the review of a return week (1-2 weigh-ins after a gap of 7+ days) says "Welcome back — one weigh-in last week; your review fills in next Monday", not "Not enough data for a weekly review yet"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    if (rv == null || rv.review.dataSufficiency.sufficient) continue;
+    const week = scn.weighIns.filter(w => w.day >= rv.weekStart && w.day <= addDays(rv.weekStart, 6));
+    const before = scn.weighIns.filter(w => w.day < rv.weekStart);
+    const prev = before.length > 0 ? before[before.length - 1].day : null;
+    if (week.length < 1 || week.length > 2 || prev == null || dayDiff(week[0].day, prev) - 1 < 7) continue;
+    seen++;
+    const words = week.length === 1 ? 'one weigh-in' : `${week.length} weigh-ins`;
+    if (plain(rv.review.headline) !== `Welcome back — ${words} last week; your review fills in next Monday`) out.push({ snap, detail: `headline "${visible(rv.review.headline)}" (${week.length} weigh-in(s) after a gap since ${prev})` });
+  }
+  assert.ok(seen > 0, `${name}: no return week had an unsufficient review, so this invariant checked nothing`);
+  return out;
+});
