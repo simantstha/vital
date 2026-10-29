@@ -4843,3 +4843,51 @@ invariant(RUNNERS, 'a warning and its advice are two sentences, never one run-on
   if (name === 'runner_messy') assert.ok(warned > 0, `${name}: no injury-risk warning was shown, so this invariant checked nothing`);
   return out;
 });
+
+// ── group 5 (round 7): "hit" is said only when the displayed distance reaches the displayed target ──────────────────────
+
+/** "You hit this week's step: 20 of ~22 km (+5% on last week)." -> the two numbers as displayed. */
+const HIT_WIN = /^You hit this week's step: (\d+(?:\.\d+)?) of ~(\d+(?:\.\d+)?)\s?(?:km|mi)\b/;
+
+invariant(RUNNERS, 'a review says "You hit this week\'s step" only when the DISPLAYED distance is at or above the displayed target ("20 of ~22 km" is close, never a hit) - and inside the 10% band it may still be "on plan"', (snaps, name) => {
+  const out: Violation[] = [];
+  let hits = 0;
+  for (const snap of snaps) {
+    const rv = snap.review?.review;
+    if (!rv) continue;
+    const m = HIT_WIN.exec(plain(rv.win ?? ''));
+    if (m) {
+      hits++;
+      if (Number(m[1]) < Number(m[2])) out.push({ snap, detail: `win "${visible(rv.win ?? '')}" for ${m[1]} of ~${m[2]}` });
+    }
+    // The headline's own "N of ~M" and a "hit" must agree too: no hit next to a shortfall.
+    const h = /(\d+(?:\.\d+)?) of ~(\d+(?:\.\d+)?)\s?(?:km|mi)/.exec(plain(rv.headline));
+    if (m && h && Number(h[1]) < Number(h[2])) out.push({ snap, detail: `win says hit but the headline reads "${visible(rv.headline)}"` });
+    // From 90% to 99% there is no win slot: the neutral "Close to your step: 20 of ~22 km" leads "Next week" (no "aim for", no praise).
+    if (/^Close to your (?:step|weekly goal)/.test(plain(rv.win ?? ''))) out.push({ snap, detail: `win "${visible(rv.win ?? '')}": a near miss has no win slot` });
+  }
+  if (name === 'runner_on_plan_obedient' || name === 'runner_on_plan') assert.ok(hits > 3, `${name}: only ${hits} hits were reviewed, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+invariant(['runner_on_plan_imperial'], 'the same weeks get the same hit / close verdict in miles as in km (runner_on_plan vs runner_on_plan_imperial, every Monday review present in both)', (snaps, name) => {
+  const metric = runTimeline('runner_on_plan');
+  const byWeek = new Map(metric.filter(s => s.review).map(s => [s.review?.weekStart as string, s.review?.review] as const));
+  const verdict = (win: string | null, next: string): 'hit' | 'close' | 'other' => {
+    if (/^You (?:hit this week's step|reached your weekly goal|held your weekly goal)/.test(plain(win ?? ''))) return 'hit';
+    if (/^Close to your (?:step|weekly goal)/.test(plain(win ?? '')) || /^Close to your (?:step|weekly goal)/.test(plain(next))) return 'close';
+    return 'other';
+  };
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    const rv = snap.review?.review;
+    const twin = snap.review ? byWeek.get(snap.review.weekStart) : undefined;
+    if (!rv || !twin) continue;
+    compared++;
+    const [a, b] = [verdict(twin.win, twin.nextWeek), verdict(rv.win, rv.nextWeek)];
+    if (a !== b) out.push({ snap, detail: `week ${snap.review?.weekStart}: km says ${a} ("${visible(twin.win ?? twin.nextWeek)}") but miles say ${b} ("${visible(rv.win ?? rv.nextWeek)}")` });
+  }
+  assert.ok(compared > 3, `${name}: only ${compared} reviews exist in both units, so this invariant checked (almost) nothing`);
+  return out;
+});

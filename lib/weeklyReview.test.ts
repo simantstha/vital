@@ -1293,7 +1293,7 @@ test('a long run that would not leave room for easy runs is left out; a week wit
     longRun: MARCUS_LONG_RUN,
   }));
   assert.equal(short.weekRating, 'good'); // 12 of this week's 13 km step (92%)
-  assert.equal(short.nextWeek, 'Build to ~13 km with mostly easy runs; then add ~10% a week toward 30 km.');
+  assert.equal(short.nextWeek, 'Close to your step: 12 of ~13 km — ~13 again next week. Build to ~13 km with mostly easy runs; then add ~10% a week toward 30 km.');
   const none = computeWeeklyReview(marcusWeek({
     workouts: [run(WEEK[0], 0), run(PREV[0], 20)],
     trainingDays: [WEEK[0], PREV[0]],

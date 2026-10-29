@@ -52,13 +52,15 @@ function weeksOf(kms: number[]): Array<ReturnType<typeof run>> {
   return out;
 }
 
-test('a week inside the 10% band the card calls "done" is on plan in the review: "You hit this week\'s step", never "Close to your step ... aim for ~23 again"', () => {
+test('a week inside the 10% band the card calls "done" is on plan in the review, but short of the step is not a "hit" (round 7): no win and never "aim for"', () => {
   // 15, 17, 19, 21, then 21.5 km against the ~23 km step (93%): the card said the week's km were done from 20.7 km.
   const r = review(weeksOf([15, 17, 19, 21, 21.5]));
   assert.equal(r.weekRating, 'good');
-  assert.match(r.win ?? '', /^You hit this week's step: 21\.5 of ~23 km/);
-  assert.doesNotMatch(r.win ?? '', /aim for|Close to/);
+  assert.equal(r.win, null);
+  assert.doesNotMatch(r.nextWeek, /aim for|hit/); // next week steps on from what he ran ("Build to ~24 km"), so there is no "again" to say
   assert.match(r.headline, /21\.5 of ~23 km — on plan/);
+  // At the step (displayed done at or above the displayed target) it is a hit.
+  assert.match(review(weeksOf([15, 17, 19, 21, 23])).win ?? '', /^You hit this week's step: 23 of ~23 km/);
   // Just under the band (20 of ~23 = 87%) is not a good week at all: the week is short, said as it is.
   const short = review(weeksOf([15, 17, 19, 21, 20]));
   assert.equal(short.weekRating, 'mixed');
@@ -66,9 +68,11 @@ test('a week inside the 10% band the card calls "done" is on plan in the review:
   assert.match(short.slip ?? '', /short of this week's step/);
 });
 
-test('at the weekly goal the band is the same: 28 of 30 km is "Close to your weekly goal: 28 of 30 km" with no nudge to run 30 again', () => {
+test('at the weekly goal the band is the same: 28 of 30 km has no win and a neutral "Close to your weekly goal: 28 of 30 km — 30 again next week", no "aim for"', () => {
   const r = review(weeksOf([22, 24, 26, 30, 24, 28]));
-  assert.equal(r.win, 'Close to your weekly goal: 28 of 30 km.');
+  assert.equal(r.win, null);
+  assert.match(r.nextWeek, /^Close to your weekly goal: 28 of 30 km — 30 again next week\./);
+  assert.doesNotMatch(r.nextWeek, /aim for/);
 });
 
 test('a restart that began mid-week is graded against its scaled number: 10 of ~10 km is on plan, and next week is the full 17 km restart', () => {
@@ -150,5 +154,7 @@ test('a rebuild week 2 km short of its step (messy d138-140: the card says "one 
   const monday = snaps.find(x => x.idx === 140);
   assert.match(plainSpaces(saturday?.card?.reasons.find(r => r.kind === 'volume')?.text ?? ''), /~2 km left: one short easy run or rest, either is fine$/);
   assert.equal(monday?.review?.review.weekRating, 'good');
-  assert.equal(plainSpaces(monday?.review?.review.win ?? ''), 'Close to your step: 15 of ~17 km.');
+  assert.equal(monday?.review?.review.win, null);
+  assert.match(plainSpaces(monday?.review?.review.nextWeek ?? ''), /^Close to your step: 15 of ~17 km — ~17 again next week\. Keep rebuilding/);
+  assert.doesNotMatch(plainSpaces(monday?.review?.review.nextWeek ?? ''), /aim for/);
 });
