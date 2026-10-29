@@ -124,7 +124,8 @@ test('the week after a cutback is reviewed against the last full week before it:
   // The calendar's cutback week Mon 2026-10-19 ran as planned (20 km after 23); the week of 10-26 ran 25 km: +25% on the cutback, +9% on the 23 km week.
   const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20, 25], { weekStart: '2026-10-26' }));
   assert.equal(r.weekRating, 'good');
-  assert.equal(stat(r, 'Volume')!.comparison, '+9% on your last full week (23 km), back on the build after the cutback');
+  // (Wave 24e: the tile cuts a comparison at 44 characters - it was "+9% on your last full week (23 km), back on the build after the cutback", 71.)
+  assert.equal(stat(r, 'Volume')!.comparison, '+9% on last full week (23 km)');
   assert.equal(r.headline, '4 sessions, 25 of ~25 km — on plan · goal 30 km, +9% vs last full week');
   assert.equal(r.win, "You hit this week's step: 25 of ~25 km (+9% on your last full week).");
   // The cutback week itself is still measured against the week before it, as planned.

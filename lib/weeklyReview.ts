@@ -1160,8 +1160,9 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
     if (plan.cutback != null && pct < 0) comparison = `${comparison}, as planned (cutback)`;
     // A taper / race / recovery week is a planned change (wave 23e): said so, next to the number, like the cutback's.
     if (isWindDownKind(plan.kind) && pct !== 0) comparison = `${comparison}, as planned (${plan.kind === 'race_week' ? 'race week' : plan.kind})`;
-    // The week after a cutback is measured against the last full week before it, said so (wave 23e): "+9% on your last full week (23 km), back on the build after the cutback".
-    if (afterCutback) comparison = pct === 0 ? `same as your last full week (${distanceText(input, baseKm)}), back after the cutback` : `${signed(pct, `${Math.abs(pct)}%`)} on your last full week (${distanceText(input, baseKm)}), back on the build after the cutback`;
+    // The week after a cutback is measured against the last full week before it, said so (wave 23e): "+9% on last full week (23 km)".
+    // (Wave 24e: short - the iOS tile cuts a comparison at STAT_COMPARISON_MAX_CHARS; "back on the build after the cutback" is said by the headline / plan rows, not here.)
+    if (afterCutback) comparison = pct === 0 ? `same as last full week (${distanceText(input, baseKm)})` : `${signed(pct, `${Math.abs(pct)}%`)} on last full week (${distanceText(input, baseKm)})`;
   } else if (prevKm > 0) comparison = `vs ${distanceText(input, prevKm)} last week`;
   else comparison = 'for the week';
   // A comeback week more than 10% over its "up to" ceiling is neither a win nor a spike: neutral.
@@ -1987,8 +1988,8 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
         // (A planned cutback drop is short: "-13%, as planned (cutback)".)
         // (After a cutback the stat names the last full week; the headline keeps it short: "+9% vs last full week".)
         const comparison = volume.comparison?.replace(/ vs last week(, as planned \(cutback\))$/, '$1')
-          .replace(/^([+−-]\d+%) on your last full week \([^)]*\), back on the build after the cutback$/, '$1 vs last full week')
-          .replace(/^same as your last full week \([^)]*\), back after the cutback$/, 'same as last full week');
+          .replace(/^([+−-]\d+%) on last full week \([^)]*\)$/, '$1 vs last full week')
+          .replace(/^same as last full week \([^)]*\)$/, 'same as last full week');
         const cutbackNormal = reviewed?.cutback != null && km != null && km > stepKm * CUTBACK_SKIPPED_FRACTION + 1e-9;
         parts.push(!(spike || overCap || reviewPlans(input).holdBroken || cutbackNormal) && comparison && comparison.includes('%') ? `${value}, ${comparison}` : value);
       }

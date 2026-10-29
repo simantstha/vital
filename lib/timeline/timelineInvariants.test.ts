@@ -4640,8 +4640,8 @@ invariant(W24_LOGGERS, 'P3-3: a logged day above the step\'s high end x 1.05 is 
 
 //   group 7  iOS renders a review stat's comparison in a half-width tile (12 pt, two lines): longer than ~44 characters it is cut with an ellipsis, and the part cut was the logged count.
 
-// (Scoped to the weight scenarios for now: five runner "Volume" comparisons after a cutback are longer - listed in the wave 24w report, left to the endurance owner.)
-invariant(WEIGHT, 'group 7: every review stat comparison is at most STAT_COMPARISON_MAX_CHARS (44) characters (the iOS half-width tile shows about 44 before the ellipsis)', snaps => {
+// (Wave 24e: widened from the weight scenarios to ALL - the runner "Volume" comparison after a cutback was 71 / 59 characters, now "+9% on last full week (23 km)".)
+invariant(ALL, 'group 7: every review stat comparison is at most STAT_COMPARISON_MAX_CHARS (44) characters (the iOS half-width tile shows about 44 before the ellipsis)', snaps => {
   const out: Violation[] = [];
   for (const snap of snaps) {
     for (const st of snap.review?.review.stats ?? []) {
