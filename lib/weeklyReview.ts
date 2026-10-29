@@ -174,7 +174,7 @@ export type WeekGap =
    * Endurance: running km far ABOVE that week's safe step (a jump, not a
    * shortfall — see `isSpikeWeek`). Only when a step below the goal applies.
    */
-  | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number; ceiling?: boolean }
+  | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number; ceiling?: boolean; /** Wave 24e: the week over its number was a cutback week ("over this week's cutback"). */ cutback?: boolean }
   /** A cutback week that ran more than 10% over its lowered number (`targetKm`); `normalKm` is the week it replaced. */
   | { kind: 'cutback'; doneKm: number; targetKm: number; normalKm: number }
   /**
@@ -1547,7 +1547,7 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
   const goal = plan.goalKm;
   const stepped = plan.targetKm != null && plan.targetKm < goal;
   let gap: WeekGap | null = null;
-  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: plan.targetKm as number, targetKm: goal, ...(plan.upTo ? { ceiling: true } : {}) };
+  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: plan.targetKm as number, targetKm: goal, ...(plan.upTo ? { ceiling: true } : {}), ...(plan.cutback != null ? { cutback: true } : {}) };
   else if (grade.gap === 'short') {
     gap = plan.kind === 'baseline'
       ? { kind: 'sessions', done: rp.week.days, target: BASELINE_GOOD_RUN_DAYS }
@@ -1661,7 +1661,7 @@ function distanceHeadline(
     return `${distanceNumber(input, km)} of up to ~${distanceText(input, stepKm)} — ${overCapPhrase('well')} · goal ${distanceText(input, targetKm)}`;
   }
   if (opts.spike) {
-    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the safe step · goal ${distanceText(input, targetKm)}`;
+    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the ${opts.cutback ? 'cutback' : 'safe step'} · goal ${distanceText(input, targetKm)}`;
   }
   // A cutback week is graded against its own lowered number, so a week that ran far past it says so before the weekly goal is looked at
   // ("30 of ~24 km — above the cutback", never "30 of 30 km" that hides the skipped cutback).
@@ -2065,7 +2065,7 @@ function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: W
       if (gap.ceiling === true) {
         return `Ran ${distanceText(input, gap.doneKm)} against an up-to-${distanceText(input, gap.stepKm)} ceiling — big jumps raise injury risk`;
       }
-      return `Jumped ${withUnit(round1(distanceNumber(input, gap.doneKm) - distanceNumber(input, gap.stepKm)), isImperial(input) ? 'mi' : 'km')} over this week's step — big jumps raise injury risk`;
+      return `Jumped ${withUnit(round1(distanceNumber(input, gap.doneKm) - distanceNumber(input, gap.stepKm)), isImperial(input) ? 'mi' : 'km')} over this week's ${gap.cutback === true ? 'cutback' : 'step'} — big jumps raise injury risk`;
     case 'phase': {
       const done = distanceText(input, gap.doneKm);
       const target = distanceText(input, gap.targetKm);
@@ -2491,7 +2491,12 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
     case 'hold': {
       // After the hold: build again toward the goal - or the taper, when that is what the week after is.
       const windAfter = weekAfterNextWindDown(input);
-      const thenBuild = windAfter != null ? thenWindDown(windAfter) : `then build ~${growth} a week toward ${goalText}`;
+      // Wave 24e: a hold at a comeback ceiling keeps the ladder alive (`hold.ladder`): it says "up to ~25% a week until you're back at your usual ~30 km", as every other comeback "Next week".
+      const ladder = next.hold?.ladder;
+      const thenBuild = windAfter != null ? thenWindDown(windAfter)
+        : ladder != null && ladder.medianKm > (next.targetKm as number) + 0.5
+          ? `then up to ~${Math.round((COMEBACK_MAX_GROWTH - 1) * 100)}% a week until you're back at your usual ~${distanceText(input, ladder.medianKm)}${ladder.medianKm < next.goalKm - 0.5 ? `, about ${growth} after that` : ''}`
+          : `then build ~${growth} a week toward ${goalText}`;
       text = next.hold?.skippedCutback === true
         // A cutback week that ran more than 10% over its lowered number: no +10% on it (wave 23e: no guilt). Wave 24e: the neutral note comes first ("Ran the
         // cutback as a normal week"), and "an easier week" is said only when the hold really is easier than the week just run.
