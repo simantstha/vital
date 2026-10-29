@@ -11,7 +11,7 @@ import type { GoalKind, GoalProgress } from './goalProgress';
 import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, midWeekRestartText, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
-import { liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
+import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
 import { shortDate } from './brain/openerText';
@@ -472,7 +472,7 @@ function topLiftLines(progression: ProgressionSummary, units: UnitSystem, todayK
     const change = anchor ? liftChange4w(r.weeks, anchor) : null;
     if (change) {
       const sign = change.changeKg > 0 ? '+' : change.changeKg < 0 ? '-' : '';
-      return `- ${r.exercise}: est. 1RM ${sign}${wt(Math.abs(change.changeKg), units)} vs 4 weeks ago (${wt(change.baselineKg, units, 0)} -> ${wt(change.recentKg, units, 0)})`;
+      return `- ${r.exercise}: est. 1RM ${sign}${wt(Math.abs(change.changeKg), units)} ${anchor ? liftBaselineLabel(r.weeks, anchor) : 'vs 4 weeks ago'} (${wt(change.baselineKg, units, 0)} -> ${wt(change.recentKg, units, 0)})`;
     }
     const latest = r.withE1rm[r.withE1rm.length - 1].bestEstimatedOneRepMaxKg as number;
     return `- ${r.exercise}: est. 1RM ${wt(latest, units, 0)} (no 4-week comparison yet)`;

@@ -2264,6 +2264,54 @@ test('after 5 straight weeks of heavier loads the goal card (and so the coach li
   assert.equal(computeGoalProgress(deloadCardInput('2026-10-12', { squat: after })).reasons.some(r => r.kind === 'deload'), false);
 });
 
+// ── Wave 24s P3-5: "est. 1RM" is explained once, on the card, in the goal's first lift-comparison week ───────────────────────────────────────
+
+const EST_1RM_SENTENCE = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
+
+// ── Wave 24s P3-6: the baseline week is named when it is not 4 weeks back ───────────────────────────────────────────────────────────────────
+
+const BASELINE_DAYS = ['2026-09-14', '2026-09-21', '2026-09-28'].flatMap(m => daysAt(m, [0, 1, 3, 5])).concat(daysAt('2026-10-05', [0, 1]));
+
+test('"vs 4 weeks ago" names the real baseline week ("vs wk of Aug 31") when the 4-weeks-ago week has no e1RM; the numbers do not change (wave 24s)', () => {
+  const card = (weeks: Array<ReturnType<typeof lw>>) => computeGoalProgress(base({
+    goal: 'muscle', todayKey: '2026-10-07', target: { weightKg: null, date: null, weeklySessions: 4 }, start: { weightKg: 80, startedAt: '2026-07-01T09:00:00.000Z', startedDay: '2026-07-01' },
+    progression: { squat: weeks },
+    strengthDays: BASELINE_DAYS, strengthHistoryDays: BASELINE_DAYS,
+  }));
+  // 09-07 (4 weeks before the recent window ending 10-05) is empty - an ill week - and the baseline is 08-31, five weeks back.
+  const gap = card([lw('2026-08-31', 139), lw('2026-09-28', 148), lw('2026-10-05', 151)]);
+  assert.equal(gap.reasons.find(r => r.kind === 'lift')!.text, 'Squat est. 1RM +12 kg vs wk of Aug 31 (139 → 151 kg)');
+  assert.match(gap.headline, /^Progressing — Squat est\. 1RM \+12 kg vs wk of Aug 31$/);
+  // The 4-weeks-ago week trained: unchanged wording, same arithmetic.
+  const full = card([lw('2026-08-31', 139), lw('2026-09-07', 140), lw('2026-09-28', 148), lw('2026-10-05', 151)]);
+  assert.equal(full.reasons.find(r => r.kind === 'lift')!.text, 'Squat est. 1RM +11 kg vs 4 weeks ago (140 → 151 kg)');
+  assert.match(full.headline, /^Progressing — Squat est\. 1RM \+11 kg vs 4 weeks ago$/);
+});
+
+test('the card explains "est. 1RM" in the goal\'s first lift-comparison week (the second week of lift data), where the term first appears, and then never again (wave 24s)', () => {
+  const days = (...mondays: string[]) => mondays.flatMap(m => daysAt(m, [0, 2, 4]));
+  const card = (today: string, weeks: string[], over: Partial<GoalProgressInput> = {}) => computeGoalProgress(base({
+    goal: 'muscle', todayKey: today, target: { weightKg: null, date: null, weeklySessions: 3 }, start: { weightKg: 80, startedAt: '2026-09-14T09:00:00.000Z', startedDay: '2026-09-14' },
+    progression: { squat: weeks.map((w, i) => lw(w, 130 + i * 3, 2, { topLoadKg: 100 + i * 2.5 })) },
+    strengthDays: days(...weeks).filter(d => d <= today), strengthHistoryDays: days(...weeks).filter(d => d <= today), ...over,
+  }));
+  // Second week of lift data (09-14 and 09-21): the week-over-week line appears, so the sentence rides with it - on every day of that week.
+  for (const today of ['2026-09-21', '2026-09-23', '2026-09-27']) {
+    const p = card(today, ['2026-09-14', '2026-09-21']);
+    assert.match(p.reasons[0].text, /est\. 1RM/);
+    assert.equal(p.reasons[1].kind, 'explainer', today);
+    assert.equal(p.reasons[1].text, EST_1RM_SENTENCE);
+    assert.equal(p.reasons[1].tone, 'neutral');
+    assert.ok(p.reasons.length <= 3);
+  }
+  // One week of data: no est. 1RM on the card yet, nothing to explain. Third week: she has been told.
+  assert.equal(card('2026-09-17', ['2026-09-14']).reasons.some(r => r.kind === 'explainer'), false);
+  assert.equal(card('2026-09-28', ['2026-09-14', '2026-09-21', '2026-09-28']).reasons.some(r => r.kind === 'explainer'), false);
+  assert.ok(card('2026-09-28', ['2026-09-14', '2026-09-21', '2026-09-28']).reasons[0].text.includes('est. 1RM'));
+  // Other goals never carry it.
+  assert.equal(computeGoalProgress(base({ goal: 'weight_loss', target: { weightKg: 75, date: null, weeklySessions: null }, weightReadings: ramp(30, 80, -0.05) })).reasons.some(r => r.kind === 'explainer'), false);
+});
+
 test('return from a break: "Building back", not "Stalled" — verdict building, no amber reason', () => {
   const p = computeGoalProgress(breakInput({
     squat: squatBack(136, 136),
@@ -2453,7 +2501,20 @@ test('week 2 with weigh-ins: the 4-week lift trend start is announced — never 
   assert.equal(p.verdict, 'insufficient_data');
   assert.equal(p.headline, '4-week lift trend from Oct 26'); // the headline holds no count (wave 21): it only changes when the date does
   assert.doesNotMatch(JSON.stringify(p), /Stalled|opposite way/);
-  const rate = p.reasons.find(r => r.kind === 'rate');
+  // The goal's first lift-comparison week: the est. 1RM explainer takes the third line (wave 24s P3-5), so the flat weight line waits a week.
+  assert.deepEqual(p.reasons.map(r => r.kind), ['lift', 'explainer', 'adherence']);
+  // One more week of lift data (no longer the first comparison week): the weight line is back, flat and neutral.
+  const later = computeGoalProgress(base({
+    goal: 'muscle',
+    target: { weightKg: null, date: null, weeklySessions: 4 },
+    start: { weightKg: 80, startedAt: `${started}T09:00:00.000Z`, startedDay: started },
+    weightReadings: series(9, () => 80),
+    progression: { squat: [lw('2026-09-21', 98), lw('2026-09-28', 100), lw('2026-10-05', 105)] },
+    strengthDays: sessionDays,
+    trainingDays: sessionDays,
+  }));
+  assert.doesNotMatch(JSON.stringify(later), /Stalled|opposite way/);
+  const rate = later.reasons.find(r => r.kind === 'rate');
   assert.ok(rate);
   assert.match(rate!.text, /^Trend weight flat /);
   assert.equal(rate!.tone, 'neutral');

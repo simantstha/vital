@@ -326,6 +326,7 @@ function computeReviewForUncached(scn: Scenario, runDay: string): ReviewResult {
     liftReturn: progress?.liftReturn ?? null,
     // MIRRORS lib/weeklyReviewLoader.ts (wave 21s): every lift's return, so the review claims "back above" only when all are.
     liftReturns: progress?.liftReturns ?? null,
+    cardExplainedEst1rm: progress?.reasons?.some(r => r.kind === 'explainer') ?? false,
     raceDate: scn.goal === 'endurance' ? scn.user.raceDate : null,
     raceDistanceKm: scn.goal === 'endurance' ? scn.user.raceDistanceKm : null,
     runHistory: scn.goal === 'endurance' ? runHistoryAsOf(scn, addDays(weekStart, 6)) : undefined,

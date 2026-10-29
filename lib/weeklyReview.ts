@@ -31,6 +31,7 @@ import {
   afterProactiveDeload,
   cuedLifts,
   DELOAD_CUE_HEAD,
+  EST_1RM_EXPLAINER,
   easedLoad,
   furthestBehindReturn,
   heavierLoadStreak,
@@ -40,6 +41,7 @@ import {
   latestTopLoadKg,
   liftDisplayChange,
   liftWeekChangeDisplay,
+  liftBaselineLabel,
   liftDisplayName,
   liftReturnDisplay,
   liftShortName,
@@ -335,6 +337,11 @@ export interface WeeklyReviewInput {
    * the week number instead.
    */
   previousNextWeek?: string | null;
+  /**
+   * Muscle: the goal card, as of the reviewed Sunday, carried the "est. 1RM" explainer (a reason of kind 'explainer', lib/goalProgress.ts). The review then does
+   * not repeat it in "Next week" (wave 24s P3-5); absent / false: the review explains the term itself, as before.
+   */
+  cardExplainedEst1rm?: boolean;
   /**
    * Local day the user signed up / the goal began (YYYY-MM-DD). Days before it
    * (e.g. HealthKit backfill) never count toward the "enough data" gate or the
@@ -905,7 +912,8 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
       key: picked.exercise,
       name: liftDisplayName(picked.exercise, input.exerciseDisplay),
       shown: liftDisplayChange(picked.change, imperial).change,
-      windowLabel: 'vs 4 weeks ago',
+      // "vs 4 weeks ago", or "vs wk of Aug 31" when the 4-weeks-ago week is empty (label only, wave 24s).
+      windowLabel: liftBaselineLabel(input.progression[picked.exercise], liftAnchor(week)),
       stalled: isLiftStalled(input.progression[picked.exercise], liftAnchor(week)),
     };
   } else {
@@ -2719,8 +2727,8 @@ function readMondaySession(input: WeeklyReviewInput, week: Week): MondaySession 
   return { lifts, remaining, today };
 }
 
-/** The one-time explainer for the term the lifter meets first in the review (wave 23s). */
-export const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
+/** The one-time explainer for the term the lifter meets first (wave 23s; since wave 24s the goal card carries it first, see `cardExplainedEst1rm`). */
+export { EST_1RM_EXPLAINER };
 
 /**
  * The first weekly review that shows an est. 1RM stat explains the term, once: the Next-week row carries it as a closing sentence (the iOS
@@ -2729,7 +2737,9 @@ export const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estim
  * exactly one review. Muscle goal only.
  */
 function needsEst1rmExplainer(input: WeeklyReviewInput, week: Week, cands: Candidate[]): boolean {
-  if (input.goal !== 'muscle' || !cands.some(x => x.stat.label.endsWith('est. 1RM'))) return false;
+  // The goal card shows "est. 1RM" a week before the first review does, so it carries the sentence in the goal's first lift-comparison week; the review keeps it
+  // only when the card, as of the reviewed Sunday, did not (wave 24s P3-5).
+  if (input.goal !== 'muscle' || input.cardExplainedEst1rm === true || !cands.some(x => x.stat.label.endsWith('est. 1RM'))) return false;
   const withData = new Set<string>();
   for (const weeks of Object.values(input.progression)) for (const w of weeks) if (w.bestEstimatedOneRepMaxKg != null && w.weekStart <= week.days[0]) withData.add(w.weekStart);
   return withData.size === 2;

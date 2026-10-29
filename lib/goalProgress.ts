@@ -121,6 +121,7 @@ import {
 import type { ProgressionSummary } from './workoutRepository';
 import {
   DELOAD_CUE_HEAD,
+  EST_1RM_EXPLAINER,
   isDeloadWeek,
   isLiftProgressing,
   furthestBehindReturn,
@@ -130,6 +131,7 @@ import {
   liftWeekChangeDisplay,
   liftDisplayName,
   liftLapseMinDays,
+  liftBaselineLabel,
   liftLastBest,
   liftRecentEndWeek,
   liftReturnDisplay,
@@ -1422,6 +1424,8 @@ interface LiftChange {
   startKg: number | null;
   endKg: number | null;
   change4wKg: number | null;
+  /** "vs 4 weeks ago", or "vs wk of Aug 31" when the 4-weeks-ago week has no e1RM (lib/liftChange.ts liftBaselineLabel; label only, wave 24s). */
+  vs: string;
   /** Up at least 1% on 4 weeks ago (lib/liftChange.ts isLiftProgressing). */
   up: boolean;
   /** The shared stall rule (lib/liftChange.ts isLiftStalled) for this lift: below +1%, not a break / return, not a deload. */
@@ -1448,6 +1452,7 @@ function liftChanges(progression: ProgressionSummary, todayKey: string, display?
       startKg: c?.baselineKg ?? null,
       endKg: c?.recentKg ?? null,
       change4wKg: c?.changeKg ?? null,
+      vs: liftBaselineLabel(weeks, anchor),
       up: c != null && isLiftProgressing(c),
       stalled: isLiftStalled(weeks, anchor),
     };
@@ -1468,7 +1473,7 @@ function liftReason(l: LiftChange, input: GoalProgressInput): GoalProgressReason
   if (d == null) return null;
   return {
     kind: 'lift',
-    text: `${l.name} est. 1RM ${d.change === 0 ? 'unchanged' : liftDeltaText(d)} vs 4 weeks ago (${arrowPair(String(d.baseline), withUnit(d.recent, d.unit))})`,
+    text: `${l.name} est. 1RM ${d.change === 0 ? 'unchanged' : liftDeltaText(d)} ${l.vs} (${arrowPair(String(d.baseline), withUnit(d.recent, d.unit))})`,
     // Good = up 1%+ (the verdict's bar); a drop is only amber when it is a real stall, not a deload or a return from a break.
     tone: l.up ? 'good' : d.change < 0 && l.stalled ? 'watch' : 'neutral',
   };
@@ -2429,6 +2434,14 @@ function lapseRateReason(input: GoalProgressInput, w: WeightBlock, rate: GoalPro
   return { kind: 'rate', text, tone: 'neutral' };
 }
 
+/** The week of `input.todayKey` is the second week with a lift e1RM (the current week counts): the goal's first lift-comparison week, where "est. 1RM" first reaches the card. */
+function firstComparisonWeek(input: GoalProgressInput): boolean {
+  const anchor = weekStart(input.todayKey);
+  const weeks = new Set<string>();
+  for (const ws of Object.values(input.progression)) for (const wk of ws) if (wk.bestEstimatedOneRepMaxKg != null && wk.weekStart <= anchor) weeks.add(wk.weekStart);
+  return weeks.size === 2;
+}
+
 function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftReturn | null, rets: GoalLiftReturn[]): Outcome {
   if (input.target.weightKg == null && input.target.weeklySessions == null) {
     return { verdict: 'needs_target', headline: 'Set a weekly session goal to track your progress', reasons: [] };
@@ -2482,6 +2495,11 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     : ret ? liftReturnReasons(rets.length > 0 ? rets : [ret], input, slackWeek ? exercise => !trainedThisWeek(exercise) : undefined) : [liftReasons[0] ?? weekOverWeekReason(input)];
   // "Back after a 15-day break" explains a rebuild; once every pre-break best is regained it is no longer news.
   const returnBreak = ret && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null ? liftReturnBreakReason(ret, input) : null;
+  // "est. 1RM" is explained once, here (wave 24s P3-5): the card shows the term from the goal's first lift-comparison week - the second week of lift data - a week
+  // before the first review does, so the sentence rides under the lift line on every day of that week, and the review (which gets `cardExplainedEst1rm`) leaves it out.
+  const explainer: GoalProgressReason | null = firstComparisonWeek(input) && leadLifts.some(r => r != null && r.text.includes('est. 1RM'))
+    ? { kind: 'explainer', text: EST_1RM_EXPLAINER, tone: 'neutral' }
+    : null;
   // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach
   // lines (they print the card). The same pure rule as the review, read for the last completed week; never while rebuilding after a break.
   // It stays on a lapsed day too: the week's plan is still the deload.
@@ -2501,6 +2519,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   const reasons = windowStale
     ? capReasons([
         ...leadLifts,
+        explainer,
         deloadLine,
         weekSessions ?? sessions,
         ret ? returnBreak : young ? null : adherenceDemoted,
@@ -2515,6 +2534,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         adherenceLow ? adherence : null,
         weekShort ? weekSessions : null,
         ...leadLifts,
+        explainer,
         deloadLine,
         adherenceLow ? null : sessions,
         reachLead,
@@ -2553,7 +2573,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         ? { verdict: 'behind', headline: slackWeek ? sessionsBehindHeadline : clip(`Lifts up, sessions behind — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
         : weekShort
           ? { verdict: 'holding', headline: clip(`Lifts up, week short — ${head.name} est. 1RM ${liftDeltaText(headDisplay)}`) }
-          : { verdict: 'progressing', headline: clip(`Progressing — ${head.name} est. 1RM ${liftDeltaText(headDisplay)} vs 4 weeks ago`) };
+          : { verdict: 'progressing', headline: clip(`Progressing — ${head.name} est. 1RM ${liftDeltaText(headDisplay)} ${head.vs}`) };
     } else if (otherUp && otherUpDisplay) {
       liftState = {
         verdict: 'holding',
@@ -2565,10 +2585,10 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         verdict: 'stalled',
         headline: everyLiftCompared
           ? 'Stalled — no lift is up 1% on 4 weeks ago'
-          : clip(`Stalled — ${head.name} est. 1RM ${headDelta} vs 4 weeks ago`),
+          : clip(`Stalled — ${head.name} est. 1RM ${headDelta} ${head.vs}`),
       };
     } else {
-      liftState = { verdict: 'holding', headline: clip(`Holding — ${head.name} est. 1RM ${headDelta} vs 4 weeks ago`) };
+      liftState = { verdict: 'holding', headline: clip(`Holding — ${head.name} est. 1RM ${headDelta} ${head.vs}`) };
     }
   }
 
