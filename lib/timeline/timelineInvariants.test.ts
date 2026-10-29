@@ -2912,22 +2912,9 @@ invariant(W23_OBEDIENT, 'G-W: the card never counts "within your 2,000 kcal targ
   return out;
 });
 
-invariant(W23_OBEDIENT, 'G-W: the review never grades the week against a budget its own next-week level has moved past', (snaps, name) => {
-  const out: Violation[] = [];
-  let seen = 0;
-  for (const snap of snaps) {
-    const rv = snap.review?.review;
-    const plan = snap.card?.weightRead?.plan;
-    if (rv == null || plan == null || plan.action.kcalTarget == null || (plan.state !== 'maintenance' && plan.state !== 'reached' && !plan.nearlyThere)) continue;
-    seen++;
-    const m = /\(([\d,]{4,}) kcal target\)/.exec(plain(`${rv.slip ?? ''} ${rv.headline}`));
-    if (m != null && Number(m[1].replace(/,/g, '')) !== plan.action.kcalTarget) {
-      out.push({ snap, detail: `review grades against ${m[1]} kcal: "${visible(rv.slip ?? '')}" while next week states ${plan.action.kcalTarget} kcal: "${visible(rv.nextWeek)}"` });
-    }
-  }
-  assert.ok(seen > 0, `${name}: no review met a stated level, so this invariant checked nothing`);
-  return out;
-});
+// (The wave 23w invariant that lived here - "the review never grades the week against a budget its own next-week level has moved past" - is superseded by
+// wave 24w group 5 at the end of this file: each day is graded against the level in force ON THAT DAY, so a week that ended before a step began is graded
+// against the budget.)
 
 // ── P2-A ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -4091,6 +4078,47 @@ invariant(LIFTERS, 'P3-2: a week off then a session on the review\'s Monday: "to
   return out;
 });
 
+// ── P3-3. The lifter's weight-rate line (day 14-26): "about 0.1 kg/wk (0.16% of bodyweight)" had a rounded kg beside a 2-decimal percent that disagreed with it. Both
+// are "about" ("about 0.1 kg/wk (about 0.2% of bodyweight)"), and a flat trend quotes no figure at all ("flat 0.07 lb/wk" is just "flat").
+invariant(LIFTERS, 'P3-3: the weight-rate line says "about X kg/wk (about Y% of bodyweight)" for a gain and quotes no figure for a flat trend', (snaps, name) => {
+  const out: Violation[] = [];
+  let lines = 0;
+  for (const snap of snaps) {
+    const rate = snap.card?.reasons.find(r => r.kind === 'rate');
+    if (!rate) continue;
+    const text = plain(rate.text);
+    if (/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \(/.test(text)) {
+      lines++;
+      if (!/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \((?:about )?\d\.\d{1,2}% of bodyweight\) over /.test(text)) out.push({ snap, detail: `"${visible(rate.text)}"` });
+      const m = /\(about (\d\.\d)% of bodyweight\)/.exec(text);
+      const exact = /\((\d\.\d\d)% of bodyweight\)/.exec(text);
+      // The exact two-decimal figure survives only where one decimal would read as the other side of the 0.1 / 0.5 band edge (0.09 -> "0.1", 0.52 -> "0.5").
+      const v = exact ? Number(exact[1]) : NaN;
+      const edge = exact != null && ((v < 0.1 && Math.round(v * 10) / 10 >= 0.1) || (v >= 0.5 && Math.round(v * 10) / 10 <= 0.5));
+      if (!m && !edge) out.push({ snap, detail: `the percent is neither "about 0.2%" (one decimal) nor an exact figure at a band edge: "${visible(rate.text)}"` });
+    }
+    if (/^Trend weight flat \d/.test(text) || /^Trend weight flat [\d.]+ (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `a flat trend quotes a figure: "${visible(rate.text)}"` });
+  }
+  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(lines > 0, `${name}: no gain rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// ── P3-8. lifter_short_week day 57: "Progressing — Squat est. 1RM +9 kg" over an amber "11 of 16 planned sessions in 4 weeks (69%)". The "behind" call is made as of the last
+// day the window learned something (so it does not flip on a Tuesday with no news), the live count keeps sliding; under a Progressing headline the sessions line is
+// neutral, never amber - the same demotion the card already applies to a stale window.
+invariant(LIFTERS, 'P3-8: an adherence line is never amber under a "Progressing" verdict', (snaps, name) => {
+  const out: Violation[] = [];
+  let progressing = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card || card.verdict !== 'progressing') continue;
+    progressing++;
+    for (const r of card.reasons) if (r.kind === 'adherence' && r.tone === 'watch') out.push({ snap, detail: `"${visible(card.headline)}" over amber "${visible(r.text)}"` });
+  }
+  assert.ok(progressing > 0, `${name}: no Progressing day, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P2-A. A proactive deload. lifter_obedient added +2.5 kg to every lift every week for 14 weeks (bench 80 → 110 kg; the day-98 cue was "bench 110 → 112.5 kg")
 // and the app only ever praised a deload ("good timing after 3 straight weeks of heavier loads"), it never prescribed one. After 5 straight weeks in which
 // the next-load cue stepped up, the next review's cue is "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 125 kg, …"; the
@@ -4441,6 +4469,49 @@ test('wave 24w harness: weight_loss_obedient adds the two 30-minute walks only w
     const due = snaps[best.start + 14].date;
     assert.ok(walks.length === 0 || walks[0] >= due, `the first walk ${walks[0]} comes before the day the ask was due (${due})`);
   }
+});
+
+//   group 5  no review counts a logged day against a calorie level that started AFTER that day: the days before an eat-more step are graded against the budget in force, the step's own
+//            days as "reached ~2,150 kcal on N of M days since <start>", never "in budget".
+
+invariant(WEIGHT, 'group 5: no review counts a day against a calorie level that started after that day: "Days in budget" covers the days before the step began (against the budget), the step\'s own days are "reached ~X kcal on N of M days since <start>"', (snaps, name) => {
+  const scn = buildScenario(name);
+  const budget = scn.budget.targetKcal as number;
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    const stat = rv?.review.stats.find(s => s.label === 'Days in budget');
+    if (rv == null || stat == null) continue;
+    const step = snap.card?.weightRead?.plan?.step;
+    const up = step != null && step.loKcal != null && step.loKcal > budget;
+    const weekEnd = addDays(rv.weekStart, 6);
+    const logged = scn.intake.filter(i => i.day >= rv.weekStart && i.day <= weekEnd && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD);
+    const stepOn = up && step != null && (step.phase === 'given' || step.phase === 'standing') && step.outcome == null;
+    const graded = !up ? logged : stepOn && step != null ? logged.filter(i => i.day < step.since) : [];
+    compared++;
+    const expected = `${graded.filter(i => i.kcal <= budget * 1.05).length}/${graded.length}`;
+    if (graded.length < 3 || stat.value !== expected) {
+      out.push({ snap, detail: `week of ${rv.weekStart}, step since ${step?.since ?? 'none'} (${step?.phase ?? '-'}): "Days in budget ${stat.value}" but the ${graded.length} logged day(s) before the step graded against ${budget} kcal give ${expected}` });
+      continue;
+    }
+    const stepDays = stepOn && step != null ? logged.filter(i => i.day >= step.since) : [];
+    const note = /reached ~([\d,]+) kcal on (\d+) of (\d+) days since/.exec(plain(stat.comparison ?? ''));
+    if (stepDays.length > 0 && step != null) {
+      const reached = stepDays.filter(i => i.kcal >= (step.loKcal as number) * 0.95).length;
+      if (note == null || Number(note[2]) !== reached || Number(note[3]) !== stepDays.length || Number(note[1].replace(/,/g, '')) !== step.loKcal) {
+        out.push({ snap, detail: `the step's ${stepDays.length} logged day(s) reached ~${step.loKcal} on ${reached}, but the stat says "${visible(stat.comparison ?? '')}"` });
+      }
+    } else if (note != null) {
+      out.push({ snap, detail: `no logged day was on the step, yet the stat says "${visible(stat.comparison ?? '')}"` });
+    }
+    for (const t of reviewTexts(snap)) {
+      const m = /(?:within your|\() ?([\d,]{4,})\s?kcal target/.exec(plain(t.text));
+      if (m != null && Number(m[1].replace(/,/g, '')) !== budget) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" quotes a ${m[1]} kcal target; the budget in force for the graded days was ${budget}` });
+    }
+  }
+  if (name !== 'weight_loss') assert.ok(compared > 0, `${name}: no review showed "Days in budget", so this invariant checked nothing`);
+  return out;
 });
 
 // ═══ WAVE 24e (ENDURANCE): ROUND 6 ═════════════════════════════════════════════════════════════════════════
