@@ -102,32 +102,40 @@ export function liftChange4w(weeks: LiftWeekPoint[], anchorWeekStart: string): L
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** "Apr 6" for the Monday `weekStart` ("wk of Apr 6"): the month and day, no year. */
+export function formatLiftWeek(weekStart: string): string {
+  return `${MONTH_ABBR[Number(weekStart.slice(5, 7)) - 1]} ${Number(weekStart.slice(8, 10))}`;
+}
+
 /**
- * The baseline week `liftChange4w` used, for its LABEL only (wave 24s; the maths above is untouched, iOS mirrors it): the week of `end - 28 d` when it has an
- * e1RM ("vs 4 weeks ago"), else the week of `end - 35 d` - five weeks back, because an ill or missed week left the 4-weeks-ago week empty. When both weeks
- * have an e1RM the baseline is the better of them, as in `liftChange4w`, and the label stays "vs 4 weeks ago". `weekStart` is the Monday of the week the
- * baseline number came from (the newer one on a tie). Null when there is no comparison.
+ * The baseline week `liftChange4w` used, for its LABEL only (wave 24s; the maths above is untouched, iOS mirrors it): the better of the weeks `end - 28 d` and
+ * `end - 35 d` (the newer on a tie), exactly as `liftChange4w` takes it. `fourWeeksAgo` is true only when the baseline NUMBER came from the week 4 weeks before
+ * the end week; when it came from the week before that (an ill or missed week left the 4-weeks-ago week empty, or only a light volume day - round 7: bench "114 → 123
+ * kg" read "vs 4 weeks ago" while the 114 was set five weeks back) the label names the week it came from. `weekStart` is the Monday of that week. Null when there is
+ * no comparison.
  */
 export function liftBaselineWeek(weeks: LiftWeekPoint[], anchorWeekStart: string): { weekStart: string; fourWeeksAgo: boolean } | null {
   const end = liftRecentEndWeek(weeks, anchorWeekStart);
   if (end == null || liftChange4w(weeks, anchorWeekStart) == null) return null;
   let best: { weekStart: string; kg: number } | null = null;
-  let fourWeeksAgo = false;
   for (const offset of LIFT_BASELINE_OFFSETS_DAYS) {
     const key = shiftDay(end, -offset);
     const kg = weeks.find(w => w.weekStart === key)?.bestEstimatedOneRepMaxKg;
     if (kg == null) continue;
-    if (offset === LIFT_BASELINE_OFFSETS_DAYS[0]) fourWeeksAgo = true;
     if (best == null || kg > best.kg || (kg === best.kg && key > best.weekStart)) best = { weekStart: key, kg };
   }
-  return best ? { weekStart: best.weekStart, fourWeeksAgo } : null;
+  return best ? { weekStart: best.weekStart, fourWeeksAgo: best.weekStart === shiftDay(end, -LIFT_BASELINE_OFFSETS_DAYS[0]) } : null;
 }
 
-/** "vs 4 weeks ago", or "vs wk of Aug 31" when the 4-weeks-ago week is empty and the baseline is the week before it (`liftBaselineWeek`). "vs 4 weeks ago" when there is nothing to name. */
-export function liftBaselineLabel(weeks: LiftWeekPoint[], anchorWeekStart: string): string {
+/**
+ * "vs 4 weeks ago", or "vs wk of Aug 31" when the baseline number came from the week before the 4-weeks-ago week (`liftBaselineWeek`). The weekly review passes
+ * `'before'`: its window ends at the REVIEWED week, not today, so its 4-week number is "vs 4 weeks before" (it printed the same words as the goal card on a Monday the
+ * card's window had already moved a week on, two different deltas under one label). "vs 4 weeks ago" / "before" when there is nothing to name.
+ */
+export function liftBaselineLabel(weeks: LiftWeekPoint[], anchorWeekStart: string, ref: 'ago' | 'before' = 'ago'): string {
   const b = liftBaselineWeek(weeks, anchorWeekStart);
-  if (b == null || b.fourWeeksAgo) return 'vs 4 weeks ago';
-  return `vs wk of ${MONTH_ABBR[Number(b.weekStart.slice(5, 7)) - 1]} ${Number(b.weekStart.slice(8, 10))}`;
+  if (b == null || b.fourWeeksAgo) return `vs 4 weeks ${ref}`;
+  return `vs wk of ${formatLiftWeek(b.weekStart)}`;
 }
 
 /** kg -> lb, same factor as lib/goalProgress.ts (KG_TO_LB); duplicated to keep this file import-free. */

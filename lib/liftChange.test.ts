@@ -20,7 +20,7 @@ test('bench: best of last 2 weeks vs best of the 2 weeks ending 4 weeks ago', ()
   assert.deepEqual(c, { baselineKg: 102.1, recentKg: 107.9, changeKg: 5.8 });
 });
 
-test('liftBaselineWeek / liftBaselineLabel: "vs 4 weeks ago" unless that week is empty, then the week the baseline came from (label only: liftChange4w is untouched) (wave 24s)', () => {
+test('liftBaselineWeek / liftBaselineLabel: "vs 4 weeks ago" only when the baseline number came from that week, else the week it came from (label only: liftChange4w is untouched) (wave 24s)', () => {
   // ANCHOR 10-05: the recent window ends 10-05, its 4-weeks-ago week is 09-07, the one before 08-31.
   const full = [wk('2026-08-31', 100), wk('2026-09-07', 102.1), wk('2026-09-28', 107.9), wk('2026-10-05', 105)];
   assert.deepEqual(liftBaselineWeek(full, ANCHOR), { weekStart: '2026-09-07', fourWeeksAgo: true });
@@ -30,10 +30,17 @@ test('liftBaselineWeek / liftBaselineLabel: "vs 4 weeks ago" unless that week is
   assert.deepEqual(liftBaselineWeek(gap, ANCHOR), { weekStart: '2026-08-31', fourWeeksAgo: false });
   assert.equal(liftBaselineLabel(gap, ANCHOR), 'vs wk of Aug 31');
   assert.deepEqual(liftChange4w(gap, ANCHOR), { baselineKg: 139, recentKg: 151, changeKg: 12 });
-  // Both weeks trained and the older one is the better: still "vs 4 weeks ago" (the 4-weeks-ago week has data; the number is the best of the two, as before).
+  // Both weeks have an e1RM but the older one is the better, so the baseline NUMBER is from five weeks back: the label names that week (round 7, lifter_obedient bench
+  // "114 → 123 kg" over an ill week whose only bench was a light volume set: "vs 4 weeks ago" was the 4-weeks-ago week's label on the Apr 6 number).
   const older = [wk('2026-08-31', 110), wk('2026-09-07', 102), wk('2026-10-05', 105)];
-  assert.equal(liftBaselineLabel(older, ANCHOR), 'vs 4 weeks ago');
-  assert.deepEqual(liftBaselineWeek(older, ANCHOR), { weekStart: '2026-08-31', fourWeeksAgo: true });
+  assert.deepEqual(liftBaselineWeek(older, ANCHOR), { weekStart: '2026-08-31', fourWeeksAgo: false });
+  assert.equal(liftBaselineLabel(older, ANCHOR), 'vs wk of Aug 31');
+  assert.deepEqual(liftChange4w(older, ANCHOR), { baselineKg: 110, recentKg: 105, changeKg: -5 });
+  // The same number from the 4-weeks-ago week itself (ties go to the newer week): "4 weeks ago".
+  assert.equal(liftBaselineLabel([wk('2026-08-31', 102), wk('2026-09-07', 102), wk('2026-10-05', 105)], ANCHOR), 'vs 4 weeks ago');
+  // The weekly review's window ends at the reviewed week: "vs 4 weeks before"; a named week reads the same on both.
+  assert.equal(liftBaselineLabel(full, ANCHOR, 'before'), 'vs 4 weeks before');
+  assert.equal(liftBaselineLabel(gap, ANCHOR, 'before'), 'vs wk of Aug 31');
   // No comparison: nothing to name.
   assert.equal(liftBaselineWeek([wk('2026-09-14', 100), wk('2026-10-05', 101)], ANCHOR), null);
   assert.equal(liftBaselineLabel([wk('2026-09-14', 100), wk('2026-10-05', 101)], ANCHOR), 'vs 4 weeks ago');

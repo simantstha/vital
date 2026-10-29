@@ -10,6 +10,7 @@ import { TAPER_GOOD_MIN_FRACTION, longRunStepKm, racePhaseInfo } from '../endura
 import { weekFitsSessionTarget, type GoalLiftReturn } from '../goalProgress';
 import { easedLoad, liftLapseMinDays, liftReturnDisplay, liftShortName, nextWorkingLoad } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
+import { estimateOneRepMax } from '../progressionMath';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline, stepDay } from './engine';
 import { extractInstructions } from './instructions';
@@ -4123,42 +4124,100 @@ invariant(LIFTERS, 'P3-8: an adherence line is never amber under a "Progressing"
   return out;
 });
 
-// ── P3-6. lifter_obedient day 70-76: "+12 kg vs 4 weeks ago (139 → 151 kg)" when the 139 was set five weeks back (the ill week has no squat). The comparison window keeps its
-// maths (iOS mirrors it); only the label changes: "vs 4 weeks ago" is printed only when the lift was trained in the week 4 weeks before the recent window, else "vs wk of Aug 31"
-// names the Monday of the baseline week actually used. Checked against the scenario's own rows, on the card (reason and headline), the review stat and the coach lines.
+// ── P3-6 and the round-7 P2-1 / P3-a. A "vs 4 weeks ago" delta has its two ends in the comparison week and in the week exactly 4 weeks before it, for THAT lift; when
+// the baseline number comes from the week before that (an ill week left the 4-weeks-ago week empty or lighter), the label names the week ("vs wk of Apr 6"). The review's
+// lift stat is a delta only for a lift trained in the REVIEWED week (lifter_obedient d49: "Squat est. 1RM +13 kg vs 4 weeks ago" on the Monday the card said "+6 kg
+// vs 4 weeks ago", because the ill week had no squat and the review had quietly compared the weeks of Apr 6 and Mar 9). The comparison window keeps its maths (iOS
+// mirrors it). Checked against the scenario's own rows, on the card (reason and headline), the coach lines, the opener and the review (stat, headline, win).
 const MONTH_ABBR_24S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const monthDay24s = (day: string): string => `${MONTH_ABBR_24S[Number(day.slice(5, 7)) - 1]} ${Number(day.slice(8, 10))}`;
 
-invariant(LIFTERS, 'P3-6: "vs 4 weeks ago" is printed only when the lift was trained 4 weeks before the recent window; otherwise the label names the baseline week ("vs wk of Apr 6")', (snaps, name) => {
+/** The best e1RM (kg, 2 decimals, as the weekly buckets round it) of `exercise` in the Mon-Sun week starting `monday`, from the scenario's own rows; null when not lifted loaded. */
+function weekE1rm24s(name: ScenarioName, exercise: string, monday: string): number | null {
+  const es = buildScenario(name).sets
+    .filter(x => x.exercise === exercise && !x.isWarmup && x.loadKg != null && x.day >= monday && x.day <= addDays(monday, 6))
+    .map(x => estimateOneRepMax(x.loadKg as number, x.reps, x.rpe))
+    .filter(e => e > 0);
+  return es.length > 0 ? Math.round(Math.max(...es) * 100) / 100 : null;
+}
+
+interface LiftDelta24s { text: string; lift: string; delta: number; label: string }
+
+/** Every "<Lift> est. 1RM +N kg vs 4 weeks ago | vs 4 weeks before | vs wk of Apr 6 | over 4 wks" (and "<Lift> estimated 1RM is up N kg …") in `text`. The review says "before" (its window ends at the reviewed week), and so does its headline's "over 4 wks". */
+function liftDeltas24s(text: string): LiftDelta24s[] {
+  const out: LiftDelta24s[] = [];
+  const t = plain(text);
+  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM ([+−-])(\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|over 4 wks|vs wk of [A-Z][a-z]{2} \d+)/g)) {
+    out.push({ text: m[0], lift: m[1], delta: (m[2] === '+' ? 1 : -1) * Number(m[3]), label: m[4] === 'over 4 wks' ? 'vs 4 weeks before' : m[4] });
+  }
+  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) estimated 1RM is (up|down) (\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|vs wk of [A-Z][a-z]{2} \d+)/g)) {
+    out.push({ text: m[0], lift: m[1], delta: (m[2] === 'up' ? 1 : -1) * Number(m[3]), label: m[4] });
+  }
+  return out;
+}
+
+invariant(LIFTERS, 'P3-6: a "vs 4 weeks ago" delta has its baseline in the week 4 weeks before its comparison week, for that lift, else the label names the week; a review quotes a delta only for a lift trained in the reviewed week', (snaps, name) => {
   const scn = buildScenario(name);
   const display = new Map(scn.sets.map(x => [x.display.toLowerCase(), x.exercise]));
   const out: Violation[] = [];
   let labels = 0;
+  let reviewDeltas = 0;
   // `lastWeek`: the review cuts its lift data at the reviewed week (a session on its own Monday is not in it), the card reads everything up to today.
-  const check = (snap: DaySnapshot, where: string, text: string, anchor: string, lastWeek = anchor): void => {
-    const trained = (exercise: string, monday: string): boolean => monday <= lastWeek && weekTopKg24s(name, exercise, monday) != null;
-    const m = /^(?:[^—]+ — )?(?:This week: |Last week: )?([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM [+−-]?\d+ (?:kg|lb)?\s?(vs 4 weeks ago|vs wk of ([A-Z][a-z]{2} \d+))/.exec(plain(text));
-    if (!m) return;
-    const exercise = display.get(m[1].toLowerCase());
-    if (!exercise) return;
-    // The end of the recent window: the newest trained week among the anchor and the 2 before it.
-    const end = [0, 7, 14].map(o => addDays(anchor, -o)).find(w => trained(exercise, w));
-    if (end == null) return;
-    labels++;
-    const fourAgo = addDays(end, -28);
-    const baseline = [fourAgo, addDays(end, -35)].find(w => trained(exercise, w));
-    if (baseline == null) return;
-    if (m[2] === 'vs 4 weeks ago' && !trained(exercise, fourAgo)) out.push({ snap, detail: `${where}: "${visible(text)}" says 4 weeks ago, but ${m[1]} was not trained in the week of ${monthDay24s(fourAgo)} (the baseline is the week of ${monthDay24s(baseline)})` });
-    if (m[3] != null && (trained(exercise, fourAgo) || m[3] !== monthDay24s(baseline))) out.push({ snap, detail: `${where}: "${visible(text)}" names the week of ${m[3]}, the baseline week is ${monthDay24s(baseline)} (4 weeks back ${trained(exercise, fourAgo) ? 'was trained' : 'is empty'})` });
+  const check = (snap: DaySnapshot, where: string, text: string, anchor: string, lastWeek: string, reviewed: string | null): void => {
+    for (const d of liftDeltas24s(text)) {
+      const exercise = display.get(d.lift.toLowerCase());
+      if (!exercise) continue;
+      const e1rm = (w: string): number | null => (w <= lastWeek ? weekE1rm24s(name, exercise, w) : null);
+      // The end of the recent window: the newest week with an e1RM among the anchor and the 2 before it.
+      const end = [0, 7, 14].map(o => addDays(anchor, -o)).find(w => e1rm(w) != null);
+      if (end == null) continue;
+      labels++;
+      if (reviewed != null) {
+        reviewDeltas++;
+        if (end !== reviewed) out.push({ snap, detail: `${where}: "${visible(d.text)}" is a delta for ${d.lift}, which was not trained in the reviewed week of ${monthDay24s(reviewed)} (its newest week is ${monthDay24s(end)})` });
+      }
+      // The baseline: the better of the week 4 weeks before the end and the one before it (the newer on a tie), as lib/liftChange.ts liftChange4w takes it.
+      const candidates = [addDays(end, -28), addDays(end, -35)].flatMap(w => { const e = e1rm(w); return e == null ? [] : [{ week: w, e }]; });
+      if (candidates.length === 0) continue;
+      const best = candidates.reduce((a, c) => (c.e > a.e ? c : a));
+      const want = best.week === addDays(end, -28) ? (reviewed != null ? 'vs 4 weeks before' : 'vs 4 weeks ago') : `vs wk of ${monthDay24s(best.week)}`;
+      if (d.label !== want) out.push({ snap, detail: `${where}: "${visible(d.text)}" — ${d.lift}'s baseline is the week of ${monthDay24s(best.week)} (${best.e} kg; the comparison ends ${monthDay24s(end)}), so the label should be "${want}"` });
+    }
   };
   for (const snap of snaps) {
     const anchor = mondayOfDate(snap.date);
-    for (const t of cardTexts(snap)) check(snap, t.where, t.text, anchor);
-    for (const t of coachTexts(snap)) if (t.where.startsWith('coach')) check(snap, t.where, t.text.replace(/^\s*-\s*/, ''), anchor);
+    for (const t of cardTexts(snap)) check(snap, t.where, t.text, anchor, anchor, null);
+    for (const t of coachTexts(snap)) check(snap, t.where, t.text, anchor, anchor, null);
     const r = snap.review?.review;
-    if (r) for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) check(snap, `review.stat ${st.label}`, `${st.label} ${st.value} ${st.comparison}`, addDays(r.weekStart, 7), r.weekStart);
+    if (!r) continue;
+    const anchorR = addDays(r.weekStart, 7);
+    check(snap, 'review.headline', r.headline, anchorR, r.weekStart, r.weekStart);
+    for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) check(snap, `review.stat ${st.label}`, `${st.label} ${st.value} ${st.comparison}`, anchorR, r.weekStart, r.weekStart);
+    if (r.win) check(snap, 'review.win', r.win, anchorR, r.weekStart, r.weekStart);
   }
   assert.ok(labels > 10, `${name}: only ${labels} 4-week labels were checked, so this invariant checked (almost) nothing`);
+  if (name === 'lifter_obedient') assert.ok(reviewDeltas > 3, `${name}: only ${reviewDeltas} review deltas were checked`);
+  return out;
+});
+
+// ... and on any day the card, the coach lines and that day's review never print two different deltas for the same lift under the same label.
+invariant(LIFTERS, 'P3-6: on any day the card, the coach lines, the opener and the review print one delta per lift and label', (snaps, name) => {
+  const out: Violation[] = [];
+  let both = 0;
+  for (const snap of snaps) {
+    const seen = new Map<string, Array<{ delta: number; where: string; text: string }>>();
+    const add = (where: string, text: string): void => {
+      for (const d of liftDeltas24s(text)) seen.set(`${d.lift}|${d.label}`, [...(seen.get(`${d.lift}|${d.label}`) ?? []), { delta: d.delta, where, text: d.text }]);
+    };
+    for (const t of allTexts(snap)) add(t.where, t.where.startsWith('review.stats') ? '' : t.text);
+    const r = snap.review?.review;
+    if (r) for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) add(`review.stat ${st.label}`, `${st.label} ${st.value} ${st.comparison}`);
+    if ([...seen.values()].some(es => es.some(e => e.where.startsWith('card')) ) && [...seen.values()].some(es => es.some(e => e.where.startsWith('review')))) both++;
+    for (const [key, entries] of seen) {
+      if (new Set(entries.map(e => e.delta)).size > 1) out.push({ snap, detail: `${key.split('|')[0]} ${key.split('|')[1]}: ${entries.map(e => `"${visible(e.text)}" (${e.where})`).join(' vs ')}` });
+    }
+  }
+  assert.ok(both >= 3, `${name}: only ${both} day(s) had a card delta and a review delta together, so this invariant checked (almost) nothing`);
   return out;
 });
 
