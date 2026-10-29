@@ -405,7 +405,10 @@ final class ScreenshotTests: XCTestCase {
     /// raise this window accordingly.
     ///
     /// Fails the test with a clear message if the element never settles
-    /// within the timeout.
+    /// within the timeout. The loop needs at least `minSamples` hittable samples before it
+    /// judges stability, and gets extra time (up to a hard deadline) to collect them: each
+    /// XCUI snapshot query can take over a second on a loaded CI runner, so a fixed window
+    /// may fit only one sample.
     private func waitForSettled(
         _ element: XCUIElement,
         app: XCUIApplication,
@@ -418,16 +421,19 @@ final class ScreenshotTests: XCTestCase {
         }
 
         let deadline: Date = Date(timeIntervalSinceNow: timeout)
+        let hardDeadline: Date = Date(timeIntervalSinceNow: max(timeout * 3, 15))
+        let minSamples = 3
+        var samples = 0
         var previousFrame: CGRect? = nil
         let pollInterval: TimeInterval = 0.5
 
-        while Date.now < deadline {
-            guard isSafelyHittable(element, app: app) else {
+        while Date.now < deadline || (samples > 0 && samples < minSamples && Date.now < hardDeadline) {
+            guard let currentFrame = safeHittableFrame(element, app: app) else {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: pollInterval))
                 continue
             }
+            samples += 1
 
-            let currentFrame: CGRect = element.frame
             if let prev = previousFrame, prev == currentFrame {
                 // Frame is stable — element has settled
                 return
@@ -438,7 +444,8 @@ final class ScreenshotTests: XCTestCase {
         }
 
         XCTFail("\(description) never settled within \(timeout)s "
-                + "— either it never became hittable or its frame kept changing")
+                + "— either it never became hittable or its frame kept changing "
+                + "(\(samples) hittable samples, last frame \(previousFrame.map { "\($0)" } ?? "none"))")
     }
 
     /// Taps the named tab bar button and waits until it actually reports
