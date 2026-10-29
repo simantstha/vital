@@ -59,6 +59,8 @@ import {
 } from './liftChange';
 import {
   PHASE_CEILING_TOLERANCE,
+  HOLD_KEPT_FRACTION,
+  WEEK_ON_PLAN_FRACTION,
   STRIDES_COPY,
   WEEKLY_DISTANCE_GROWTH,
   enduranceWeekPlan,
@@ -1488,7 +1490,7 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
   // Wave 23e: a hold week he built through is not "on plan": mixed, with a factual gap (not a spike - there is no jump to warn about).
   if (rp.holdBroken && plan.targetKm != null) {
     const heldLong = plan.longRunTrim?.fullKm ?? plan.longRunKm;
-    const longBroke = heldLong != null && rp.longestKm != null && rp.longestKm > heldLong + 0.5 + 1e-9 && km <= plan.targetKm * 1.05 + 1e-9;
+    const longBroke = heldLong != null && rp.longestKm != null && rp.longestKm > heldLong + 0.5 + 1e-9 && km <= plan.targetKm * HOLD_KEPT_FRACTION + 1e-9;
     return rated('mixed', {
       kind: 'hold', doneKm: round1(km), targetKm: plan.targetKm,
       ...(longBroke ? { heldLongKm: heldLong as number, longKm: round1(rp.longestKm as number) } : {}),
@@ -1625,7 +1627,8 @@ function distanceHeadline(
   const target = `${opts.upTo ? 'up to ' : ''}~${distanceText(input, stepKm)}`;
   // ... and passed by more than 10% (not far) it is said neutrally, as the card says it (never "on plan").
   if (opts.overCap) return `${distanceNumber(input, km)} of ${target} — ${overCapPhrase('touch')} · goal ${distanceText(input, targetKm)}`;
-  const onPlan = distanceNumber(input, km) >= distanceNumber(input, stepKm);
+  // Wave 24e: "on plan" from 90% of the step - the band in which the card says "this week's km are done" (one number, `WEEK_ON_PLAN_FRACTION`).
+  const onPlan = distanceNumber(input, km) >= distanceNumber(input, stepKm) || km >= stepKm * WEEK_ON_PLAN_FRACTION - 1e-9;
   // Over the step but under the spike line is above the step, not "on plan" (a +33% week is not on a 10% plan).
   const note = onPlan ? (km > stepKm * ABOVE_STEP_FRACTION ? (opts.cutback ? ' — a normal week' : ' — above the step') : ' — on plan') : '';
   return `${distanceNumber(input, km)} of ${target}${note} · goal ${distanceText(input, targetKm)}`;
@@ -1776,8 +1779,8 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       const ran = distanceNumber(input, rp.week.km);
       const goal = distanceNumber(input, plan.goalKm);
       if (ran < goal) {
-        // "Again" only when next week asks for the same number.
-        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === goal ? ` — aim for ${goal} again` : '';
+        // "Again" only when next week asks for the same number - and not for a week inside the 10% band the card calls done (wave 24e: no nudge for a week that did what the card said).
+        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === goal && rp.week.km < plan.goalKm * WEEK_ON_PLAN_FRACTION ? ` — aim for ${goal} again` : '';
         return `Close to your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}${again}.`;
       }
       return plan.goalReachedBefore && plan.lastAtGoal
@@ -1790,8 +1793,8 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       // A week well above its step is not praised for the extra.
       if (plan.targetKm != null && rp.week.km > plan.targetKm * ABOVE_STEP_FRACTION) return null;
       const target = plan.targetKm as number;
-      // "Hit" is the rounded reading reaching the step; 20 of ~22 km is close, and says what to aim for.
-      if (distanceNumber(input, rp.week.km) < distanceNumber(input, target)) {
+      // "Hit" is the rounded reading reaching the step, or (wave 24e) 90% of it - the band in which the card says the week's km are done; 20 of ~22 km is close, and says what to aim for.
+      if (distanceNumber(input, rp.week.km) < distanceNumber(input, target) && rp.week.km < target * WEEK_ON_PLAN_FRACTION - 1e-9) {
         // "Again" only when next week asks for the same step; a climb back after a break asks for more.
         const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) ? ` — aim for ~${distanceNumber(input, target)} again` : '';
         return `Close to your step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${again}.`;

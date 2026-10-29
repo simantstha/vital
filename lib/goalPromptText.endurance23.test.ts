@@ -55,12 +55,20 @@ const coach = (gp: GoalProgress, units: 'metric' | 'imperial' = 'metric'): strin
 const targetLine = (text: string): string => text.split('\n').find(l => l.startsWith("- This week's target")) ?? '';
 
 test('trimmed long run: the coach target line, the long-run line and the card say the same number', () => {
+  const sat = '2026-10-24';
+  const gp = computeGoalProgress(input(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat }));
+  const text = coach(gp);
+  assert.match(targetLine(text), /^- This week's target: a cutback week, ~20\.0 km — absorb the last three weeks; do not push past it — keep Sunday's long run to ~6 km so the week stays at ~20 km$/);
+  assert.match(text, /next long run ~6 km/);
+  assert.doesNotMatch(text, /long run 10 km|one short easy run/);
+});
+
+test('several usual run days left: the coach gives the TOTAL, one easy run or two (wave 24e), and no long run of its own', () => {
   const thu = '2026-10-22';
   const gp = computeGoalProgress(input(weeks(thu, [[[1, 7], [3, 7]], ...CUTBACK_HISTORY]), { todayKey: thu }));
   const text = coach(gp);
-  assert.match(targetLine(text), /^- This week's target: a cutback week, ~20\.0 km — absorb the last three weeks; do not push past it — keep Sunday's long run to ~6 km so the week stays at ~20\.0 km$/);
-  assert.match(text, /next long run ~6 km/);
-  assert.doesNotMatch(text, /long run 10 km|one short easy run/);
+  assert.match(targetLine(text), /^- This week's target: a cutback week, ~20\.0 km — absorb the last three weeks; do not push past it — 6 km left this week: one easy run of ~6 km, or two of ~3 km, so the week stays at ~20 km$/);
+  assert.doesNotMatch(text, /next long run/);
 });
 
 test('week done: the coach says the km are done and to skip the long run, with no long run anywhere', () => {

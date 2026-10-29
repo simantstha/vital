@@ -996,12 +996,12 @@ test('below this week\'s step the gap is measured against the step, not the goal
   assert.equal(tough.weekRating, 'tough');
   assert.deepEqual(tough.weekGap, { kind: 'distance', doneKm: 12, targetKm: 30, stepKm: 24 });
   assert.equal(tough.slip, "12 of ~24 km — 12 km short of this week's step");
-  // Within 10% of the step (22 of 24 km) is still a good week: no gap, no Slip, no "on plan" claim.
+  // Within 10% of the step (22 of 24 km) is a good week and on plan (wave 24e: the band the card calls "done"): no gap, no Slip.
   const near = week([7, 7, 8]);
   assert.equal(near.weekRating, 'good');
   assert.equal(near.weekGap, null);
   assert.equal(near.slip, null);
-  assert.equal(near.headline, '3 sessions, 22 of ~24 km · goal 30 km'); // 22 vs 21.9 km: "same as last week", no % to add
+  assert.equal(near.headline, '3 sessions, 22 of ~24 km — on plan · goal 30 km'); // 22 vs 21.9 km: "same as last week", no % to add
   // Reaching the step is the bar: 24 km exactly is on plan.
   const exact = week([8, 8, 8]);
   assert.equal(exact.weekRating, 'good');

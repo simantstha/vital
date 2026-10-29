@@ -67,10 +67,11 @@ function kmForDay(scn: Scenario, idx: number, dow: number): { km: number; why: s
   // Km kept for the days after today: the long run on Sunday, the shakeout on the eve of the race.
   const raceEveDow = race != null && race.phase === 'race_week' && race.daysToGo != null ? dow + race.daysToGo - 1 : null;
   let reserved = 0;
-  if (longDay != null && dow < longDay && longRunAhead) reserved += longRunKm as number;
-  if (raceEveDow != null && raceEveDow > dow && raceEveDow <= 6 && ahead.includes(raceEveDow)) reserved += SHAKEOUT_KM;
-  // A cap on the long run alone ("long run ≤ ~8 km", "skip the long run").
+  // A cap on the long run alone ("long run <= ~8 km", "nothing over ~4 km" in a restart that begins mid-week) also limits what is kept for it.
   const longCaps = instructions.filter(i => i.kind === 'long_run_cap').map(i => i.hi);
+  if (longDay != null && dow < longDay && longRunAhead) reserved += Math.min(longRunKm as number, ...longCaps);
+  if (raceEveDow != null && raceEveDow > dow && raceEveDow <= 6 && ahead.includes(raceEveDow)) reserved += SHAKEOUT_KM;
+  // "skip the long run".
   const skipLong = instructions.some(i => i.kind === 'done');
   if (dow === longDay) {
     const km = Math.min(longRunKm as number, budget, ...longCaps);
