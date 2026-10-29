@@ -819,15 +819,18 @@ export function buildScenario(name: ScenarioName): Scenario {
 // ═══ wave 23w: an obedient weight-loss user (G-W) ═══════════════════════════════════════════════════════════════════
 
 /**
- * G-W: the same weigh-ins as `weight_loss`, from a user who does exactly what the card says, day by day. Each day she reads the real
- * goal-progress card as it stands that morning (the weigh-ins through today, the food she has logged through yesterday) and:
- *  - eats the calorie level the week's plan states (`action.kcalTarget`; the 2,000 kcal budget while the plan states none), with a
- *    little day-to-day noise and no weekend binge - she logs it as soon as the plan asks her to ("log a few days"), and every day after;
- *  - adds the two 30-minute walks from the day the plan names them, and keeps them up;
- *  - trains Mon / Wed / Sat as in `weight_loss_logged`; nothing at all (no food, no workout, no weigh-in) in the 12-day gap.
- * After the target (day 102) she therefore takes the maintenance step and then holds it. Her scale does not react to what she eats (the
+ * G-W: the same weigh-ins as `weight_loss`, from a user who does exactly what the card says, day by day. Each day they read the real
+ * goal-progress card as it stands that morning (the weigh-ins through today, the food logged through yesterday) and:
+ *  - eat the calorie level the week's plan states (`action.kcalTarget`; the 2,000 kcal budget while the plan states none), with a
+ *    little day-to-day noise and no weekend binge - they log it as soon as the plan asks for it ("log a few days"), and every day after;
+ *  - add the two 30-minute walks the day the plan names them - but when the ask is conditional ("if still flat in 2 weeks, add two
+ *    30-minute walks ...", the plateau step) only once it has stood on the card for 14 days in a row, i.e. the plateau persisted (wave 24w;
+ *    here it ends on day 62, so the walks are never added), and keep them up;
+ *  - train Mon / Wed / Sat as in `weight_loss_logged`; nothing at all (no food, no workout, no weigh-in) in the 12-day gap.
+ * After the target (day 102) they therefore take the maintenance step and then hold it. Their scale does not react to what they eat (the
  * weights are `weight_loss`'s own, a plateau included, so the three weight scenarios stay comparable): what this scenario guards is what
- * she is TOLD, week after week, while she does it. Built once per process: it runs the real card ~110 times.
+ * they are TOLD, week after week, while they do it. The profile is male: the notes say "they", never "she". Built once per process: it runs
+ * the real card ~110 times.
  */
 let obedientWeightCache: Scenario | null = null;
 export function weightLossObedient(): Scenario {
@@ -839,7 +842,7 @@ export function weightLossObedient(): Scenario {
   const scn: Scenario = {
     ...base,
     name: 'weight_loss_obedient',
-    title: 'Weight loss 92 kg -> 84 kg (same weigh-ins; follows every weekly action: the stated kcal, the walks, logs when asked)',
+    title: 'Weight loss 92 kg -> 84 kg (same weigh-ins; follows every weekly action: the stated kcal, the walks when they are due, logs when asked)',
     user: { ...base.user, weeklySessions: 3 },
     intake,
     workouts,
@@ -847,17 +850,27 @@ export function weightLossObedient(): Scenario {
   };
   let logging = false;
   let walking = false;
+  /** The day the conditional plateau ask ("if still flat in 2 weeks, add two 30-minute walks ...") first stood on the card in its current run; null when it is not on the card. */
+  let walksAskedOn: number | null = null;
   const events: string[] = [];
   for (let d = 0; d <= base.lastDay; d++) {
     const date = addDays(DAY0, d);
     const dow = d % 7; // Mon = 0
     const away = d >= 70 && d <= 81;
     if (away) continue;
-    // The card as she reads it this morning: the plan exists from the third week.
+    // The card as they read it this morning: the plan exists from the third week.
     const plan = d >= 14 ? computeProgressFor(scn, date).weightRead?.plan ?? null : null;
     const said = plan?.action.text ?? '';
     if (!logging && /log a few days|keep logging/i.test(said)) { logging = true; events.push(`day ${d}: starts logging food ("${said.slice(0, 70)}...")`); }
-    if (!walking && /30-minute walks/i.test(said)) { walking = true; events.push(`day ${d}: starts the two 30-minute walks`); }
+    // "If still flat in 2 weeks, add two 30-minute walks": due only once the ask has stood for 14 days (the plateau is still on); an ask that goes
+    // (the scale moved again) is dropped, and a later one starts its own 14 days. An unconditional mention of the walks is done at once.
+    if (/if still flat in 2 weeks, [^.;]*30-minute walks/i.test(said)) {
+      if (walksAskedOn == null) walksAskedOn = d;
+      if (!walking && d - walksAskedOn >= 14) { walking = true; events.push(`day ${d}: starts the two 30-minute walks (still flat after 2 weeks)`); }
+    } else {
+      walksAskedOn = null;
+      if (!walking && /30-minute walks/i.test(said)) { walking = true; events.push(`day ${d}: starts the two 30-minute walks`); }
+    }
     if (dow === 0 || dow === 2 || dow === 5) workouts.push({ day: date, type: 'Strength Training', durationMin: 45, distanceM: null });
     if (walking && (dow === 1 || dow === 4)) workouts.push({ day: date, type: 'Walking', durationMin: 30, distanceM: 2400 });
     if (logging) {
@@ -867,9 +880,9 @@ export function weightLossObedient(): Scenario {
   }
   scn.inputNotes = [
     'Same goal, target (84 kg by day 126), budget (2,000 kcal) and weigh-ins as weight_loss (including the plateau and the 12-day gap), plus a weekly-sessions target of 3.',
-    'Day by day she reads the real card and obeys it: she eats the calorie level the plan states (the budget while it states none; +/-60 kcal of noise, no weekend binge), logs food from the day the plan asks her to and every day after, adds the two 30-minute walks (Tue/Fri) from the day the plan names them, and trains Mon/Wed/Sat. Nothing is logged in the gap (days 70-81).',
-    'Her scale does not react to what she eats: the weights are weight_loss\'s own. The scenario guards what she is TOLD while she obeys.',
-    ...(events.length > 0 ? [`What she did, and when: ${events.join('; ')}.`] : []),
+    'Day by day they read the real card and obey it: they eat the calorie level the plan states (the budget while it states none; +/-60 kcal of noise, no weekend binge), log food from the day the plan asks for it and every day after, and train Mon/Wed/Sat. The two 30-minute walks (Tue/Fri) start the day the plan names them - or, for the plateau step "if still flat in 2 weeks, add two 30-minute walks", only once that ask has stood on the card for 14 days (the plateau persisted; here it ends on day 62, so they are never added). Nothing is logged in the gap (days 70-81).',
+    "Their scale does not react to what they eat: the weights are weight_loss's own. The scenario guards what they are TOLD while they obey.",
+    ...(events.length > 0 ? [`What they did, and when: ${events.join('; ')}.`] : []),
   ];
   obedientWeightCache = scn;
   return scn;

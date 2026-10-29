@@ -4282,3 +4282,35 @@ invariant(WEIGHT, 'P3-7: the review of a return week (1-2 weigh-ins after a gap 
   assert.ok(seen > 0, `${name}: no return week had an unsufficient review, so this invariant checked nothing`);
   return out;
 });
+
+//   harness  weight_loss_obedient: the input notes are neutral (the profile is male), and the 30-minute walks start only when "if still flat in 2 weeks" has stood on the
+//            card for 14 days (the plateau persisted); here it ends on day 62 (moving again), so no walk is ever added.
+
+test('wave 24w harness: the weight_loss_obedient input notes and title use neutral pronouns (the profile is male)', () => {
+  const scn = buildScenario('weight_loss_obedient');
+  const text = [scn.title, ...scn.inputNotes].join('\n');
+  assert.equal(scn.profile.sex, 'male');
+  assert.doesNotMatch(text, /\b(?:she|her|hers|herself)\b/i, `gendered pronouns in: ${text.match(/.{0,40}\b(?:she|her|hers|herself)\b.{0,40}/i)?.[0]}`);
+});
+
+test('wave 24w harness: weight_loss_obedient adds the two 30-minute walks only when "if still flat in 2 weeks" has stood on the card for 14 days in a row', () => {
+  const snaps = runTimeline('weight_loss_obedient');
+  const conditional = snaps.map(s => /if still flat in 2 weeks, [^.]*30-minute walks/.test(plain(s.card?.weightRead?.plan?.action.text ?? '')));
+  // The longest run of days the conditional ask stood on the card, and the first day it was due (14 days into the run).
+  let best = { start: -1, len: 0 };
+  for (let i = 0; i < snaps.length; i++) {
+    if (!conditional[i]) continue;
+    let j = i;
+    while (j + 1 < snaps.length && conditional[j + 1]) j++;
+    if (j - i + 1 > best.len) best = { start: i, len: j - i + 1 };
+    i = j;
+  }
+  assert.ok(best.len > 0, 'the plateau step with the conditional walks never appeared, so this test checked nothing');
+  const walks = buildScenario('weight_loss_obedient').workouts.filter(w => w.type === 'Walking').map(w => w.day).sort();
+  if (best.len < 14) {
+    assert.deepEqual(walks, [], `the conditional ask stood ${best.len} day(s) (from ${snaps[best.start].date}) - under 14, so no walk is due; walks on ${walks.slice(0, 4).join(', ')}`);
+  } else {
+    const due = snaps[best.start + 14].date;
+    assert.ok(walks.length === 0 || walks[0] >= due, `the first walk ${walks[0]} comes before the day the ask was due (${due})`);
+  }
+});
