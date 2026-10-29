@@ -2989,7 +2989,7 @@ invariant(['weight_loss'], 'P2-A: a user who logs no food gets the maintenance s
     if (plan == null || !(plan.state === 'reached' || plan.state === 'maintenance' || plan.nearlyThere)) continue;
     for (const t of w23Texts(snap)) {
       if (/snack/i.test(plain(t.text))) snack++;
-      if (/keep that snack|keep the (?:daily )?snack/i.test(plain(t.text))) kept++;
+      if (/keep that snack|keep the (?:daily )?snack|snack included/i.test(plain(t.text))) kept++;
       if (W23_KCAL_TARGET_NUMBER.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" states a kcal target number to a user who logs no food` });
     }
     if (plan.action.kcalTarget != null && plan.step != null) out.push({ snap, detail: `the step carries kcalTarget ${plan.action.kcalTarget} for a user who logs no food` });
@@ -3066,7 +3066,8 @@ invariant(WEIGHT, 'P3-E: once the new-target question is over, the reached opene
     const line = plain(snap.opener?.required ?? '');
     if (snap.card?.verdict !== 'reached' || snap.card.weightRead?.plan?.action.kind === 'next_target' || line === '') continue;
     seen++;
-    if (line.length > 125 || line.includes(';')) out.push({ snap, detail: `${line.length} characters: "${visible(line)}"` });
+    // (One clause: no "; we'll read it on ..." / "; a drift of ..." tail. A non-logger's "...snack included; that's your maintenance" is one sentence - wave 24w.)
+    if (line.length > 125 || /;\s*(?:we'll read|a drift)/.test(line)) out.push({ snap, detail: `${line.length} characters: "${visible(line)}"` });
   }
   assert.ok(seen > 0, `${name}: no reached opener after the question, so this invariant checked nothing`);
   return out;
@@ -4048,3 +4049,43 @@ invariant(W24_LOGGERS, 'P2-1: a held weight on a step that was never taken ("You
 
 invariant(WEIGHT, 'P2-1: no card headline says "keep to your easing step" (it is "stay at ~2,150-2,200 kcal", or "keep your daily snack" for a user who logs no food)', snaps =>
   snaps.filter(s => /keep to your easing step/.test(plain(s.card?.headline ?? ''))).map(snap => ({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}"` })));
+
+//   P3-1  a rate warning never adds a second calorie instruction next to the plan's step ("your easing step covers this").
+//   P3-2  the coach plateau rule offers a kcal cut only to a user the card also offers one (a non-logger gets walks and logging).
+//   P3-5  plain words for a non-logger: "Your weight held - keep eating as you are, snack included; that's your maintenance".
+
+invariant(WEIGHT, 'P3-1: never two different calorie instructions on one card: a rate warning that says "ease calories toward maintenance" is never next to the plan\'s own calorie step, and says "your easing step covers this" instead', (snaps, name) => {
+  const out: Violation[] = [];
+  let covered = 0;
+  for (const snap of snaps) {
+    const reasons = snap.card?.reasons ?? [];
+    const warn = reasons.find(r => r.kind === 'rate' && /ease calories toward maintenance/.test(plain(r.text)));
+    const step = reasons.find(r => (r.kind === 'next_step' || r.kind === 'action') && /\d,\d{3}\s?kcal|snack/.test(plain(r.text)));
+    if (warn != null && step != null) out.push({ snap, detail: `"${visible(warn.text)}" next to [${step.kind}] "${visible(step.text)}"` });
+    if (reasons.some(r => r.kind === 'rate' && /your easing step covers this$/.test(plain(r.text)))) covered++;
+  }
+  if (out.length === 0) assert.ok(covered > 0, `${name}: no rate warning said the easing step covers it, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss', 'weight_loss_obedient'], 'P3-2: while the card\'s plateau step is walks and logging (no food log), the coach plateau rule never offers "~150 kcal less a day"', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const action = plain(snap.card?.weightRead?.plan?.action.text ?? '');
+    if (!/log a few days so we can see where the calories go/.test(action) || snap.card?.weightRead?.state !== 'plateau') continue;
+    const rule = (snap.coach ?? []).map(plain).find(l => /Plateau on the raw weekly averages/.test(l));
+    if (rule == null) continue;
+    seen++;
+    if (/kcal less/.test(rule)) out.push({ snap, detail: `card: "${visible(action)}" but the coach rule says "${visible(rule)}"` });
+  }
+  assert.ok(seen > 0, `${name}: no plateau day had both the card's walks-and-logging step and the coach rule, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss'], 'P3-5: a non-logger\'s kept maintenance step reads "Your weight held - keep eating as you are, snack included; that\'s your maintenance", never "keep that snack, it\'s your maintenance"', (snaps, name) => {
+  const out = textMatches(snaps, allTexts, /keep that snack, it['’]s your maintenance|weekly average held within [\d.]+ (?:kg|lb) — keep/);
+  const said = snaps.filter(s => allTexts(s).some(t => /Your weight held — keep eating as you are, snack included; that['’]s your maintenance/.test(plain(t.text)))).length;
+  assert.ok(said > 0, `${name}: the new wording never appeared, so this invariant checked nothing`);
+  return out;
+});

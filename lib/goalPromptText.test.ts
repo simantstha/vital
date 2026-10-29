@@ -429,6 +429,18 @@ test('coach plateau note: with logged days over target it leads with the logs (a
   assert.match(formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake: null } }), 'metric').join('\n'), /often water/);
 });
 
+test('wave 24w P3-2: the coach plateau rule offers a kcal cut only to someone who logs food; a non-logger gets the card\'s walks and logging', () => {
+  const plateauPlan = (text: string) => ({ state: 'plateau', weekStart: '2026-05-18', action: { kind: 'plateau_water', text }, staleSince: null, flatWeeks: 3, plateauCause: null }) as unknown as NonNullable<GoalProgress['weightRead']>['plan'];
+  const lines = (text: string) => formatGoalProgressLines(gp({ eta: null, weightRead: { ...WEIGHT_READ, state: 'plateau', intake: null, plan: plateauPlan(text) } }), 'metric').join('\n');
+  // The card for someone who logs no food: walks and logging, no number to check a cut against.
+  const nonLogger = lines('Common and often water: keep 2,000 kcal and 3 sessions; if still flat in 2 weeks, add two 30-minute walks and log a few days so we can see where the calories go');
+  assert.match(nonLogger, /Plateau on the raw weekly averages \(flat for 3 weeks\): often water — not a failure\. Keep the plan; only if still flat in 2 weeks suggest two 30-minute walks and logging a few days\./);
+  assert.doesNotMatch(nonLogger, /kcal less/);
+  // Someone who logs food keeps the trim option.
+  const logger = lines('Common and often water: keep 2,000 kcal and 3 sessions; if still flat in 2 weeks, trim ~150 kcal a day or add two 30-minute walks');
+  assert.match(logger, /only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks\./);
+});
+
 test('coach lines: "since start" for a fat-loss goal names its basis (the weekly average, else the latest scale reading)', () => {
   const withMean = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'metric').join('\n');
   assert.match(withMean, /since start at [\d.]+ kg \(weekly average\)/);

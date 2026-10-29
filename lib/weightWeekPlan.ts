@@ -1105,7 +1105,7 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
   }
   if (event?.kind === 'read_held') {
     const text = !numeric
-      ? `Your weekly average held within ${held} — keep that snack, it's your maintenance`
+      ? "Your weight held — keep eating as you are, snack included; that's your maintenance"
       : event.logs.taken === false
         ? `Your weekly average held within ${held} on ${levelStr} without the step — that's your maintenance`
         : `Your weekly average held within ${held} on ${levelStr} — keep it, that's your maintenance`;

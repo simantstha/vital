@@ -235,7 +235,7 @@ test('after the first week a reached goal is told to hold, not to "switch to mai
   const standing = reviewOn(reached, [], 70).review;
   assert.match(plainSpaces(standing.nextWeek), /^Keep the daily snack \(the step you started \w{3} \d{1,2}\); we'll read it on Mon, May 18$/);
   const { review } = reviewOn(reached, [], 77);
-  assert.equal(plainSpaces(review.nextWeek), "Your weekly average held within 0.5 kg — keep that snack, it's your maintenance");
+  assert.equal(plainSpaces(review.nextWeek), "Your weight held — keep eating as you are, snack included; that's your maintenance");
   assert.doesNotMatch(review.nextWeek, /switch to maintenance/i);
   // Later it is the kept level, with the two-sided watch.
   const later = reviewOn(reached, [], 98).review;
