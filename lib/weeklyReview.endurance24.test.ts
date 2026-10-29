@@ -142,3 +142,13 @@ test('imperial: the distance wording of a broken hold is unit-aware ("miles", ne
   assert.doesNotMatch(`${r.headline} ${r.slip} ${r.nextWeek}`, /\bkm\b/);
   assert.match(r.slip ?? '', /^Built again instead of holding: [\d.]+ vs ~[\d.]+ mi$/);
 });
+
+test('a rebuild week 2 km short of its step (messy d138-140: the card says "one short easy run or rest, either is fine") gets no "aim for ~17 again" from the review', async () => {
+  const { runTimeline } = await import('./timeline/engine');
+  const snaps = runTimeline('runner_messy');
+  const saturday = snaps.find(x => x.idx === 138);
+  const monday = snaps.find(x => x.idx === 140);
+  assert.match(plainSpaces(saturday?.card?.reasons.find(r => r.kind === 'volume')?.text ?? ''), /~2 km left: one short easy run or rest, either is fine$/);
+  assert.equal(monday?.review?.review.weekRating, 'good');
+  assert.equal(plainSpaces(monday?.review?.review.win ?? ''), 'Close to your step: 15 of ~17 km.');
+});

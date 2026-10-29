@@ -7,6 +7,7 @@ import {
   EST_1RM_EXPLAINER,
   lastCompletedWeekStart,
   REVIEW_HEADLINE_MAX_CHARS,
+  STAT_COMPARISON_MAX_CHARS,
   type WeeklyReview,
   type WeeklyReviewInput,
 } from './weeklyReview';
@@ -2905,32 +2906,58 @@ test('B8. a reached goal says "switch to maintenance" until the calorie target a
   assert.ok(!atMaintenance.some(t => /^Switch to maintenance|switch to maintenance and enjoy/.test(t)), atMaintenance.join(' | '));
 });
 
-test('wave 24w group 5: every logged day is graded against the level in force ON THAT DAY - days before an eat-more step against the budget, the step\'s own days as "reached", never "in budget"', () => {
+test('wave 24w group 5/6: every logged day is graded against the level in force ON THAT DAY - budget days before an eat-more step, "reached" days on it - and "N days logged" is every logged day', () => {
   // Mon-Thu ate 1900 / 2200 / 2000 / 1850 against the 2,000 kcal budget (2200 is over 2,100); Fri-Sun, on the step, 2150 / 2100 / 1950.
   const kcal = [1900, 2200, 2000, 1850, 2150, 2100, 1950];
-  const plan = (since: string, phase: 'given' | 'standing' = 'standing', outcome: 'falling' | null = null) => ({
+  const plan = (since: string, phase: 'given' | 'standing' | 'settled' = 'standing', outcome: 'falling' | null = null) => ({
     state: 'pace', verdict: 'on_track', nearlyThere: true,
     action: { kind: 'ease_to_maintenance', text: `Stay at ~2,150–2,200 kcal (the step you started ${since}); we'll read it later`, kcalTarget: 2150 },
     step: { since, readOn: '2026-10-19', phase, outcome, loKcal: 2150, hiKcal: 2200, food: false },
   }) as unknown as NonNullable<WeeklyReviewInput['weightPlan']>;
-  const review = (weightPlan: WeeklyReviewInput['weightPlan']) => computeWeeklyReview(weightLossInput({
-    intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, ...kcal]),
+  const review = (weightPlan: WeeklyReviewInput['weightPlan'], days = kcal) => computeWeeklyReview(weightLossInput({
+    intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, ...days]),
     weightPlan,
   }));
-  // The step began Friday (WEEK[4]): Mon-Thu are graded against 2,000 (3 of 4: the 2,200 is over), Fri-Sun are "reached" days (2 of 3: the 1,950 is not).
+  const dayStat = (r: WeeklyReview) => r.stats.find(s => ['Days in budget', 'Days on plan', 'On the step'].includes(s.label));
+  // The step began Friday (WEEK[4]): 3 of the 4 days before it were in budget (the 2,200 is over 2,100), 2 of the 3 on it reached ~2,150 (the 1,950 did not).
   const mid = review(plan(WEEK[4]));
-  const stat = statByLabel(mid, 'Days in budget')!;
-  assert.equal(stat.value, '3/4');
-  assert.equal(stat.comparison, `4 days logged · reached ~2,150 kcal on 2 of 3 days since Oct 2`);
-  assert.match(mid.headline, /in budget 3 of 4 logged days$/);
+  const stat = dayStat(mid)!;
+  assert.equal(stat.label, 'Days on plan');
+  assert.equal(stat.value, '5/7');
+  assert.equal(stat.comparison, '3/4 before the step · 2/3 since Oct 2');
+  assert.equal(stat.tone, 'good');
+  assert.match(mid.headline, /on plan 5 of 7 logged days$/);
   assert.doesNotMatch(JSON.stringify(mid), /2,150.kcal target/);
+  // A Wednesday with no log: 6 days logged - the value's denominator - not 7.
+  const sparse = review(plan(WEEK[4]), [1900, 2200, NaN, 1850, 2150, 2100, 1950].map(k => (Number.isNaN(k) ? 0 : k)));
+  assert.equal(dayStat(sparse)!.value, '4/6'); // (the value's denominator is the logged total: 6 days)
+  assert.equal(dayStat(sparse)!.comparison, '2/3 before the step · 2/3 since Oct 2');
+  // A step week where under half the step days were reached is not [good]: the same budget days, 0 of 3 on the step.
+  const missed = review(plan(WEEK[4]), [1900, 2000, 2000, 1850, 1900, 1950, 2000]);
+  assert.equal(dayStat(missed)!.value, '4/7');
+  assert.notEqual(dayStat(missed)!.tone, 'good');
   // The step starts the day AFTER the week (next Monday): nothing in the week was on it - all seven days against the budget.
   const after = review(plan(addDays(WEEK[6], 1), 'given'));
-  assert.equal(statByLabel(after, 'Days in budget')!.value, '5/7'); // (2,200 and 2,150 are over 2,100; graded against 2,150 the old way all seven were in)
-  assert.equal(statByLabel(after, 'Days in budget')!.comparison, 'across the week');
-  // A step that began before the week: no day of it is a budget day (3+ reached days are the read, 7 of 7 here are the step's own).
-  const before = review(plan(addDays(WEEK[0], -3)));
-  assert.equal(statByLabel(before, 'Days in budget'), undefined);
-  // A later notch (a read has happened): the days before it were on a level this review cannot see - they are not graded against the budget.
-  assert.equal(statByLabel(review(plan(WEEK[4], 'given', 'falling')), 'Days in budget'), undefined);
+  assert.equal(dayStat(after)!.label, 'Days in budget');
+  assert.equal(dayStat(after)!.value, '5/7'); // (2,200 and 2,150 are over 2,100; graded against 2,150 the old way all seven were in)
+  assert.equal(dayStat(after)!.comparison, 'across the week');
+  // A step that began before the week: every graded day is on it - its own stat, never no stat and never "in budget" (3 of 7: 2,200, 2,150 and 2,100 are in range).
+  const before = dayStat(review(plan(addDays(WEEK[0], -3))))!;
+  assert.equal(before.label, 'On the step');
+  assert.equal(before.value, '3/7');
+  assert.equal(before.comparison, '~2,150 kcal since Sep 25 · 7 logged');
+  assert.equal(before.tone, 'watch');
+  // A later notch (a read has happened): the days before it were on a level this review cannot see - only the days on the latest notch are graded.
+  const notch = dayStat(review(plan(WEEK[4], 'standing', 'falling')))!;
+  assert.equal(notch.label, 'On the step');
+  assert.equal(notch.value, '2/3');
+  // A settled maintenance level is not a step in progress: no step day, and (the level before it unknown) no budget day either.
+  assert.equal(dayStat(review(plan(WEEK[4], 'settled'))), undefined);
+  // Above the step's range +5% is over, not reached: a 2,594 day on the step does not count (2,150-2,200 -> 2,043-2,310).
+  const binge = dayStat(review(plan(WEEK[4]), [1900, 2200, 2000, 1850, 2150, 2594, 1950]))!;
+  assert.equal(binge.comparison, '3/4 before the step · 1/3 since Oct 2');
+  // The iOS tile cuts a comparison at ~44 characters: every day-stat comparison fits (the longest date is "Sep 25" / "Sep 28").
+  for (const r of [mid, sparse, review(plan(WEEK[4]), [1900, 2000, 2000, 1850, 1900, 1950, 2000]), after, review(plan(addDays(WEEK[0], -3))), review(plan(WEEK[4], 'standing', 'falling')), review(plan(WEEK[4]), [1900, 2200, 2000, 1850, 2150, 2594, 1950])]) {
+    for (const st of r.stats) assert.ok((st.comparison ?? '').length <= STAT_COMPARISON_MAX_CHARS, `${st.label}: "${st.comparison}"`);
+  }
 });

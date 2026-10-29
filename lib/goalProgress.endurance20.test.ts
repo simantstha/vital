@@ -159,7 +159,7 @@ test('build week: once the step is run the card warns while a day is left (a wat
   const spike = computeGoalProgress(input(weeks(sunday, [[[1, 9.4], [3, 9.3], [5, 9.3], [6, 12]], ...lastWeeks]), { todayKey: sunday }));
   assert.equal(spike.verdict, 'holding');
   assert.match(spike.headline, /^Over the safe step — 40 of ~25 km\. Hold ~28 km next week$/);
-  assert.match(spike.reasons[0].text, /injury risk — keep tomorrow's run easy and hold next week's step$/);
+  assert.match(spike.reasons[0].text, /injury risk\. Keep tomorrow's run easy and hold next week's step$/);
   assert.doesNotMatch(spike.reasons[0].text, /rest of the week/);
   // A maintain week that reached its goal says "goal".
   const maintain = computeGoalProgress(input(weeks(saturday, [[[1, 10], [3, 10], [5, 10]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: saturday }));

@@ -23,7 +23,7 @@ import { KG_TO_LB, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, ra
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { WEIGH_IN_GAP_DAYS, dayNumber, meanOver, rawPlateau } from './weightPace';
-import { isInstruction, STEP_REACHED_FRACTION, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
+import { isInstruction, stepDayReached, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
@@ -98,6 +98,8 @@ import { KM_PER_MILE } from './metricFormat';
 // ── Constants ───────────────────────────────────────────────────────────────
 
 export const REVIEW_HEADLINE_MAX_CHARS = 80;
+/** A review stat's comparison is cut at about this many characters in the iOS half-width tile (12 pt, two lines): the part past it is lost. */
+export const STAT_COMPARISON_MAX_CHARS = 44;
 export const MAX_REVIEW_STATS = 4;
 const KM_TO_MI = 0.621371;
 /** A logged day counts as within budget when kcal <= target x this (same as goalProgress). */
@@ -177,7 +179,7 @@ export type WeekGap =
    * Endurance: running km far ABOVE that week's safe step (a jump, not a
    * shortfall — see `isSpikeWeek`). Only when a step below the goal applies.
    */
-  | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number; ceiling?: boolean }
+  | { kind: 'spike'; doneKm: number; stepKm: number; targetKm: number; ceiling?: boolean; /** Wave 24e: the week over its number was a cutback week ("over this week's cutback"). */ cutback?: boolean }
   /** A cutback week that ran more than 10% over its lowered number (`targetKm`); `normalKm` is the week it replaced. */
   | { kind: 'cutback'; doneKm: number; targetKm: number; normalKm: number }
   /**
@@ -608,30 +610,48 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   return cand;
 }
 
+/** How a weight-loss week's logged days split across the levels in force (wave 24w): the days before an eat-more step against the budget, the step's own days as "reached". */
+interface DayGrades {
+  target: number;
+  /** The budget days (the days before the step, or every day without one): in budget / graded. */
+  hit: number;
+  logged: number;
+  /** The days on the step the user is following (given or standing): reached (within the step's range +/-5%) / on it. */
+  step: { loKcal: number; since: string; reached: number; logged: number } | null;
+  /** EVERY logged day of the week, graded or not ("6 days logged"). */
+  allLogged: number;
+}
+
 /**
- * Logged days of the week within the calorie budget; null without a target or under MIN_INTAKE_DAYS logged days.
- *
- * Each day is graded against the level in force ON THAT DAY (wave 24w; the whole week used to be graded against the coming week's step level,
+ * Each logged day is graded against the level in force ON THAT DAY (wave 24w; the whole week used to be graded against the coming week's step level,
  * so days eaten against the 2,000 kcal budget were counted against 2,150). When the coming week's plan is an eat-more step the user is following
- * (given or standing, no read yet) only the days BEFORE it began are budget days; the days on or after it are reported as "reached ~2,150 kcal
- * on N of M days" (`step`), never as "in budget". After a read the level before the latest notch is not known here, so no day is graded.
+ * (given or standing) the days on or after its start are the step's own - reported as "reached", never "in budget" - and the days before it are
+ * budget days only while no earlier notch can have been in force (no read yet): after a read the level before the latest notch is not known here.
  */
-function budgetDays(input: WeeklyReviewInput, week: Week): { target: number; hit: number; logged: number; step: { loKcal: number; since: string; reached: number; logged: number } | null } | null {
+function dayGrades(input: WeeklyReviewInput, week: Week): DayGrades | null {
   const target = input.budget?.targetKcal;
   if (target == null) return null;
   const all = loggedIntake(input.intakeDays, week);
   const plan = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
   const up = plan != null && plan.loKcal != null && plan.loKcal > target;
-  const following = up && (plan.phase === 'given' || plan.phase === 'standing') && plan.outcome == null;
-  const graded = !up ? all : following ? all.filter(d => d.day < plan.since) : [];
-  if (graded.length < MIN_INTAKE_DAYS) return null;
-  const hit = graded.filter(d => (d.kcal as number) <= target * CALORIE_ADHERENCE_TOLERANCE).length;
+  const following = up && (plan.phase === 'given' || plan.phase === 'standing');
+  const before = !up ? all : following && plan.outcome == null ? all.filter(d => d.day < plan.since) : [];
   const onStep = following ? all.filter(d => d.day >= plan.since) : [];
-  const loKcal = plan?.loKcal ?? 0;
+  const lo = plan?.loKcal ?? 0;
+  const hi = plan?.hiKcal ?? lo;
   return {
-    target, hit, logged: graded.length,
-    step: onStep.length > 0 && plan != null ? { loKcal, since: plan.since, reached: onStep.filter(d => (d.kcal as number) >= loKcal * STEP_REACHED_FRACTION).length, logged: onStep.length } : null,
+    target,
+    hit: before.filter(d => (d.kcal as number) <= target * CALORIE_ADHERENCE_TOLERANCE).length,
+    logged: before.length,
+    step: onStep.length > 0 && plan != null ? { loKcal: lo, since: plan.since, reached: onStep.filter(d => stepDayReached(d.kcal as number, lo, hi)).length, logged: onStep.length } : null,
+    allLogged: all.length,
   };
+}
+
+/** The budget days of the week (the rating and the budget gap grade these); null without a target or under MIN_INTAKE_DAYS of them. */
+function budgetDays(input: WeeklyReviewInput, week: Week): { target: number; hit: number; logged: number } | null {
+  const g = dayGrades(input, week);
+  return g != null && g.logged >= MIN_INTAKE_DAYS ? { target: g.target, hit: g.hit, logged: g.logged } : null;
 }
 
 const REVIEW_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -641,21 +661,41 @@ function monthDayText(day: string): string {
 }
 
 function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
-  const days = budgetDays(input, week);
-  if (!days) return null;
-  const { target, hit, logged } = days;
-  const frac = hit / logged;
-  const tone: ReviewTone = frac >= 0.7 ? 'good' : frac < 0.5 ? 'watch' : 'neutral';
-  // The step's own days (an eat-more step began in the week) are said as what they are: reached, or not (wave 24w).
-  const onStep = days.step != null ? ` · reached ~${withUnit(fmtKcal(days.step.loKcal), 'kcal')} on ${days.step.reached} of ${days.step.logged} days since ${monthDayText(days.step.since)}` : '';
-  const cand: Candidate = {
-    stat: {
-      label: 'Days in budget',
-      value: `${hit}/${logged}`,
-      comparison: `${logged < 7 ? `${logged} ${plural(logged, 'day')} logged` : 'across the week'}${onStep}`,
-      tone,
-    },
-  };
+  const g = dayGrades(input, week);
+  if (!g) return null;
+  const toneOf = (hit: number, n: number): ReviewTone => (hit / n >= 0.7 ? 'good' : hit / n < 0.5 ? 'watch' : 'neutral');
+  const loggedText = g.allLogged < 7 ? `${g.allLogged} ${plural(g.allLogged, 'day')} logged` : 'across the week';
+  const step = g.step;
+  if (g.logged < MIN_INTAKE_DAYS) {
+    // Every graded day is on the step: its own stat (wave 24w), never no stat and never "in budget".
+    if (step == null || step.logged < MIN_INTAKE_DAYS) return null;
+    return {
+      stat: {
+        label: 'On the step',
+        value: `${step.reached}/${step.logged}`,
+        // (Short: the iOS tile cuts a comparison at STAT_COMPARISON_MAX_CHARS - "~2,150 kcal since Jun 5 · 7 logged".)
+        comparison: `~${withUnit(fmtKcal(step.loKcal), 'kcal')} since ${monthDayText(step.since)} · ${g.allLogged} logged`,
+        tone: toneOf(step.reached, step.logged),
+      },
+    };
+  }
+  const { target, hit, logged } = g;
+  const tone = toneOf(hit, logged);
+  const cand: Candidate = { stat: { label: 'Days in budget', value: `${hit}/${logged}`, comparison: loggedText, tone } };
+  if (step != null) {
+    // An eat-more step began in the week: the stat counts the graded days across both levels and splits them; the win and slip below stay about the budget days.
+    const total = logged + step.logged;
+    const onPlan = hit + step.reached;
+    const combined = toneOf(onPlan, total);
+    cand.stat = {
+      label: 'Days on plan',
+      value: `${onPlan}/${total}`,
+      // The value's denominator IS every logged day here (the budget days plus the step's days), so "N logged" is not repeated: "3/4 before the step · 0/2 since Jun 5".
+      comparison: `${hit}/${logged} before the step · ${step.reached}/${step.logged} since ${monthDayText(step.since)}`,
+      // Under half the step's days reached is not a good week, whatever the budget days did.
+      tone: combined === 'good' && step.reached / step.logged < 0.5 ? 'neutral' : combined,
+    };
+  }
   if (tone === 'good') cand.win = `You stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged days.`;
   if (tone === 'watch') {
     cand.slip = `Only ${hit} of ${logged} logged days landed within your ${withUnit(fmtKcal(target), 'kcal')} target.`;
@@ -1530,7 +1570,7 @@ function planWeekAssessment(input: WeeklyReviewInput, week: Week, rp: ReviewPlan
   const goal = plan.goalKm;
   const stepped = plan.targetKm != null && plan.targetKm < goal;
   let gap: WeekGap | null = null;
-  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: plan.targetKm as number, targetKm: goal, ...(plan.upTo ? { ceiling: true } : {}) };
+  if (grade.gap === 'spike') gap = { kind: 'spike', doneKm: round1(km), stepKm: plan.targetKm as number, targetKm: goal, ...(plan.upTo ? { ceiling: true } : {}), ...(plan.cutback != null ? { cutback: true } : {}) };
   else if (grade.gap === 'short') {
     gap = plan.kind === 'baseline'
       ? { kind: 'sessions', done: rp.week.days, target: BASELINE_GOOD_RUN_DAYS }
@@ -1644,7 +1684,7 @@ function distanceHeadline(
     return `${distanceNumber(input, km)} of up to ~${distanceText(input, stepKm)} — ${overCapPhrase('well')} · goal ${distanceText(input, targetKm)}`;
   }
   if (opts.spike) {
-    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the safe step · goal ${distanceText(input, targetKm)}`;
+    return `${distanceNumber(input, km)} of ~${distanceText(input, stepKm)} — well above the ${opts.cutback ? 'cutback' : 'safe step'} · goal ${distanceText(input, targetKm)}`;
   }
   // A cutback week is graded against its own lowered number, so a week that ran far past it says so before the weekly goal is looked at
   // ("30 of ~24 km — above the cutback", never "30 of 30 km" that hides the skipped cutback).
@@ -1831,7 +1871,9 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       // "Hit" is the rounded reading reaching the step, or (wave 24e) 90% of it - the band in which the card says the week's km are done; 20 of ~22 km is close, and says what to aim for.
       if (distanceNumber(input, rp.week.km) < distanceNumber(input, target) && rp.week.km < target * WEEK_ON_PLAN_FRACTION - 1e-9) {
         // "Again" only when next week asks for the same step; a climb back after a break asks for more.
-        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) ? ` — aim for ~${distanceNumber(input, target)} again` : '';
+        // (Wave 24e: and no nudge for a shortfall under 3 km / 2 mi - the card called that "one short easy run or rest, either is fine".)
+        const stubKm = (u < 1 ? 2 : 3) / u;
+        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) && target - rp.week.km >= stubKm - 1e-9 ? ` — aim for ~${distanceNumber(input, target)} again` : '';
         return `Close to your step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${again}.`;
       }
       return `You hit this week's step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${pct != null && pct !== 0 ? ` (${signed(pct, `${Math.abs(pct)}%`)} ${onWhat})` : ''}.`;
@@ -1902,8 +1944,9 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
         : 'Weight steady',
       );
     }
-    const budget = by('Days in budget');
-    if (budget) parts.push(`in budget ${budget.value.replace('/', ' of ')} ${loggedWord(budget)}days`);
+    const budget = by('Days in budget') ?? by('Days on plan') ?? by('On the step');
+    // ("Days on plan" / "On the step" are logged days by definition; their short comparisons do not carry the word.)
+    if (budget) parts.push(`${budget.label === 'Days in budget' ? 'in budget' : budget.label === 'Days on plan' ? 'on plan' : 'on the step'} ${budget.value.replace('/', ' of ')} ${budget.label === 'Days in budget' ? loggedWord(budget) : 'logged '}days`);
     else if (sessions) parts.push(sessionCount(sessions));
     else if (weight && parts.length === 1) {
       // The weight stat alone: say how many weigh-ins it rests on.
@@ -2048,7 +2091,7 @@ function gapSlip(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWeek: W
       if (gap.ceiling === true) {
         return `Ran ${distanceText(input, gap.doneKm)} against an up-to-${distanceText(input, gap.stepKm)} ceiling — big jumps raise injury risk`;
       }
-      return `Jumped ${withUnit(round1(distanceNumber(input, gap.doneKm) - distanceNumber(input, gap.stepKm)), isImperial(input) ? 'mi' : 'km')} over this week's step — big jumps raise injury risk`;
+      return `Jumped ${withUnit(round1(distanceNumber(input, gap.doneKm) - distanceNumber(input, gap.stepKm)), isImperial(input) ? 'mi' : 'km')} over this week's ${gap.cutback === true ? 'cutback' : 'step'} — big jumps raise injury risk`;
     case 'phase': {
       const done = distanceText(input, gap.doneKm);
       const target = distanceText(input, gap.targetKm);
@@ -2474,7 +2517,12 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
     case 'hold': {
       // After the hold: build again toward the goal - or the taper, when that is what the week after is.
       const windAfter = weekAfterNextWindDown(input);
-      const thenBuild = windAfter != null ? thenWindDown(windAfter) : `then build ~${growth} a week toward ${goalText}`;
+      // Wave 24e: a hold at a comeback ceiling keeps the ladder alive (`hold.ladder`): it says "up to ~25% a week until you're back at your usual ~30 km", as every other comeback "Next week".
+      const ladder = next.hold?.ladder;
+      const thenBuild = windAfter != null ? thenWindDown(windAfter)
+        : ladder != null && ladder.medianKm > (next.targetKm as number) + 0.5
+          ? `then up to ~${Math.round((COMEBACK_MAX_GROWTH - 1) * 100)}% a week until you're back at your usual ~${distanceText(input, ladder.medianKm)}${ladder.medianKm < next.goalKm - 0.5 ? `, about ${growth} after that` : ''}`
+          : `then build ~${growth} a week toward ${goalText}`;
       text = next.hold?.skippedCutback === true
         // A cutback week that ran more than 10% over its lowered number: no +10% on it (wave 23e: no guilt). Wave 24e: the neutral note comes first ("Ran the
         // cutback as a normal week"), and "an easier week" is said only when the hold really is easier than the week just run.
