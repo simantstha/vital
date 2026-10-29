@@ -998,6 +998,20 @@ function toSignalPoints(days: GoalProgressIntakeDay[]) {
 /** A weekly weight trend under this share of bodyweight (as printed, 2 decimals) is "flat", not a direction. */
 const RATE_FLAT_PCT = 0.05;
 
+/**
+ * A lifter's weight-rate line (wave 24s): the kg is rounded to 0.1 ("about 0.1 kg/wk"), so a two-decimal percent beside it ("0.16% of bodyweight") disagreed
+ * with it; both are "about" ("about 0.1 kg/wk (about 0.2% of bodyweight)"). A flat trend quotes no figure ("flat 0.07 lb/wk" is just "flat"). The percent
+ * keeps its exact two decimals only where one decimal would land on the other side of a band edge (0.09 would read "0.1" beside "slower than lean gain
+ * (0.1–0.5%)"; 0.52 would read "0.5" beside "above the 0.5%"): the tone is decided on the exact number.
+ */
+function leanRateText(input: GoalProgressInput, w: WeightBlock, abs: number, flat: boolean, dir: string, band: { minPct: number; maxPct: number } | null, span: string): string {
+  if (flat) return `Trend weight flat over ${span}`;
+  const oneDecimal = round1(abs);
+  const crossesEdge = band != null && ((abs < band.minPct && oneDecimal >= band.minPct) || (abs >= band.maxPct && oneDecimal <= band.maxPct));
+  const pct = crossesEdge ? `${abs}%` : `about ${oneDecimal}%`;
+  return `Trend weight ${dir} about ${fmtWeight(input, Math.abs(w.rateKg as number), 1)}/wk (${pct} of bodyweight) over ${span}`;
+}
+
 function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: number; maxPct: number } | null): GoalProgressReason | null {
   if (w.rateKg == null || w.pctBw == null) return null;
   // Thresholds are compared against the number that is printed (2 decimals),
@@ -1011,6 +1025,7 @@ function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: nu
   // A lifter's slow lean gain is "about 0.4 lb/wk", not a two-decimal "0.37" that reads like a measurement (wave 23s); a flat rate keeps its figure.
   const perWeek = input.goal === 'muscle' && !flat ? `about ${fmtWeight(input, Math.abs(w.rateKg), 1)}` : fmtWeight(input, Math.abs(w.rateKg), 2);
   let text = `Trend weight ${dir} ${perWeek}/wk (${abs}% of bodyweight) over ${span}`;
+  if (input.goal === 'muscle') text = leanRateText(input, w, abs, flat, dir, band, span);
   let tone: ReasonTone = 'neutral';
   if (band) {
     const wantedDir = input.goal === 'weight_loss' ? w.rateKg < 0 : w.rateKg > 0;

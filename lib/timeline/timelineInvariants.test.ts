@@ -4058,6 +4058,31 @@ invariant(LIFTERS, 'P3-2: a week off then a session on the review\'s Monday: "to
   return out;
 });
 
+// ── P3-3. The lifter's weight-rate line (day 14-26): "about 0.1 kg/wk (0.16% of bodyweight)" had a rounded kg beside a 2-decimal percent that disagreed with it. Both
+// are "about" ("about 0.1 kg/wk (about 0.2% of bodyweight)"), and a flat trend quotes no figure at all ("flat 0.07 lb/wk" is just "flat").
+invariant(LIFTERS, 'P3-3: the weight-rate line says "about X kg/wk (about Y% of bodyweight)" for a gain and quotes no figure for a flat trend', (snaps, name) => {
+  const out: Violation[] = [];
+  let lines = 0;
+  for (const snap of snaps) {
+    const rate = snap.card?.reasons.find(r => r.kind === 'rate');
+    if (!rate) continue;
+    const text = plain(rate.text);
+    if (/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \(/.test(text)) {
+      lines++;
+      if (!/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \((?:about )?\d\.\d{1,2}% of bodyweight\) over /.test(text)) out.push({ snap, detail: `"${visible(rate.text)}"` });
+      const m = /\(about (\d\.\d)% of bodyweight\)/.exec(text);
+      const exact = /\((\d\.\d\d)% of bodyweight\)/.exec(text);
+      // The exact two-decimal figure survives only where one decimal would read as the other side of the 0.1 / 0.5 band edge (0.09 -> "0.1", 0.52 -> "0.5").
+      const v = exact ? Number(exact[1]) : NaN;
+      const edge = exact != null && ((v < 0.1 && Math.round(v * 10) / 10 >= 0.1) || (v >= 0.5 && Math.round(v * 10) / 10 <= 0.5));
+      if (!m && !edge) out.push({ snap, detail: `the percent is neither "about 0.2%" (one decimal) nor an exact figure at a band edge: "${visible(rate.text)}"` });
+    }
+    if (/^Trend weight flat \d/.test(text) || /^Trend weight flat [\d.]+ (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `a flat trend quotes a figure: "${visible(rate.text)}"` });
+  }
+  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(lines > 0, `${name}: no gain rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P2-A. A proactive deload. lifter_obedient added +2.5 kg to every lift every week for 14 weeks (bench 80 → 110 kg; the day-98 cue was "bench 110 → 112.5 kg")
 // and the app only ever praised a deload ("good timing after 3 straight weeks of heavier loads"), it never prescribed one. After 5 straight weeks in which
 // the next-load cue stepped up, the next review's cue is "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 125 kg, …"; the
