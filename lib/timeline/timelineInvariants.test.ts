@@ -4083,6 +4083,22 @@ invariant(LIFTERS, 'P3-3: the weight-rate line says "about X kg/wk (about Y% of 
   return out;
 });
 
+// ── P3-8. lifter_short_week day 57: "Progressing — Squat est. 1RM +9 kg" over an amber "11 of 16 planned sessions in 4 weeks (69%)". The "behind" call is made as of the last
+// day the window learned something (so it does not flip on a Tuesday with no news), the live count keeps sliding; under a Progressing headline the sessions line is
+// neutral, never amber - the same demotion the card already applies to a stale window.
+invariant(LIFTERS, 'P3-8: an adherence line is never amber under a "Progressing" verdict', (snaps, name) => {
+  const out: Violation[] = [];
+  let progressing = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card || card.verdict !== 'progressing') continue;
+    progressing++;
+    for (const r of card.reasons) if (r.kind === 'adherence' && r.tone === 'watch') out.push({ snap, detail: `"${visible(card.headline)}" over amber "${visible(r.text)}"` });
+  }
+  assert.ok(progressing > 0, `${name}: no Progressing day, so this invariant checked nothing`);
+  return out;
+});
+
 // ── P2-A. A proactive deload. lifter_obedient added +2.5 kg to every lift every week for 14 weeks (bench 80 → 110 kg; the day-98 cue was "bench 110 → 112.5 kg")
 // and the app only ever praised a deload ("good timing after 3 straight weeks of heavier loads"), it never prescribed one. After 5 straight weeks in which
 // the next-load cue stepped up, the next review's cue is "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 125 kg, …"; the

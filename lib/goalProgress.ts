@@ -2582,7 +2582,12 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     };
   }
 
-  if (liftState) return { ...liftState, reasons };
+  // A "Progressing" headline never sits over an amber sessions line (wave 24s P3-8, lifter_short_week day 57: "Progressing — Squat est. 1RM +9 kg" over "11 of 16
+  // planned sessions in 4 weeks (69%)"). The "behind" call is made as of the last day the window learned something while the live count keeps sliding, so the
+  // line is neutral there, as it already is for a stale window (`adherenceDemoted`); a real shortfall turns the verdict to "behind" and the line amber again.
+  const calmed = (verdict: GoalVerdict): GoalProgressReason[] =>
+    verdict === 'progressing' ? reasons.map(r => (r.kind === 'adherence' && r.tone === 'watch' ? { ...r, tone: 'neutral' as const } : r)) : reasons;
+  if (liftState) return { ...liftState, reasons: calmed(liftState.verdict) };
 
   // Lifts are logged but none can be compared yet (the first 4 weeks, or the
   // 4-weeks-ago weeks are empty after a gap): say when the comparison lands and
@@ -2616,7 +2621,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
       return {
         verdict: 'progressing',
         headline: clip(`Progressing — weight up ${shownPct}% a week, inside the gain band`),
-        reasons,
+        reasons: calmed('progressing'),
       };
     }
     return { verdict: 'stalled', headline: clip(`Stalled — weight is not trending up (${shownPct}% a week)`), reasons };
