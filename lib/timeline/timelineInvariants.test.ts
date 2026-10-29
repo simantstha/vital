@@ -4297,6 +4297,8 @@ function w24Logged(name: ScenarioName, from: string, to: string): number[] {
   return buildScenario(name).intake.filter(i => i.day >= from && i.day <= to && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD).map(i => i.kcal);
 }
 const w24Mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+/** A logged day on an eat-more step "reached" it within the step's range +/-5% (2,150-2,200 -> 2,043-2,310): above that it is over, not reached (group 6). */
+const w24Reached = (kcal: number, lo: number, hi: number): boolean => kcal >= lo * 0.95 && kcal <= hi * 1.05;
 
 invariant(W24_LOGGERS, 'P2-1: "the step you started" is said only when the logs since the step began show it (3+ logged days, their mean at least the step\'s low end - 50)', (snaps, name) => {
   const out: Violation[] = [];
@@ -4335,7 +4337,7 @@ invariant(W24_LOGGERS, 'P2-1: while an eat-more step is given or standing, the a
       continue;
     }
     seen++;
-    const hit = logged.filter(k => k >= step.loKcal! * 0.95).length;
+    const hit = logged.filter(k => w24Reached(k, step.loKcal!, step.hiKcal!)).length;
     const window = step.since > weekAgo ? `since ${w24Date(step.since)}` : 'in the last 7 days';
     const expected = `Reached ~${w24Kcal(step.loKcal)} kcal on ${hit} of ${logged.length} logged days ${window}`;
     if (adherence == null || plain(adherence.text) !== expected) out.push({ snap, detail: `expected "${expected}" but the card says ${adherence == null ? 'nothing' : `"${visible(adherence.text)}"`}` });
@@ -4514,46 +4516,116 @@ test('wave 24w harness: weight_loss_obedient adds the two 30-minute walks only w
   }
 });
 
-//   group 5  no review counts a logged day against a calorie level that started AFTER that day: the days before an eat-more step are graded against the budget in force, the step's own
-//            days as "reached ~2,150 kcal on N of M days since <start>", never "in budget".
+//   group 5/6  no review counts a logged day against a calorie level that started AFTER that day: the days before an eat-more step are graded against the budget in force, the step's own
+//               days as "reached" (within the step's range +/-5%); "N days logged" is every logged day of the week; the headline counts the graded days across both levels
+//               ("on plan 4 of 6 logged days"), the stat splits them ("3 of 4 before the step · 1 of 2 since Jun 5 — 6 days logged"), and a week spent entirely on the step is its own stat.
 
-invariant(WEIGHT, 'group 5: no review counts a day against a calorie level that started after that day: "Days in budget" covers the days before the step began (against the budget), the step\'s own days are "reached ~X kcal on N of M days since <start>"', (snaps, name) => {
+/** What the review's day stat must say for one week of a weight scenario, recomputed from the scenario's own rows and the Monday card's plan. */
+function w24ExpectedDayStat(name: ScenarioName, snap: DaySnapshot): { label: string; value: string; comparison: string; tone: 'good' | 'neutral' | 'watch'; headline: string; logged: number } | null {
   const scn = buildScenario(name);
   const budget = scn.budget.targetKcal as number;
+  const rv = snap.review;
+  if (rv == null) return null;
+  const step = snap.card?.weightRead?.plan?.step;
+  const up = step != null && step.loKcal != null && step.hiKcal != null && step.loKcal > budget;
+  const week = scn.intake.filter(i => i.day >= rv.weekStart && i.day <= addDays(rv.weekStart, 6) && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD);
+  const following = up && step != null && (step.phase === 'given' || step.phase === 'standing');
+  const before = !up ? week : following && step != null && step.outcome == null ? week.filter(i => i.day < step.since) : [];
+  const onStep = following && step != null ? week.filter(i => i.day >= step.since) : [];
+  const hitB = before.filter(i => i.kcal <= budget * 1.05).length;
+  const reachedS = step != null ? onStep.filter(i => w24Reached(i.kcal, step.loKcal as number, step.hiKcal as number)).length : 0;
+  const tone = (hit: number, n: number): 'good' | 'neutral' | 'watch' => (hit / n >= 0.7 ? 'good' : hit / n < 0.5 ? 'watch' : 'neutral');
+  const all = week.length;
+  if (before.length >= 3 && onStep.length === 0) {
+    return { label: 'Days in budget', value: `${hitB}/${before.length}`, comparison: all < 7 ? `${all} days logged` : 'across the week', tone: tone(hitB, before.length), headline: `in budget ${hitB} of ${before.length}`, logged: all };
+  }
+  if (before.length >= 3 && step != null) {
+    const t = tone(hitB + reachedS, before.length + onStep.length);
+    return {
+      label: 'Days on plan', value: `${hitB + reachedS}/${before.length + onStep.length}`,
+      comparison: `${hitB} of ${before.length} before the step · ${reachedS} of ${onStep.length} since ${w24Date(step.since)} — ${all} days logged`,
+      tone: t === 'good' && reachedS / onStep.length < 0.5 ? 'neutral' : t, headline: `on plan ${hitB + reachedS} of ${before.length + onStep.length}`, logged: all,
+    };
+  }
+  if (onStep.length >= 3 && step != null) {
+    return {
+      label: 'On the step', value: `${reachedS}/${onStep.length}`,
+      comparison: `reached ~${w24Kcal(step.loKcal as number)} kcal since ${w24Date(step.since)} · ${all} days logged`, tone: tone(reachedS, onStep.length), headline: `on the step ${reachedS} of ${onStep.length}`, logged: all,
+    };
+  }
+  return null;
+}
+
+invariant(WEIGHT, 'group 5/6: the review\'s day stat grades each logged day against the level in force that day, splits the budget days from the step\'s reached days, counts "N days logged" over EVERY logged day, and the headline counts the graded days', (snaps, name) => {
   const out: Violation[] = [];
   let compared = 0;
   for (const snap of w23Mondays(snaps)) {
     const rv = snap.review;
-    const stat = rv?.review.stats.find(s => s.label === 'Days in budget');
-    if (rv == null || stat == null) continue;
-    const step = snap.card?.weightRead?.plan?.step;
-    const up = step != null && step.loKcal != null && step.loKcal > budget;
-    const weekEnd = addDays(rv.weekStart, 6);
-    const logged = scn.intake.filter(i => i.day >= rv.weekStart && i.day <= weekEnd && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD);
-    const stepOn = up && step != null && (step.phase === 'given' || step.phase === 'standing') && step.outcome == null;
-    const graded = !up ? logged : stepOn && step != null ? logged.filter(i => i.day < step.since) : [];
-    compared++;
-    const expected = `${graded.filter(i => i.kcal <= budget * 1.05).length}/${graded.length}`;
-    if (graded.length < 3 || stat.value !== expected) {
-      out.push({ snap, detail: `week of ${rv.weekStart}, step since ${step?.since ?? 'none'} (${step?.phase ?? '-'}): "Days in budget ${stat.value}" but the ${graded.length} logged day(s) before the step graded against ${budget} kcal give ${expected}` });
+    if (rv == null || !rv.review.dataSufficiency.sufficient) continue;
+    const stat = rv.review.stats.find(s => ['Days in budget', 'Days on plan', 'On the step'].includes(s.label));
+    const want = w24ExpectedDayStat(name, snap);
+    if (stat == null) {
+      // A reached week carries no day stat; any other week must show the one it earned.
+      if (want != null && rv.review.verdict !== 'reached') out.push({ snap, detail: `week of ${rv.weekStart}: expected "${want.label} ${want.value}" but the review shows no day stat` });
       continue;
     }
-    const stepDays = stepOn && step != null ? logged.filter(i => i.day >= step.since) : [];
-    const note = /reached ~([\d,]+) kcal on (\d+) of (\d+) days since/.exec(plain(stat.comparison ?? ''));
-    if (stepDays.length > 0 && step != null) {
-      const reached = stepDays.filter(i => i.kcal >= (step.loKcal as number) * 0.95).length;
-      if (note == null || Number(note[2]) !== reached || Number(note[3]) !== stepDays.length || Number(note[1].replace(/,/g, '')) !== step.loKcal) {
-        out.push({ snap, detail: `the step's ${stepDays.length} logged day(s) reached ~${step.loKcal} on ${reached}, but the stat says "${visible(stat.comparison ?? '')}"` });
-      }
-    } else if (note != null) {
-      out.push({ snap, detail: `no logged day was on the step, yet the stat says "${visible(stat.comparison ?? '')}"` });
-    }
+    compared++;
+    if (want == null) { out.push({ snap, detail: `week of ${rv.weekStart}: "${stat.label} ${stat.value}" shown but no day stat is due (${visible(stat.comparison ?? '')})` }); continue; }
+    const got = `${stat.label}|${stat.value}|${plain(stat.comparison ?? '')}|${stat.tone}`;
+    const exp = `${want.label}|${want.value}|${want.comparison}|${want.tone}`;
+    if (got !== exp) out.push({ snap, detail: `expected [${exp}] but the review says [${got}]` });
+    const headline = plain(rv.review.headline).toLowerCase();
+    if (!headline.includes(`${want.headline} logged day`) && !headline.includes(`${want.headline} days`)) out.push({ snap, detail: `headline "${visible(rv.review.headline)}" does not count the graded days as "${want.headline}"` });
     for (const t of reviewTexts(snap)) {
       const m = /(?:within your|\() ?([\d,]{4,})\s?kcal target/.exec(plain(t.text));
+      const budget = buildScenario(name).budget.targetKcal as number;
       if (m != null && Number(m[1].replace(/,/g, '')) !== budget) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" quotes a ${m[1]} kcal target; the budget in force for the graded days was ${budget}` });
     }
   }
-  if (name !== 'weight_loss') assert.ok(compared > 0, `${name}: no review showed "Days in budget", so this invariant checked nothing`);
+  if (name !== 'weight_loss') assert.ok(compared > 0, `${name}: no review showed a day stat, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(W24_LOGGERS, 'P2-1: the review\'s "N days logged" is the number of logged days in that week (not only the graded ones)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    const stat = rv?.review.stats.find(s => ['Days in budget', 'Days on plan', 'On the step'].includes(s.label));
+    if (rv == null || stat == null) continue;
+    const logged = scn.intake.filter(i => i.day >= rv.weekStart && i.day <= addDays(rv.weekStart, 6) && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD).length;
+    const m = /(\d+) days? logged/.exec(plain(stat.comparison ?? ''));
+    seen++;
+    const said = m != null ? Number(m[1]) : /across the week/.test(plain(stat.comparison ?? '')) ? 7 : -1;
+    if (said !== logged) out.push({ snap, detail: `"${stat.label} ${stat.value} — ${visible(stat.comparison ?? '')}" but ${logged} days were logged in the week of ${rv.weekStart}` });
+  }
+  assert.ok(seen > 0, `${name}: no review showed a day stat, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(W24_LOGGERS, 'P3-3: a logged day above the step\'s high end x 1.05 is never counted as "reached" (card line and review)', (snaps, name) => {
+  const scn = buildScenario(name);
+  const kcalOf = new Map(scn.intake.map(i => [i.day, i.kcal]));
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const step = snap.card?.weightRead?.plan?.step;
+    if (step == null || step.loKcal == null || step.hiKcal == null) continue;
+    const line = snap.card?.reasons.find(r => r.kind === 'calorie_adherence' && /^Reached/.test(plain(r.text)));
+    const stats = [line?.text, ...(snap.review?.review.stats ?? []).map(s => s.comparison)].filter((t): t is string => t != null);
+    for (const text of stats) {
+      const m = /reached ~[\d,]+ kcal on (\d+) of (\d+)/i.exec(plain(text));
+      if (m == null) continue;
+      seen++;
+      // The most the days in range could be: those at or under the ceiling (no day over it may be counted).
+      const days = [...kcalOf.entries()].filter(([d]) => d >= step.since && d <= snap.date && d >= addDays(snap.date, -(snap.review != null && text !== line?.text ? 7 : 6)));
+      const over = days.filter(([, k]) => k > step.hiKcal! * 1.05).length;
+      const inRange = days.filter(([, k]) => w24Reached(k, step.loKcal!, step.hiKcal!)).length;
+      if (Number(m[1]) > inRange && over > 0) out.push({ snap, detail: `"${visible(text)}" counts ${m[1]} reached, but only ${inRange} logged day(s) are within ${Math.round(step.loKcal! * 0.95)}-${Math.round(step.hiKcal! * 1.05)} kcal and ${over} are above it` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no "reached" count was shown, so this invariant checked nothing`);
   return out;
 });
 

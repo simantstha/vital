@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { plainSpaces } from './displayText';
 import {
-  calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weightWeekPlan, type WeightPlanInput, type WeightWeekPlan,
+  calorieFloorKcal, isInstruction, stepDayReached, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weightWeekPlan, type WeightPlanInput, type WeightWeekPlan,
 } from './weightWeekPlan';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 
@@ -823,4 +823,18 @@ test('P2-1 (24w): on the read day a step that was not taken is not "replaced": "
   // Logs well above the step (it was taken, and then some): the old sentence - the figure replaces the step.
   const higher = intake(range(40, 100), n => (n < 56 ? 2000 : 2400) + jitter(n));
   assert.equal(plainSpaces(at(70, higher).action.text), "You've held about 84 kg on ~2,400 kcal — make that your maintenance target (it replaces the step to ~2,150–2,200 kcal)");
+});
+
+test('P3-3 (24w group 6): a logged day "reached" a step within its range +/-5% - above the high end x 1.05 it is over, below the low end x 0.95 it is short', () => {
+  // 2,150-2,200 -> 2,042.5 .. 2,310
+  assert.equal(stepDayReached(2150, 2150, 2200), true);
+  assert.equal(stepDayReached(2123, 2150, 2200), true, 'the obedient user\'s 2,123');
+  assert.equal(stepDayReached(2310, 2150, 2200), true);
+  assert.equal(stepDayReached(2311, 2150, 2200), false);
+  assert.equal(stepDayReached(2594, 2150, 2200), false, 'a 2,594 day is over the step, not reached');
+  assert.equal(stepDayReached(2043, 2150, 2200), true);
+  assert.equal(stepDayReached(2042, 2150, 2200), false);
+  // A single figure: 2,150 -> 2,042.5 .. 2,257.5
+  assert.equal(stepDayReached(2257, 2150, 2150), true);
+  assert.equal(stepDayReached(2258, 2150, 2150), false);
 });

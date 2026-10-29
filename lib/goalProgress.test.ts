@@ -3456,6 +3456,9 @@ function easingStepInput(lastDays: number[]): GoalProgressInput {
 test('P2-1 (24w): an eat-more step is graded "Reached ~2,150 kcal on N of M logged days since <start>" - never "stayed within", never on days before it began', () => {
   // Eating at the step since it began (Oct 2: 2,150, 2,300, 2,100, 2,000, 2,050): the step is claimed; 4 of the 5 days reached ~2,150 (2,000 did not).
   const taken = computeGoalProgress(easingStepInput([2150, 2300, 2100, 2000, 2050]));
+  // (Wave 24w group 6: "reached" has a ceiling - the step's high end +5%, 2,310 here - so a 2,594 day is over, not reached.)
+  const binge = computeGoalProgress(easingStepInput([2150, 2594, 2100, 2000, 2050]));
+  assert.equal(binge.reasons.find(r => r.kind === 'calorie_adherence')?.text, 'Reached ~2,150 kcal on 3 of 5 logged days since Oct 2');
   assert.equal(taken.weightRead?.plan?.step?.phase, 'standing');
   assert.equal(taken.weightRead?.plan?.step?.since, addDays(TODAY, -4));
   assert.equal(taken.reasons.find(r => r.kind === 'action')?.text, "Stay at ~2,150–2,200 kcal (the step you started Oct 2); we'll read it on Mon, Oct 19");

@@ -102,8 +102,8 @@ import {
 import {
   FAT_LOSS_MIN_PCT,
   PLATEAU_SPAN_DAYS,
-  STEP_REACHED_FRACTION,
   WEEK_MEAN_MIN_WEIGH_INS,
+  stepDayReached,
   fmtWeekday,
   weightWeekPlan,
   type WeightPlanPace,
@@ -1100,7 +1100,8 @@ function calorieAdherenceStats(input: GoalProgressInput, levelKcal: number | nul
 /**
  * An eat-more step (wave 24w): "Reached ~2,150 kcal on 4 of 5 logged days since Jun 5". Only the logged days on or after the day the step began
  * count (a day eaten against the old budget is never judged against the new level), and "reached" is the right word for an instruction to
- * eat MORE - not "stayed within". After the step's first week the window is the last 7 days. Null under 3 logged days.
+ * eat MORE - not "stayed within" - within the step's range +/-5% (`stepDayReached`: a day far above it is over, not reached). After the step's
+ * first week the window is the last 7 days. Null under 3 logged days.
  */
 function stepAdherenceReason(input: GoalProgressInput, step: WeightPlanStep): GoalProgressReason | null {
   const lo = step.loKcal;
@@ -1109,7 +1110,7 @@ function stepAdherenceReason(input: GoalProgressInput, step: WeightPlanStep): Go
     d => d.day >= step.since && d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD,
   );
   if (logged.length < MIN_LOGGED_DAYS_FOR_ADHERENCE) return null;
-  const reached = logged.filter(d => (d.kcal as number) >= lo * STEP_REACHED_FRACTION).length;
+  const reached = logged.filter(d => stepDayReached(d.kcal as number, lo, step.hiKcal ?? lo)).length;
   const startedThisWeek = step.since > addDays(input.todayKey, -6);
   const window = startedThisWeek ? `since ${fmtDate(step.since, input.todayKey)}` : 'in the last 7 days';
   return {

@@ -23,7 +23,7 @@ import { KG_TO_LB, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, ra
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { WEIGH_IN_GAP_DAYS, dayNumber, meanOver, rawPlateau } from './weightPace';
-import { isInstruction, STEP_REACHED_FRACTION, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
+import { isInstruction, stepDayReached, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
@@ -605,30 +605,48 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   return cand;
 }
 
+/** How a weight-loss week's logged days split across the levels in force (wave 24w): the days before an eat-more step against the budget, the step's own days as "reached". */
+interface DayGrades {
+  target: number;
+  /** The budget days (the days before the step, or every day without one): in budget / graded. */
+  hit: number;
+  logged: number;
+  /** The days on the step the user is following (given or standing): reached (within the step's range +/-5%) / on it. */
+  step: { loKcal: number; since: string; reached: number; logged: number } | null;
+  /** EVERY logged day of the week, graded or not ("6 days logged"). */
+  allLogged: number;
+}
+
 /**
- * Logged days of the week within the calorie budget; null without a target or under MIN_INTAKE_DAYS logged days.
- *
- * Each day is graded against the level in force ON THAT DAY (wave 24w; the whole week used to be graded against the coming week's step level,
+ * Each logged day is graded against the level in force ON THAT DAY (wave 24w; the whole week used to be graded against the coming week's step level,
  * so days eaten against the 2,000 kcal budget were counted against 2,150). When the coming week's plan is an eat-more step the user is following
- * (given or standing, no read yet) only the days BEFORE it began are budget days; the days on or after it are reported as "reached ~2,150 kcal
- * on N of M days" (`step`), never as "in budget". After a read the level before the latest notch is not known here, so no day is graded.
+ * (given or standing) the days on or after its start are the step's own - reported as "reached", never "in budget" - and the days before it are
+ * budget days only while no earlier notch can have been in force (no read yet): after a read the level before the latest notch is not known here.
  */
-function budgetDays(input: WeeklyReviewInput, week: Week): { target: number; hit: number; logged: number; step: { loKcal: number; since: string; reached: number; logged: number } | null } | null {
+function dayGrades(input: WeeklyReviewInput, week: Week): DayGrades | null {
   const target = input.budget?.targetKcal;
   if (target == null) return null;
   const all = loggedIntake(input.intakeDays, week);
   const plan = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
   const up = plan != null && plan.loKcal != null && plan.loKcal > target;
-  const following = up && (plan.phase === 'given' || plan.phase === 'standing') && plan.outcome == null;
-  const graded = !up ? all : following ? all.filter(d => d.day < plan.since) : [];
-  if (graded.length < MIN_INTAKE_DAYS) return null;
-  const hit = graded.filter(d => (d.kcal as number) <= target * CALORIE_ADHERENCE_TOLERANCE).length;
+  const following = up && (plan.phase === 'given' || plan.phase === 'standing');
+  const before = !up ? all : following && plan.outcome == null ? all.filter(d => d.day < plan.since) : [];
   const onStep = following ? all.filter(d => d.day >= plan.since) : [];
-  const loKcal = plan?.loKcal ?? 0;
+  const lo = plan?.loKcal ?? 0;
+  const hi = plan?.hiKcal ?? lo;
   return {
-    target, hit, logged: graded.length,
-    step: onStep.length > 0 && plan != null ? { loKcal, since: plan.since, reached: onStep.filter(d => (d.kcal as number) >= loKcal * STEP_REACHED_FRACTION).length, logged: onStep.length } : null,
+    target,
+    hit: before.filter(d => (d.kcal as number) <= target * CALORIE_ADHERENCE_TOLERANCE).length,
+    logged: before.length,
+    step: onStep.length > 0 && plan != null ? { loKcal: lo, since: plan.since, reached: onStep.filter(d => stepDayReached(d.kcal as number, lo, hi)).length, logged: onStep.length } : null,
+    allLogged: all.length,
   };
+}
+
+/** The budget days of the week (the rating and the budget gap grade these); null without a target or under MIN_INTAKE_DAYS of them. */
+function budgetDays(input: WeeklyReviewInput, week: Week): { target: number; hit: number; logged: number } | null {
+  const g = dayGrades(input, week);
+  return g != null && g.logged >= MIN_INTAKE_DAYS ? { target: g.target, hit: g.hit, logged: g.logged } : null;
 }
 
 const REVIEW_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -638,21 +656,39 @@ function monthDayText(day: string): string {
 }
 
 function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
-  const days = budgetDays(input, week);
-  if (!days) return null;
-  const { target, hit, logged } = days;
-  const frac = hit / logged;
-  const tone: ReviewTone = frac >= 0.7 ? 'good' : frac < 0.5 ? 'watch' : 'neutral';
-  // The step's own days (an eat-more step began in the week) are said as what they are: reached, or not (wave 24w).
-  const onStep = days.step != null ? ` · reached ~${withUnit(fmtKcal(days.step.loKcal), 'kcal')} on ${days.step.reached} of ${days.step.logged} days since ${monthDayText(days.step.since)}` : '';
-  const cand: Candidate = {
-    stat: {
-      label: 'Days in budget',
-      value: `${hit}/${logged}`,
-      comparison: `${logged < 7 ? `${logged} ${plural(logged, 'day')} logged` : 'across the week'}${onStep}`,
-      tone,
-    },
-  };
+  const g = dayGrades(input, week);
+  if (!g) return null;
+  const toneOf = (hit: number, n: number): ReviewTone => (hit / n >= 0.7 ? 'good' : hit / n < 0.5 ? 'watch' : 'neutral');
+  const loggedText = g.allLogged < 7 ? `${g.allLogged} ${plural(g.allLogged, 'day')} logged` : 'across the week';
+  const step = g.step;
+  if (g.logged < MIN_INTAKE_DAYS) {
+    // Every graded day is on the step: its own stat (wave 24w), never no stat and never "in budget".
+    if (step == null || step.logged < MIN_INTAKE_DAYS) return null;
+    return {
+      stat: {
+        label: 'On the step',
+        value: `${step.reached}/${step.logged}`,
+        comparison: `reached ~${withUnit(fmtKcal(step.loKcal), 'kcal')} since ${monthDayText(step.since)} · ${g.allLogged} ${plural(g.allLogged, 'day')} logged`,
+        tone: toneOf(step.reached, step.logged),
+      },
+    };
+  }
+  const { target, hit, logged } = g;
+  const tone = toneOf(hit, logged);
+  const cand: Candidate = { stat: { label: 'Days in budget', value: `${hit}/${logged}`, comparison: loggedText, tone } };
+  if (step != null) {
+    // An eat-more step began in the week: the stat counts the graded days across both levels and splits them; the win and slip below stay about the budget days.
+    const total = logged + step.logged;
+    const onPlan = hit + step.reached;
+    const combined = toneOf(onPlan, total);
+    cand.stat = {
+      label: 'Days on plan',
+      value: `${onPlan}/${total}`,
+      comparison: `${hit} of ${logged} before the step · ${step.reached} of ${step.logged} since ${monthDayText(step.since)} — ${g.allLogged} ${plural(g.allLogged, 'day')} logged`,
+      // Under half the step's days reached is not a good week, whatever the budget days did.
+      tone: combined === 'good' && step.reached / step.logged < 0.5 ? 'neutral' : combined,
+    };
+  }
   if (tone === 'good') cand.win = `You stayed within your ${withUnit(fmtKcal(target), 'kcal')} target on ${hit} of ${logged} logged days.`;
   if (tone === 'watch') {
     cand.slip = `Only ${hit} of ${logged} logged days landed within your ${withUnit(fmtKcal(target), 'kcal')} target.`;
@@ -1885,8 +1921,8 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
         : 'Weight steady',
       );
     }
-    const budget = by('Days in budget');
-    if (budget) parts.push(`in budget ${budget.value.replace('/', ' of ')} ${loggedWord(budget)}days`);
+    const budget = by('Days in budget') ?? by('Days on plan') ?? by('On the step');
+    if (budget) parts.push(`${budget.label === 'Days in budget' ? 'in budget' : budget.label === 'Days on plan' ? 'on plan' : 'on the step'} ${budget.value.replace('/', ' of ')} ${loggedWord(budget)}days`);
     else if (sessions) parts.push(sessionCount(sessions));
     else if (weight && parts.length === 1) {
       // The weight stat alone: say how many weigh-ins it rests on.
