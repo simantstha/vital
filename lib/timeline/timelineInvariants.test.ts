@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { TAPER_GOOD_MIN_FRACTION, longRunStepKm, racePhaseInfo } from '../enduranceProgression';
 import { weekFitsSessionTarget, type GoalLiftReturn } from '../goalProgress';
-import { liftLapseMinDays, liftReturnDisplay, liftShortName } from '../liftChange';
+import { easedLoad, liftLapseMinDays, liftReturnDisplay, liftShortName, nextWorkingLoad } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline, stepDay } from './engine';
@@ -2780,8 +2780,9 @@ invariant(LIFTERS, 'while every lift is rebuilding the card and review headlines
 
 // ── Day 70: the Monday review said "2nd week off — book one easy session today at ~90% … (Squat ~102.5 kg)" on the Monday she had already
 // squatted 110 kg. A review read on a day she has already lifted (the loader reads her sets relative to the real clock, and the review is
-// recomputed when opened) never tells her to start today; after a week without a session it says she is already back, and names the session.
-invariant(LIFTERS, 'a review read on a Monday she has already lifted does not say "today" (a week off: "You\'re already back — Monday\'s 110 kg squat was your first session; …")', (snaps, name) => {
+// recomputed when opened) never tells her to start today; after a week without a session it says she is already back, and names the session
+// ("today's 110 kg squat", wave 24s: it is read that same Monday). "today" only ever appears as "today's".
+invariant(LIFTERS, 'a review read on a Monday she has already lifted does not tell her to start today (a week off: "You\'re already back — today\'s 110 kg squat was your first session; …")', (snaps, name) => {
   const scn = buildScenario(name);
   const trained = new Set(scn.sets.filter(x => !x.isWarmup).map(x => x.day));
   const out: Violation[] = [];
@@ -2789,14 +2790,14 @@ invariant(LIFTERS, 'a review read on a Monday she has already lifted does not sa
   for (const snap of snaps) {
     const r = snap.review?.review;
     if (!r || !trained.has(snap.date)) continue;
-    if (/\btoday\b/i.test(plain(r.nextWeek))) out.push({ snap, detail: `she lifted on ${snap.date}, but review.nextWeek says "${visible(r.nextWeek)}"` });
+    if (/\btoday\b(?!'s)/i.test(plain(r.nextWeek))) out.push({ snap, detail: `she lifted on ${snap.date}, but review.nextWeek says "${visible(r.nextWeek)}"` });
     if (r.weekGap?.kind === 'sessions' && r.weekGap.done === 0) {
       weeksOff++;
       const imperial = scn.profile.units === 'imperial';
       const lifted = scn.sets.filter(x => !x.isWarmup && x.day === snap.date && x.loadKg != null).map(x => (imperial ? Math.round((x.loadKg as number) * 2.20462) : (x.loadKg as number)));
-      const head = /^You're already back — Monday's (\d+(?:\.\d+)?)\s(?:kg|lb) \w+(?: and \d+(?:\.\d+)?\s(?:kg|lb) [\w ]+)? (?:was|were) your first session; /.exec(plain(r.nextWeek));
-      if (!head) out.push({ snap, detail: `a week off, then a session on the review's Monday: review.nextWeek "${visible(r.nextWeek)}" should open "You're already back — Monday's … was your first session; …"` });
-      else if (!lifted.includes(Number(head[1]))) out.push({ snap, detail: `review.nextWeek names ${head[1]} but she lifted ${lifted.join(', ')} that Monday` });
+      const head = /^You're already back — today's ~?(\d+(?:\.\d+)?)\s(?:kg|lb) \w+(?: and ~?\d+(?:\.\d+)?\s(?:kg|lb) [\w ]+)? (?:was|were) your first session; /.exec(plain(r.nextWeek));
+      if (!head) out.push({ snap, detail: `a week off, then a session on the review's Monday: review.nextWeek "${visible(r.nextWeek)}" should open "You're already back — today's … was your first session; …"` });
+      else if (!lifted.some(l => Math.abs(l - Number(head[1])) <= (imperial ? 2.5 : 1.25) + 1e-9)) out.push({ snap, detail: `review.nextWeek names ${head[1]} but she lifted ${lifted.join(', ')} that Monday` });
     }
   }
   if (name === 'lifter') assert.ok(weeksOff > 0, `${name}: no week off was followed by a session on the review's Monday, so this invariant checked nothing`);
@@ -4008,6 +4009,52 @@ invariant(LIFTERS, 'P3-1: a lift name is capitalised only at the start of a line
       }
     }
   }
+  return out;
+});
+
+// ── P3-2. "You're already back" (day 70): read that same Monday, so "today's 110 kg squat and 85 kg bench were your first session"; the load of the main lift not
+// yet done is given ("deadlift ~122.5 kg next": about 95% of its last working load, on the plate grid), and a lift has ONE figure: the squat's is the same grid
+// start the next review's cue quotes ("~245 lb" here and in "Squat ~245 → 250 lb"), not "243 lb" in one place and "~240" in the other.
+invariant(LIFTERS, 'P3-2: a week off then a session on the review\'s Monday: "today\'s" lifts quote the cue\'s figure, and the lift not yet done gets its ~95% load', (snaps, name) => {
+  const scn = buildScenario(name);
+  const imperial = scn.profile.units === 'imperial';
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r || r.weekGap?.kind !== 'sessions' || r.weekGap.done !== 0) continue;
+    const trainedToday = scn.sets.some(x => !x.isWarmup && x.day === snap.date);
+    if (!trainedToday) continue;
+    checked++;
+    const text = plain(r.nextWeek);
+    const topToday = (exercise: string): number | null => {
+      const loads = scn.sets.filter(x => x.exercise === exercise && !x.isWarmup && x.day === snap.date && x.loadKg != null).map(x => x.loadKg as number);
+      return loads.length > 0 ? Math.max(...loads) : null;
+    };
+    const lastTop = (exercise: string): number | null => {
+      for (let back = 0; back < 12; back++) { const kg = weekTopKg24s(name, exercise, addDays(r.weekStart, -7 * back)); if (kg != null) return kg; }
+      return null;
+    };
+    const lead = /^You're already back — today's ([^;]*?) (?:was|were) your first session; ([^.]*)\./.exec(text);
+    if (!lead) { out.push({ snap, detail: `review.nextWeek "${visible(r.nextWeek)}" does not open with "You're already back — today's … first session; …"` }); continue; }
+    for (const m of lead[1].matchAll(/(~?)(\d+(?:\.\d+)?) (kg|lb) (squat|bench|deadlift)/g)) {
+      const exercise = LIFT_EXERCISE_24S[m[4]];
+      const kg = topToday(exercise);
+      if (kg == null) continue;
+      const want = nextWorkingLoad(kg, exercise, imperial);
+      if (Number(m[2]) !== want.start || (m[1] === '~') !== want.approx) out.push({ snap, detail: `today's ${m[0]}: the cue quotes ${want.approx ? '~' : ''}${want.start} ${want.unit} for the same set (review.nextWeek "${visible(r.nextWeek)}")` });
+    }
+    // The main lifts not lifted today and trained before: "deadlift ~122.5 kg next" (about 95% of the last working load).
+    for (const exercise of ['squat', 'bench press', 'deadlift']) {
+      if (topToday(exercise) != null) continue;
+      const kg = lastTop(exercise);
+      if (kg == null) continue;
+      const eased = easedLoad(kg, 0.95, imperial);
+      const word = exercise === 'bench press' ? 'bench' : exercise;
+      if (!new RegExp(`${word} ~${eased.value} ${eased.unit}`).test(text)) out.push({ snap, detail: `${exercise} was not lifted today (last working load ${kg} kg) but review.nextWeek has no "${word} ~${eased.value} ${eased.unit}": "${visible(r.nextWeek)}"` });
+    }
+  }
+  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(checked > 0, `${name}: no week off was followed by a session on the review's Monday, so this invariant checked nothing`);
   return out;
 });
 
