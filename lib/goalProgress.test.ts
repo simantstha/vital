@@ -1517,7 +1517,8 @@ test('long run: an easy run after the long run does not replace lastKm; non-runn
 });
 
 test('long run: runs older than 28 days are ignored; null without running distances or for other goals', () => {
-  const old = computeGoalProgress(distanceInput({ 28: 20, 40: 21, 3: 9 }));
+  // (A 5 km run 10 days ago keeps the 9 km Saturday from being the first run back after a break - wave 24e: that week would be a restart week.)
+  const old = computeGoalProgress(distanceInput({ 28: 20, 40: 21, 3: 9, 10: 5 }));
   assert.deepEqual(old.longRun, { lastKm: 9, peakKm: 9, targetPeakKm: null, nextKm: 9 });
   const none = computeGoalProgress(enduranceInput([3, 3, 3, 3]));
   assert.equal(none.longRun, null);

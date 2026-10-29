@@ -14,16 +14,17 @@ records what the REAL pure server functions return: goal card, coach goal lines,
 
 **Scenarios:** `lifter` (+ `lifter_imperial`: lb copy and the 5 lb step; `lifter_short_week`: one bad week where the week alone, not a
 lapse, must hold "Progressing" back; `lifter_obedient`: lifts exactly the loads the reviews prescribe, one ill week), `weight_loss` (+ `_logged`: plateau, a 12-day gap, trims; `_obedient`: reads the real card every day and does exactly what it says - eats the stated kcal, adds the walks, logs when asked, takes the maintenance step and holds it; built once per process, it runs the card ~110 times), `runner_on_plan` (+ `_half`, `_imperial`),
-`runner_messy` (spike, illness = light week, ignored taper), `runner_no_race`, `runner_on_plan_obedient` (does exactly what the app says, DAY BY DAY since wave 23e: the cutback weeks, every daily cap, the race-eve shakeout, the taper), `runner_comeback_spike` (an illness, then a comeback week that overshoots its ceiling: 15 km, then 29 km) and `runner_comeback_obedient` (wave 23e: day-by-day obedient, 8 ill days, then every comeback ceiling followed exactly).
+`runner_messy` (spike, illness = light week, ignored taper), `runner_no_race`, `runner_on_plan_obedient` (does exactly what the app says, DAY BY DAY since wave 23e: the cutback weeks, every daily cap, the race-eve shakeout, the taper), `runner_comeback_spike` (an illness, then a comeback week that overshoots its ceiling: 15 km, then 29 km) and `runner_comeback_obedient` (wave 23e: day-by-day obedient, 8 ill days, then every comeback ceiling followed exactly) and `runner_skip_then_obedient` (wave 24e: on_plan, but the week-6 cutback is run as a normal 25 km week; from week 7 it obeys the app day by day, the hold that follows included).
 
-**The endurance guards (wave 23e, the block at the END of `timelineInvariants.test.ts`):** endurance sat at 3/5 for two rounds because every wave's new rule collided
-with an older one on the same card. Three generic guards stop that.
+**The endurance guards (wave 23e G1-G3, wave 24e G4; the blocks at the END of `timelineInvariants.test.ts`):** endurance sat at 3/5 for two rounds because every wave's new rule collided
+with an older one on the same card. Four generic guards stop that.
 - **G1** the obedient runners really follow the app: each finished week is within 6% of the Monday plan and nothing is run on a "rest" day.
 - **G2** a runner who does exactly what the app says is never criticised, flagged, rated below good or told two things that cannot both be followed - checked on
   the end-of-day snapshots AND on the MORNING state of every run day (the card as it reads before the run: `stepDay` over the rows of the days before).
 - **G3** on any day of ANY runner scenario the instructions about the rest of the week (plan line, reasons, headline, coach target / long-run line, opener) agree:
   the remaining km they imply agree within 10% (+0.5 km) and done + the unrun long run never exceeds the week target x 1.10.
-When a new endurance rule fails G2/G3, fix the rule (or reconcile it with the one it collides with) - do not weaken the guard.
+- **G4** (wave 24e, every runner scenario) a runner whose ACTUAL rows after a day comply with the rest-of-week instruction that day gave ("keep Sunday's long run to ~6 km", "N km left", "this week's km are done", "long run N") is never criticised for that week: neither the Sunday card nor the Monday review says "above / over / short / close to ... aim for", carries a slip, an amber Volume or a rating below good. (Exempt: a week already over its number before the instruction, a week with an illness in it, a week whose number moved after the instruction.)
+When a new endurance rule fails G2/G3/G4, fix the rule (or reconcile it with the one it collides with) - do not weaken the guard.
 
 **Add a scenario:** write a builder returning a `Scenario` (rows only, never inputs) in `scenarios.ts`, add its name to `SCENARIO_NAMES`
 and a case to `buildScenario`, then add it to the scenario groups in the test file (`ALL` picks it up automatically).

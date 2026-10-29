@@ -18,7 +18,7 @@ import { nextLoadCues, shortWeekLoadCues } from '../liftChange';
 import { summarizeProgression } from '../progressionMath';
 import { computeProgressFor } from './engine';
 import { obedientDayByDay } from './obedient';
-import { addDays, type IntakeRow, type Scenario, type SetRow, type WeighIn, type WorkoutRow } from './types';
+import { addDays, dayDiff, type IntakeRow, type Scenario, type SetRow, type WeighIn, type WorkoutRow } from './types';
 
 const DAY0 = '2026-03-02'; // a Monday
 
@@ -193,17 +193,18 @@ export function runnerMessy(): Scenario {
   workouts.push(runRow(addDays(DAY0, 57), 6.0)); // Tue W9, the only run
   notes.push('Week 9: one 6 km run on Tuesday (day 57), then SICK: zero runs on days 58-65 (8 days, Wed W9 to Wed W10).');
   workouts.push(runRow(addDays(DAY0, 66), 4.0), runRow(addDays(DAY0, 68), 4.0), runRow(addDays(DAY0, 69), 7.0, 6.8)); // W10 Thu/Sat/Sun = 15 km
-  notes.push('Week 10: back on Thursday day 66: Thu 4, Sat 4, Sun 7 = 15 km.');
-  addWeekRuns(workouts, 10, splitWeek(20, 8, [1, 3, 5, 6])); // W11
-  addWeekRuns(workouts, 11, splitWeek(24, 10, [1, 3, 5, 6])); // W12
-  addWeekRuns(workouts, 12, splitWeek(28, 14, [1, 3, 5, 6])); // W13 (long run on day 90 = 14 km)
-  notes.push('Weeks 11-13: 20, 24, 28 km (long runs 8, 10, 14 km).');
+  notes.push('Week 10: back on Thursday day 66: Thu 4, Sat 4, Sun 7 = 15 km (a restart that begins mid-week is ~10 km: this week overshoots it).');
+  workouts.push(runRow(addDays(DAY0, 71), 4.0), runRow(addDays(DAY0, 73), 4.0), runRow(addDays(DAY0, 76), 7.0, 6.8)); // W11 Tue/Thu/Sun = 15 km: the restart week
+  notes.push('Week 11 (the restart week): Tue 4, Thu 4, Sun 7 = 15 km.');
+  addWeekRuns(workouts, 11, splitWeek(20, 8, [1, 3, 5, 6])); // W12
+  addWeekRuns(workouts, 12, splitWeek(24, 10, [1, 3, 5, 6])); // W13
+  notes.push('Weeks 12-14: 20, 24, 28 km (long runs 8, 10, 14 km).');
+  addWeekRuns(workouts, 13, splitWeek(28, 14, [1, 3, 5, 6])); // W14 (long run on day 97 = 14 km)
   // IGNORES THE TAPER: peak volume through taper and race week.
-  addWeekRuns(workouts, 13, splitWeek(28, 14, [1, 3, 5, 6])); // W14
   addWeekRuns(workouts, 14, splitWeek(28, 14, [1, 3, 5, 6])); // W15
   addWeekRuns(workouts, 15, splitWeek(28, 0, [1, 3, 5]));     // W16 race week: Tue/Thu/Sat 28 km
   workouts.push({ day: raceDay, type: 'Running', durationMin: 135, distanceM: Math.round(HALF * 1000) });
-  notes.push('Weeks 14-16 IGNORE THE TAPER: 28 km, 28 km, then 28 km in race week (Tue/Thu/Sat), then the half marathon (21.1 km, 135 min) on Sunday day 111.');
+  notes.push('Weeks 15-16 IGNORE THE TAPER: 28 km, then 28 km in race week (Tue/Thu/Sat), then the half marathon (21.1 km, 135 min) on Sunday day 111.');
   // After the race: nothing for 10 days (days 112-121), then a gentle return.
   addWeekRuns(workouts, 17, [{ dow: 3, km: 4.0 }, { dow: 5, km: 4.0 }, { dow: 6, km: 5.0 }]); // Thu day 122 onwards
   addWeekRuns(workouts, 18, [{ dow: 1, km: 5.0 }, { dow: 3, km: 5.0 }, { dow: 5, km: 5.0 }]);
@@ -683,24 +684,25 @@ export function runnerComebackSpike(): Scenario {
   const noRace = runnerNoRace();
   const SICK_WEEK = 8;
   const { workouts, kinds } = obedientRuns({
-    weeks: 14,
+    weeks: 15,
     baselineKm: 24,
     race: null,
     scripted: {
       [SICK_WEEK]: [[1, 6.0]],
       [SICK_WEEK + 1]: [[3, 4.0], [5, 4.0], [6, 7.0]],
-      [SICK_WEEK + 2]: [[1, 7.0], [3, 5.0], [5, 5.0], [6, 12.0]],
+      [SICK_WEEK + 2]: [[1, 4.0], [3, 4.0], [6, 7.0]],
+      [SICK_WEEK + 3]: [[1, 7.0], [3, 5.0], [5, 5.0], [6, 12.0]],
     },
   });
   return {
     ...noRace,
     name: 'runner_comeback_spike',
-    title: 'Runner who comes back from an illness and overshoots the first comeback week (15 km, then 29 km; no race)',
-    lastDay: 14 * 7,
+    title: 'Runner who comes back from an illness and overshoots the first comeback week (15 km, 15 km, then 29 km; no race)',
+    lastDay: 15 * 7,
     workouts,
     inputNotes: [
       'Goal: endurance, weekly distance target 30 km, no race. Starts at 24 km and does what the app says (cutback week included) up to week 8 (30 km weeks).',
-      'Week 9: one 6 km run on Tuesday, then ILL: no run for 8 days. Week 10: back on Thursday, Thu 4 + Sat 4 + Sun 7 = 15 km. Week 11 (the first comeback week): 29 km (7/5/5/12), well over the ceiling the app gave and still under the pre-break median of 30 km. Weeks 12-14: obedient again.',
+      'Week 9: one 6 km run on Tuesday, then ILL: no run for 8 days. Week 10: back on Thursday (a restart that begins mid-week is ~10 km), Thu 4 + Sat 4 + Sun 7 = 15 km. Week 11 (the restart week): Tue 4 + Thu 4 + Sun 7 = 15 km. Week 12 (the first comeback week): 29 km (7/5/5/12), well over the ceiling the app gave and still under the pre-break median of 30 km. Weeks 13-15: obedient again.',
       `Week kinds the plan gave, week 1 first: ${kinds.join(', ')}.`,
     ],
   };
@@ -735,6 +737,35 @@ export function runnerComebackObedient(): Scenario {
   };
 }
 
+/** The weeks runner_skip_then_obedient runs exactly as runner_on_plan does (week 6, the cutback, run as a normal 25 km week, included). */
+export const SKIP_THEN_OBEDIENT_SCRIPTED_WEEKS = 6;
+
+/**
+ * S4 (wave 24e / G4): the on_plan runner who runs the week-6 cutback as a normal week (25 km, the app asked ~20), and from week 7 on follows
+ * the app day by day, the hold that follows the skipped cutback included (the hold weeks were the only weeks no obedient runner ever walked).
+ * Weeks 1-6 are runner_on_plan's own rows; everything after is what the real card says that morning.
+ */
+export function runnerSkipThenObedient(): Scenario {
+  const base = runnerOnPlan();
+  const scripted: Record<number, number> = {};
+  for (const w of base.workouts) {
+    const idx = dayDiff(w.day, base.day0);
+    if (w.type === 'Running' && w.distanceM != null && idx < SKIP_THEN_OBEDIENT_SCRIPTED_WEEKS * 7) scripted[idx] = w.distanceM / 1000;
+  }
+  const { workouts, kinds } = obedientDayByDay('runner_skip_then_obedient', { base, lastDay: base.lastDay, scripted });
+  return {
+    ...base,
+    name: 'runner_skip_then_obedient',
+    title: 'Runner who runs the week-6 cutback as a normal week (25 km), then does exactly what the app says day by day, the hold that follows included (half marathon)',
+    workouts,
+    inputNotes: [
+      'Same goal/race as runner_on_plan (30 km/wk, half marathon day 111). Weeks 1-6 are runner_on_plan\'s own rows: week 6, the cutback the app asked ~20 km for, is run as a normal 25 km week.',
+      'From week 7 the runner reads the real morning card every run day (lib/timeline/obedient.ts) and runs what it implies: the hold the skipped cutback brings, every daily cap, the owed cutback, the taper.',
+      `Week kinds the plan gave on each Monday, week 1 first: ${kinds.join(', ')}.`,
+    ],
+  };
+}
+
 // ── registry ────────────────────────────────────────────────────────────────
 
 export const SCENARIO_NAMES = [
@@ -753,6 +784,7 @@ export const SCENARIO_NAMES = [
   'runner_on_plan_obedient',
   'runner_comeback_spike',
   'runner_comeback_obedient',
+  'runner_skip_then_obedient',
 ] as const;
 
 export type ScenarioName = (typeof SCENARIO_NAMES)[number];
@@ -788,6 +820,7 @@ export function buildScenario(name: ScenarioName): Scenario {
     case 'runner_on_plan_obedient': return runnerOnPlanObedient();
     case 'runner_comeback_spike': return runnerComebackSpike();
     case 'runner_comeback_obedient': return runnerComebackObedient();
+    case 'runner_skip_then_obedient': return runnerSkipThenObedient();
   }
 }
 

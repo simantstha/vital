@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunWord, racePaceReps, recoveryWeek, roundLongRunKm } from './enduranceProgression';
+import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, midWeekRestartText, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -106,16 +106,15 @@ function weekTargetLine(gp: GoalProgress, units: UnitSystem): string | null {
   const line = weekTargetBase(gp, units);
   const trim = gp.distance?.plan?.longRunTrim;
   if (line == null || trim == null) return line;
-  // Wave 23e: the week's km plus the planned long run were over the week's number: the long run is cut to what is left (or skipped), the ONE number
-  // the card's plan line and remaining-km line say too.
+  // Wave 23e / 24e: the week's km plus the planned long run were over the week's limit (or the week's km are all but run): the rest of the week is worded by
+  // `restOfWeekPhrase`, the ONE wording the card's remaining-km line, plan line and headline use too. On the last day with today's run in, the numbers are
+  // Saturday's and there is nothing left to say (the plan line keeps the trimmed long run).
+  if (trim.afterRun === true) return line;
   const plan = gp.distance?.plan;
-  const lr = plan?.longRunKm != null ? longRunText(plan.longRunKm, units) : null;
-  const word = plan?.longRunKm != null ? longRunWord(plan.longRunKm, units === 'imperial' ? 1 / KM_PER_MILE : 1) : 'long run';
-  const note = trim.weekDone
-    ? plan?.longRunAhead === true
-      ? " — the week's km are done: skip the long run (rest or a 20-min jog), no catch-up volume"
-      : " — the week's km are done: rest or an easy 20-min jog, no catch-up volume"
-    : ` — keep ${trim.today ? "today's" : "Sunday's"} ${word} to ~${lr} so the week stays at ~${plan?.targetKm != null ? distKm(plan.targetKm, units) : distKm(gp.distance?.stepTargetKm ?? 0, units)}`;
+  const unitsPerKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
+  const target = plan?.targetKm ?? gp.distance?.stepTargetKm ?? null;
+  const core = plainSpaces(restOfWeekPhrase(trim, { unitsPerKm, longRunKm: plan?.longRunKm ?? null, longRunAhead: plan?.longRunAhead === true, form: 'coach', targetKm: target }));
+  const note = ` — ${core}`;
   return `${line}${note}`;
 }
 
@@ -213,7 +212,15 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
         ? Math.min(plan.longRunKm, floorLongRunKm(restartKm * RESTART_LONG_RUN_MAX_SHARE, unitsPerKm))
         : plan.longRunKm;
       const restartLr = restartLongKm != null && restartLongKm > 0 ? `long run ${longRunText(restartLongKm, units)}` : null;
-      return `- This week's target: restart at ~${plan.restartKm != null ? distKm(plan.restartKm, units) : t} with easy runs${restartLr ? `; ${restartLr}` : ''} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
+      // Wave 24e: a restart that begins mid-week is scaled to the days left (the next Monday is the full restart week).
+      const mid = plan.midWeekRestart;
+      const upk = units === 'imperial' ? 1 / KM_PER_MILE : 1;
+      if (mid != null && !mid.pending) {
+        const stub = plainSpaces(midWeekRestartText(mid, upk, 'stub'));
+        return `- This week's target: ${stub.charAt(0).toLowerCase()}${stub.slice(1)} — the runner is coming back from a break; do not push toward the ${goal}/week goal yet`;
+      }
+      const ifToday = mid != null ? `; if they start today: ${plainSpaces(midWeekRestartText(mid, upk, 'pending')).replace(/^Starting today\? /, '')}` : '';
+      return `- This week's target: restart at ~${plan.restartKm != null ? distKm(plan.restartKm, units) : t} with easy runs${restartLr ? `; ${restartLr}` : ''}${ifToday} — the runner is coming back from a break${back ? ` (the weeks after climb back toward ~${back})` : ''}; do not push toward the ${goal}/week goal yet`;
     }
     case 'rebuild': {
       const atGoal = plan.targetKm != null && plan.targetKm >= d.targetKm - 1e-9;
