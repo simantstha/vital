@@ -2531,9 +2531,12 @@ function liftNames(input: WeeklyReviewInput, keys: string[]): string[] {
   return keys.map((key, i) => (i === 0 ? liftDisplayName(key, input.exerciseDisplay) : liftShortName(key, input.exerciseDisplay)));
 }
 
-/** "Squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg": one entry per lift, the first by its display name and the rest by the short spoken one. */
-function loadsList(input: WeeklyReviewInput, entries: Array<{ key: string; load: NextLoad }>): string {
-  const names = liftNames(input, entries.map(e => e.key));
+/**
+ * "Squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg": one entry per lift, the first by its display name and the rest by the short spoken one.
+ * `midSentence` (wave 24s): the list does not start a sentence ("— then back to squat 125 kg, bench 105 kg and deadlift 145 kg"), so every lift is lower-case.
+ */
+function loadsList(input: WeeklyReviewInput, entries: Array<{ key: string; load: NextLoad }>, midSentence = false): string {
+  const names = midSentence ? entries.map(e => liftShortName(e.key, input.exerciseDisplay)) : liftNames(input, entries.map(e => e.key));
   const parts = entries.map((e, i) => `${names[i]} ${withUnit(e.load.from, e.load.unit)}`);
   return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
@@ -2559,14 +2562,14 @@ function afterDeloadNextWeek(input: WeeklyReviewInput, week: Week): string | nul
 
 /**
  * The proactive deload cue (wave 24s): after 5 straight weeks of heavier loads (lib/liftChange.ts `proactiveDeload`) the next week is a deload,
- * not a sixth step - "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 112.5 kg, bench 92.5 kg and deadlift
+ * not a sixth step - "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 112.5 kg, bench 92.5 kg and deadlift
  * 132.5 kg." The goal card carries the same lead-in all week (`DELOAD_CUE_HEAD`). Null when the run is shorter, while
  * rebuilding after a break, or without a known load.
  */
 function deloadCueNextWeek(input: WeeklyReviewInput, week: Week): string | null {
   const cue = proactiveDeload(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: stillRebuilding(input) });
   if (!cue) return null;
-  return `${DELOAD_CUE_HEAD} — then back to ${cue.resume.length > 0 ? loadsList(input, cue.resume) : 'full loads'}.`;
+  return `${DELOAD_CUE_HEAD} — then back to ${cue.resume.length > 0 ? loadsList(input, cue.resume, true) : 'full loads'}.`;
 }
 
 /**
@@ -2600,7 +2603,8 @@ function easedLoadsText(input: WeeklyReviewInput, week: Week): string | null {
     if (keys.length >= MAX_CUED_LIFTS) break;
     if (!keys.includes(key) && latestTopLoadKg(input.progression[key] ?? [], week.days[0]) != null) keys.push(key);
   }
-  const names = liftNames(input, keys);
+  // Inside the parentheses of a sentence ("… of your last working weights (squat ~102.5 kg, bench ~80 kg)"): every lift is lower-case (wave 24s).
+  const names = keys.map(key => liftShortName(key, input.exerciseDisplay));
   const parts = keys.map((key, i) => {
     const eased = easedLoad(latestTopLoadKg(input.progression[key], week.days[0]) as number, 0.9, isImperial(input));
     return `${names[i]} ~${withUnit(eased.value, eased.unit)}`;
