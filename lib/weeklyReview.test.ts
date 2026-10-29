@@ -2262,7 +2262,41 @@ test('wave 23w: a week with no weigh-ins at all says so and that the plan waits 
   assert.equal(r.dataSufficiency.sufficient, false);
   // A user who has never weighed in keeps the generic one; so does a week with a weigh-in.
   assert.equal(computeWeeklyReview(base({ verdict: 'insufficient_data' })).headline, 'Not enough data for a weekly review yet');
-  assert.equal(computeWeeklyReview(base({ verdict: 'progressing', weightReadings: [...earlier, ...weigh([WEEK[1]], () => 88.2)] })).headline, 'Not enough data for a weekly review yet');
+  // (Wave 24w: a weigh-in after a gap of 7+ days is a return week - below; one in a week that kept weighing in is the generic one.)
+  assert.equal(computeWeeklyReview(base({ verdict: 'progressing', weightReadings: [...weigh(PREV, () => 88.4), ...weigh([WEEK[1]], () => 88.2)] })).headline, 'Not enough data for a weekly review yet');
+});
+
+test('wave 24w P3-7: the return week (one weigh-in after a gap of 7+ days) welcomes the user back and says the review fills in next Monday', () => {
+  const back = computeWeeklyReview(base({ verdict: 'progressing', weightReadings: [...weigh(PREV2, () => 88.4), ...weigh([WEEK[1]], () => 88.2)] }));
+  assert.equal(back.headline, 'Welcome back — one weigh-in last week; your review fills in next Monday');
+  assert.equal(back.dataSufficiency.sufficient, false);
+  assert.equal(back.stats.length, 0);
+  // Two weigh-ins back: the same, counted.
+  const two = computeWeeklyReview(base({ verdict: 'progressing', weightReadings: [...weigh(PREV2, () => 88.4), ...weigh([WEEK[1], WEEK[3]], () => 88.2)] }));
+  assert.equal(two.headline, 'Welcome back — 2 weigh-ins last week; your review fills in next Monday');
+  // A user who weighed in the week before, or whose first ever weigh-in this is, gets the generic line.
+  assert.equal(computeWeeklyReview(base({ verdict: 'progressing', weightReadings: weigh([WEEK[1]], () => 88.2) })).headline, 'Not enough data for a weekly review yet');
+  assert.equal(computeWeeklyReview(base({ goal: 'muscle', verdict: 'progressing', weightReadings: [...weigh(PREV2, () => 88.4), ...weigh([WEEK[1]], () => 88.2)] })).headline.startsWith('Welcome back'), false);
+});
+
+test('wave 24w P3-6: "Weekends ran +N kcal over your weekdays" needs two logged weekend days, and is not said while an eat-more step is the plan', () => {
+  const prior = [2300, 2250, 2400, 2300, 2350, 2500, 2450];
+  const week = (sat: number | null, sun: number | null) => weightLossInput({ intakeDays: intake([...PREV, ...WEEK], [...prior, 1900, 1950, 2000, 1850, 2050, sat as number, sun as number]) });
+  // Both weekend days logged: the slip, as before.
+  assert.match(computeWeeklyReview(week(2450, 2500)).slip ?? '', /^Weekends ran \+\d+ kcal over your weekdays\.$/);
+  // One weekend day logged is not a weekend pattern.
+  assert.doesNotMatch(computeWeeklyReview(week(2450, null)).slip ?? '', /Weekends ran/);
+  assert.doesNotMatch(computeWeeklyReview(week(null, 2500)).slip ?? '', /Weekends ran/);
+  // An eat-more step is the coming week's plan: eating more at the weekend is not a slip.
+  const step = (phase: 'given' | 'standing' | 'settled') => ({
+    state: 'pace', verdict: 'on_track', nearlyThere: true,
+    action: { kind: 'ease_to_maintenance', text: "Stay at ~2,150–2,200 kcal (the step you started Oct 1); we'll read it on Mon, Oct 19", kcalTarget: 2150 },
+    step: { since: '2026-10-01', readOn: '2026-10-19', phase, outcome: null, loKcal: 2150, hiKcal: 2200, food: false },
+  }) as unknown as NonNullable<WeeklyReviewInput['weightPlan']>;
+  assert.doesNotMatch(computeWeeklyReview({ ...week(2450, 2500), weightPlan: step('standing') }).slip ?? '', /Weekends ran/);
+  assert.doesNotMatch(computeWeeklyReview({ ...week(2450, 2500), weightPlan: step('given') }).slip ?? '', /Weekends ran/);
+  // A level the user has settled on (the maintenance) is not a step up in progress: the slip is back.
+  assert.match(computeWeeklyReview({ ...week(2450, 2500), weightPlan: step('settled') }).slip ?? '', /Weekends ran/);
 });
 
 const reachedWeekInput = (over: Partial<WeeklyReviewInput> = {}) => base({

@@ -1616,7 +1616,7 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepCovers?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepCovers?: boolean; about?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
   if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
@@ -1624,7 +1624,10 @@ function paceReason(
   const abs = round2(Math.abs(pace.pctPerWeek));
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
-  let text = `${dir} ${fmtWeight(input, Math.abs(pace.kgPerWeek), 2)}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
+  // The headline of an unconfirmed pace says "losing about 0.6 kg a week" (one decimal): the rate line is that very figure, "about 0.6 kg/wk", not a
+  // second rounding of it ("0.58") on the same card (wave 24w).
+  const perWeek = opts.about ? `about ${fmtWeight(input, Math.abs(pace.kgPerWeek))}` : fmtWeight(input, Math.abs(pace.kgPerWeek), 2);
+  let text = `${dir} ${perWeek}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pace.kgPerWeek < 0) {
     if (opts.tooFast && abs > band.maxPct) {
@@ -1953,7 +1956,9 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  const rate = paceReason(input, p, { tooFast: plan.tooFast, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null });
+  // The headline quotes the rate ("losing about 0.6 kg a week") only for a pace nothing has confirmed yet: the rate line then says the same figure.
+  const quotesRate = !plan.confirmed && !plan.tooFast && !plan.nearlyThere && p.kgPerWeek < 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
+  const rate = paceReason(input, p, { tooFast: plan.tooFast, about: quotesRate, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null });
   const action = planActionReason(plan);
 
   if (plan.tooFast && !plan.nearlyThere) {
