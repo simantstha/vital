@@ -912,6 +912,12 @@ export const DELOAD_CUE_STREAK_WEEKS = 5;
 /** The middle of the "~85-90%" the cue names: what a lifter who follows it lifts (rounded to the 2.5 kg / 5 lb grid). */
 export const DELOAD_CUE_LOAD_FRACTION = 0.875;
 /**
+ * The one-time explainer for the term the lifter meets first (wave 23s in the review, wave 24s on the goal card: the card shows "est. 1RM" a week before the
+ * first review does, so the card carries it, once, in the goal's first lift-comparison week - lib/goalProgress.ts).
+ */
+export const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
+
+/**
  * The deload cue's lead-in: the review's "Next week" opens with it ("Deload week: ~85–90% of last week's loads, 2 working sets — then back to
  * Squat 112.5 kg, …"), the goal card carries exactly this line on every day of the cue's week, and so do the coach lines (they print the card).
  */

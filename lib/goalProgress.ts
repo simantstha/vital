@@ -121,6 +121,7 @@ import {
 import type { ProgressionSummary } from './workoutRepository';
 import {
   DELOAD_CUE_HEAD,
+  EST_1RM_EXPLAINER,
   isDeloadWeek,
   isLiftProgressing,
   furthestBehindReturn,
@@ -2423,6 +2424,14 @@ function lapseRateReason(input: GoalProgressInput, w: WeightBlock, rate: GoalPro
   return { kind: 'rate', text, tone: 'neutral' };
 }
 
+/** The week of `input.todayKey` is the second week with a lift e1RM (the current week counts): the goal's first lift-comparison week, where "est. 1RM" first reaches the card. */
+function firstComparisonWeek(input: GoalProgressInput): boolean {
+  const anchor = weekStart(input.todayKey);
+  const weeks = new Set<string>();
+  for (const ws of Object.values(input.progression)) for (const wk of ws) if (wk.bestEstimatedOneRepMaxKg != null && wk.weekStart <= anchor) weeks.add(wk.weekStart);
+  return weeks.size === 2;
+}
+
 function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftReturn | null, rets: GoalLiftReturn[]): Outcome {
   if (input.target.weightKg == null && input.target.weeklySessions == null) {
     return { verdict: 'needs_target', headline: 'Set a weekly session goal to track your progress', reasons: [] };
@@ -2476,6 +2485,11 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     : ret ? liftReturnReasons(rets.length > 0 ? rets : [ret], input, slackWeek ? exercise => !trainedThisWeek(exercise) : undefined) : [liftReasons[0] ?? weekOverWeekReason(input)];
   // "Back after a 15-day break" explains a rebuild; once every pre-break best is regained it is no longer news.
   const returnBreak = ret && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null ? liftReturnBreakReason(ret, input) : null;
+  // "est. 1RM" is explained once, here (wave 24s P3-5): the card shows the term from the goal's first lift-comparison week - the second week of lift data - a week
+  // before the first review does, so the sentence rides under the lift line on every day of that week, and the review (which gets `cardExplainedEst1rm`) leaves it out.
+  const explainer: GoalProgressReason | null = firstComparisonWeek(input) && leadLifts.some(r => r != null && r.text.includes('est. 1RM'))
+    ? { kind: 'explainer', text: EST_1RM_EXPLAINER, tone: 'neutral' }
+    : null;
   // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach
   // lines (they print the card). The same pure rule as the review, read for the last completed week; never while rebuilding after a break.
   // It stays on a lapsed day too: the week's plan is still the deload.
@@ -2495,6 +2509,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   const reasons = windowStale
     ? capReasons([
         ...leadLifts,
+        explainer,
         deloadLine,
         weekSessions ?? sessions,
         ret ? returnBreak : young ? null : adherenceDemoted,
@@ -2509,6 +2524,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         adherenceLow ? adherence : null,
         weekShort ? weekSessions : null,
         ...leadLifts,
+        explainer,
         deloadLine,
         adherenceLow ? null : sessions,
         reachLead,

@@ -2817,28 +2817,32 @@ invariant(LIFTERS, 'a review read on a Monday she has already lifted does not te
   return out;
 });
 
-// ── The first time "est. 1RM" reaches a lifter it is explained, once: in the Next-week row of the first weekly review that shows an
-// est. 1RM stat (iOS shows nextWeek verbatim, unlimited lines; the stat tile's comparison is capped at two lines and the card shows
-// three reasons). Never on the card (that would repeat daily), never in a later review.
+// ── The first time "est. 1RM" reaches a lifter it is explained, once. Wave 23s put the sentence in the Next-week row of the first weekly review that shows an est. 1RM
+// stat; the term first appears on the CARD a week earlier (day 7: "This week: Squat est. 1RM +3 kg vs last week"), so wave 24s P3-5 moved it there: a card reason on
+// every day of the goal's first lift-comparison week (from the day the card first shows "est. 1RM" to that Sunday), never again, and the review carries it only when the
+// card did not (`cardExplainedEst1rm`). Counted from the snapshots themselves.
 const EST_1RM_EXPLAINER = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
 
-invariant(LIFTERS, 'est. 1RM is explained once: in the first weekly review that shows an est. 1RM stat, never on the card and never again', (snaps, name) => {
+invariant(LIFTERS, 'est. 1RM is explained once: by a card reason in the goal\'s first lift-comparison week, never in a later week and never in a review the card already covered', (snaps, name) => {
   const out: Violation[] = [];
-  const firstWithStat = snaps.find(s => s.review?.review.stats.some(st => st.label.endsWith('est. 1RM')));
-  const holders: DaySnapshot[] = [];
+  const firstWithTerm = snaps.find(s => s.card?.reasons.some(r => /est\. 1RM/.test(plain(r.text)) && r.kind !== 'explainer'));
+  assert.ok(firstWithTerm, `${name}: the card never showed an est. 1RM line`);
+  const week = mondayOfDate((firstWithTerm as DaySnapshot).date);
+  let explained = 0;
   for (const snap of snaps) {
-    for (const t of allTexts(snap)) {
-      if (!/most you could lift once/.test(plain(t.text))) continue;
-      if (!t.where.startsWith('review.')) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" explains est. 1RM outside the review` });
-      else if (!holders.includes(snap)) holders.push(snap);
+    const line = snap.card?.reasons.find(r => r.kind === 'explainer');
+    const inWeek = snap.date >= (firstWithTerm as DaySnapshot).date && snap.date <= addDays(week, 6);
+    if (inWeek && snap.card && !line) out.push({ snap, detail: `the first lift-comparison week (from ${(firstWithTerm as DaySnapshot).date}) has no explainer reason: ${JSON.stringify(snap.card.reasons.map(r => r.text))}` });
+    if (line) {
+      explained++;
+      if (!inWeek) out.push({ snap, detail: `the explainer is on the card outside the first lift-comparison week (${week})` });
+      if (plain(line.text) !== EST_1RM_EXPLAINER) out.push({ snap, detail: `explainer text "${visible(line.text)}"` });
+      if (snap.card && snap.card.reasons.indexOf(line) > 1) out.push({ snap, detail: 'the explainer is not directly under the lift line it explains' });
     }
+    for (const t of reviewTexts(snap)) if (/most you could lift once/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" explains est. 1RM again, the card already did` });
+    for (const t of coachTexts(snap)) if (/most you could lift once/.test(plain(t.text)) && !(inWeek && snap.card?.reasons.some(r => r.kind === 'explainer'))) out.push({ snap, detail: `${t.where} repeats the explainer outside its week` });
   }
-  assert.ok(firstWithStat, `${name}: no review showed an est. 1RM stat`);
-  if (holders.length !== 1 || holders[0] !== firstWithStat) {
-    out.push({ snap: firstWithStat, detail: `the explainer should be in the first review with an est. 1RM stat (${describeDay(firstWithStat)}) and nowhere else, found on: ${holders.map(describeDay).join(', ') || 'no day'}` });
-  } else if (!plain(firstWithStat.review?.review.nextWeek ?? '').endsWith(EST_1RM_EXPLAINER)) {
-    out.push({ snap: firstWithStat, detail: `review.nextWeek should end "${EST_1RM_EXPLAINER}": "${visible(firstWithStat.review?.review.nextWeek ?? '')}"` });
-  }
+  assert.ok(explained >= 3, `${name}: only ${explained} card day(s) carried the explainer, so this invariant checked (almost) nothing`);
   return out;
 });
 
