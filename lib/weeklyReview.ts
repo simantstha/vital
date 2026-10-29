@@ -95,6 +95,8 @@ import { KM_PER_MILE } from './metricFormat';
 // ── Constants ───────────────────────────────────────────────────────────────
 
 export const REVIEW_HEADLINE_MAX_CHARS = 80;
+/** A review stat's comparison is cut at about this many characters in the iOS half-width tile (12 pt, two lines): the part past it is lost. */
+export const STAT_COMPARISON_MAX_CHARS = 44;
 export const MAX_REVIEW_STATS = 4;
 const KM_TO_MI = 0.621371;
 /** A logged day counts as within budget when kcal <= target x this (same as goalProgress). */
@@ -668,7 +670,8 @@ function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null
       stat: {
         label: 'On the step',
         value: `${step.reached}/${step.logged}`,
-        comparison: `reached ~${withUnit(fmtKcal(step.loKcal), 'kcal')} since ${monthDayText(step.since)} · ${g.allLogged} ${plural(g.allLogged, 'day')} logged`,
+        // (Short: the iOS tile cuts a comparison at STAT_COMPARISON_MAX_CHARS - "~2,150 kcal since Jun 5 · 7 logged".)
+        comparison: `~${withUnit(fmtKcal(step.loKcal), 'kcal')} since ${monthDayText(step.since)} · ${g.allLogged} logged`,
         tone: toneOf(step.reached, step.logged),
       },
     };
@@ -684,7 +687,8 @@ function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null
     cand.stat = {
       label: 'Days on plan',
       value: `${onPlan}/${total}`,
-      comparison: `${hit} of ${logged} before the step · ${step.reached} of ${step.logged} since ${monthDayText(step.since)} — ${g.allLogged} ${plural(g.allLogged, 'day')} logged`,
+      // The value's denominator IS every logged day here (the budget days plus the step's days), so "N logged" is not repeated: "3/4 before the step · 0/2 since Jun 5".
+      comparison: `${hit}/${logged} before the step · ${step.reached}/${step.logged} since ${monthDayText(step.since)}`,
       // Under half the step's days reached is not a good week, whatever the budget days did.
       tone: combined === 'good' && step.reached / step.logged < 0.5 ? 'neutral' : combined,
     };
@@ -1922,7 +1926,8 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
       );
     }
     const budget = by('Days in budget') ?? by('Days on plan') ?? by('On the step');
-    if (budget) parts.push(`${budget.label === 'Days in budget' ? 'in budget' : budget.label === 'Days on plan' ? 'on plan' : 'on the step'} ${budget.value.replace('/', ' of ')} ${loggedWord(budget)}days`);
+    // ("Days on plan" / "On the step" are logged days by definition; their short comparisons do not carry the word.)
+    if (budget) parts.push(`${budget.label === 'Days in budget' ? 'in budget' : budget.label === 'Days on plan' ? 'on plan' : 'on the step'} ${budget.value.replace('/', ' of ')} ${budget.label === 'Days in budget' ? loggedWord(budget) : 'logged '}days`);
     else if (sessions) parts.push(sessionCount(sessions));
     else if (weight && parts.length === 1) {
       // The weight stat alone: say how many weigh-ins it rests on.

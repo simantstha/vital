@@ -4286,6 +4286,7 @@ invariant(['lifter_obedient'], 'P2-A: the obedient lifter follows a deload cue (
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 import { PARTIAL_LOG_KCAL_THRESHOLD } from '../brain/weightSignals';
+import { STAT_COMPARISON_MAX_CHARS } from '../weeklyReview';
 
 const W24_LOGGERS: readonly ScenarioName[] = ['weight_loss_logged', 'weight_loss_obedient'];
 const W24_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -4543,14 +4544,14 @@ function w24ExpectedDayStat(name: ScenarioName, snap: DaySnapshot): { label: str
     const t = tone(hitB + reachedS, before.length + onStep.length);
     return {
       label: 'Days on plan', value: `${hitB + reachedS}/${before.length + onStep.length}`,
-      comparison: `${hitB} of ${before.length} before the step · ${reachedS} of ${onStep.length} since ${w24Date(step.since)} — ${all} days logged`,
+      comparison: `${hitB}/${before.length} before the step · ${reachedS}/${onStep.length} since ${w24Date(step.since)}`,
       tone: t === 'good' && reachedS / onStep.length < 0.5 ? 'neutral' : t, headline: `on plan ${hitB + reachedS} of ${before.length + onStep.length}`, logged: all,
     };
   }
   if (onStep.length >= 3 && step != null) {
     return {
       label: 'On the step', value: `${reachedS}/${onStep.length}`,
-      comparison: `reached ~${w24Kcal(step.loKcal as number)} kcal since ${w24Date(step.since)} · ${all} days logged`, tone: tone(reachedS, onStep.length), headline: `on the step ${reachedS} of ${onStep.length}`, logged: all,
+      comparison: `~${w24Kcal(step.loKcal as number)} kcal since ${w24Date(step.since)} · ${all} logged`, tone: tone(reachedS, onStep.length), headline: `on the step ${reachedS} of ${onStep.length}`, logged: all,
     };
   }
   return null;
@@ -4595,9 +4596,12 @@ invariant(W24_LOGGERS, 'P2-1: the review\'s "N days logged" is the number of log
     const stat = rv?.review.stats.find(s => ['Days in budget', 'Days on plan', 'On the step'].includes(s.label));
     if (rv == null || stat == null) continue;
     const logged = scn.intake.filter(i => i.day >= rv.weekStart && i.day <= addDays(rv.weekStart, 6) && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD).length;
-    const m = /(\d+) days? logged/.exec(plain(stat.comparison ?? ''));
+    // "Days in budget": "N days logged" (or "across the week"); "On the step": "... · N logged"; "Days on plan": the value's denominator IS the logged total
+    // (the budget days and the step's days are every logged day), so it is not repeated in the comparison.
+    const m = /(\d+) days? logged|· (\d+) logged$/.exec(plain(stat.comparison ?? ''));
     seen++;
-    const said = m != null ? Number(m[1]) : /across the week/.test(plain(stat.comparison ?? '')) ? 7 : -1;
+    const said = stat.label === 'Days on plan' ? Number(stat.value.split('/')[1])
+      : m != null ? Number(m[1] ?? m[2]) : /across the week/.test(plain(stat.comparison ?? '')) ? 7 : -1;
     if (said !== logged) out.push({ snap, detail: `"${stat.label} ${stat.value} — ${visible(stat.comparison ?? '')}" but ${logged} days were logged in the week of ${rv.weekStart}` });
   }
   assert.ok(seen > 0, `${name}: no review showed a day stat, so this invariant checked nothing`);
@@ -4612,20 +4616,39 @@ invariant(W24_LOGGERS, 'P3-3: a logged day above the step\'s high end x 1.05 is 
   for (const snap of snaps) {
     const step = snap.card?.weightRead?.plan?.step;
     if (step == null || step.loKcal == null || step.hiKcal == null) continue;
+    const inRange = (from: string, to: string): number => [...kcalOf.entries()].filter(([d, k]) => d >= from && d <= to && w24Reached(k, step.loKcal!, step.hiKcal!)).length;
     const line = snap.card?.reasons.find(r => r.kind === 'calorie_adherence' && /^Reached/.test(plain(r.text)));
-    const stats = [line?.text, ...(snap.review?.review.stats ?? []).map(s => s.comparison)].filter((t): t is string => t != null);
-    for (const text of stats) {
-      const m = /reached ~[\d,]+ kcal on (\d+) of (\d+)/i.exec(plain(text));
-      if (m == null) continue;
+    const m = line == null ? null : /on (\d+) of (\d+) logged days/.exec(plain(line.text));
+    if (m != null) {
       seen++;
-      // The most the days in range could be: those at or under the ceiling (no day over it may be counted).
-      const days = [...kcalOf.entries()].filter(([d]) => d >= step.since && d <= snap.date && d >= addDays(snap.date, -(snap.review != null && text !== line?.text ? 7 : 6)));
-      const over = days.filter(([, k]) => k > step.hiKcal! * 1.05).length;
-      const inRange = days.filter(([, k]) => w24Reached(k, step.loKcal!, step.hiKcal!)).length;
-      if (Number(m[1]) > inRange && over > 0) out.push({ snap, detail: `"${visible(text)}" counts ${m[1]} reached, but only ${inRange} logged day(s) are within ${Math.round(step.loKcal! * 0.95)}-${Math.round(step.hiKcal! * 1.05)} kcal and ${over} are above it` });
+      const from = step.since > addDays(snap.date, -6) ? step.since : addDays(snap.date, -6);
+      if (Number(m[1]) > inRange(from, snap.date)) out.push({ snap, detail: `card "${visible(line?.text ?? '')}" counts ${m[1]} reached, but only ${inRange(from, snap.date)} logged day(s) are within ${Math.round(step.loKcal * 0.95)}-${Math.round(step.hiKcal * 1.05)} kcal` });
     }
+    const rv = snap.review;
+    const stat = rv?.review.stats.find(s => s.label === 'Days on plan' || s.label === 'On the step');
+    if (rv == null || stat == null) continue;
+    const r = stat.label === 'On the step' ? /^(\d+)\//.exec(stat.value) : /(\d+)\/\d+ since/.exec(plain(stat.comparison ?? ''));
+    if (r == null) continue;
+    seen++;
+    const from = step.since > rv.weekStart ? step.since : rv.weekStart;
+    const have = inRange(from, addDays(rv.weekStart, 6));
+    if (Number(r[1]) > have) out.push({ snap, detail: `review "${stat.label} ${stat.value} — ${visible(stat.comparison ?? '')}" counts ${r[1]} reached, but only ${have} logged day(s) are within ${Math.round(step.loKcal * 0.95)}-${Math.round(step.hiKcal * 1.05)} kcal` });
   }
   assert.ok(seen > 0, `${name}: no "reached" count was shown, so this invariant checked nothing`);
+  return out;
+});
+
+//   group 7  iOS renders a review stat's comparison in a half-width tile (12 pt, two lines): longer than ~44 characters it is cut with an ellipsis, and the part cut was the logged count.
+
+// (Scoped to the weight scenarios for now: five runner "Volume" comparisons after a cutback are longer - listed in the wave 24w report, left to the endurance owner.)
+invariant(WEIGHT, 'group 7: every review stat comparison is at most STAT_COMPARISON_MAX_CHARS (44) characters (the iOS half-width tile shows about 44 before the ellipsis)', snaps => {
+  const out: Violation[] = [];
+  for (const snap of snaps) {
+    for (const st of snap.review?.review.stats ?? []) {
+      const text = plain(st.comparison ?? '');
+      if (text.length > STAT_COMPARISON_MAX_CHARS) out.push({ snap, detail: `[${text.length}] ${st.label}: "${visible(st.comparison ?? '')}"` });
+    }
+  }
   return out;
 });
 
