@@ -2698,6 +2698,45 @@ test('after a deload every main lift goes back to full loads; a week off eases e
   assert.equal(off.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (Squat ~102.5 kg, bench ~80 kg), starting today.');
 });
 
+// ── Wave 24s P2-A: a proactive deload after 5 straight weeks of heavier loads ──────────────────────────────────────────────────────────────
+
+/** `tops` kg, one lift-week each from `from` on, a week apart; the e1RM follows the load. */
+const climbing = (tops: number[], from = '2026-08-24'): Array<ReturnType<typeof lwk>> => tops.map((t, i) => lwk(addDays(from, 7 * i), t * 1.2, t));
+
+test('after 5 straight weeks of heavier loads the next-week cue is a deload, with the pre-deload loads to go back to (wave 24s)', () => {
+  // Squat 100 -> 112.5 over six weeks: five step-ups in a row (09-28 is the reviewed week).
+  const squat = climbing([100, 102.5, 105, 107.5, 110, 112.5]);
+  const one = computeWeeklyReview(liftReview({ progression: { squat } }));
+  assert.equal(one.weekRating, 'good');
+  assert.equal(one.nextWeek, "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 112.5 kg.");
+  // Every main lift trained that week is named, the lead lift first.
+  const three = computeWeeklyReview(liftReview({ progression: { squat, 'bench press': climbing([80, 82.5, 85, 87.5, 90, 92.5]), deadlift: climbing([120, 122.5, 125, 127.5, 130, 132.5]) } }));
+  assert.equal(three.nextWeek, "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg.");
+  // Pounds: the loads as logged (112.5 kg = 248 lb).
+  assert.equal(computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: { squat } })).nextWeek, "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 248 lb.");
+  // Four step-ups are not enough: the normal cue.
+  const four = computeWeeklyReview(liftReview({ progression: { squat: squat.slice(1) } }));
+  assert.equal(four.nextWeek, 'Squat 112.5 → 115 kg; progress the others as they hit their reps.');
+  // A lighter week in the run (100 -> 102.5 -> 105 -> 100 -> 102.5 -> 105) breaks it, and so does a week without the lift.
+  assert.doesNotMatch(computeWeeklyReview(liftReview({ progression: { squat: climbing([100, 102.5, 105, 100, 102.5, 105]) } })).nextWeek, /Deload/);
+  assert.doesNotMatch(computeWeeklyReview(liftReview({ progression: { squat: [...climbing([100, 102.5, 105]), ...climbing([107.5, 110], '2026-09-14'), lwk(WEEK_START, 135, 112.5)].filter(w => w.weekStart !== '2026-09-07') } })).nextWeek, /Deload/);
+  // Returning from a break is a rebuild, never a deload.
+  assert.doesNotMatch(computeWeeklyReview(liftReview({ verdict: 'building', liftReturn: RETURN, progression: { squat } })).nextWeek, /Deload/);
+});
+
+test('the week after a prescribed deload: the win praises the timing, the next week goes back to the pre-deload loads the cue named (wave 24s)', () => {
+  // Six climbing weeks (08-17 .. 09-21), then the deload week (09-28): 97.5 kg x 2 sets.
+  const progression: ProgressionSummary = { squat: [...climbing([100, 102.5, 105, 107.5, 110, 112.5], '2026-08-17'), lwk(WEEK_START, 117, 97.5, 2, 1920)] };
+  const cue = "Deload week: ~85–90% of last week's loads, 2 working sets — then back to Squat 112.5 kg.";
+  const r = computeWeeklyReview(liftReview({ progression, previousNextWeek: cue }));
+  assert.equal(r.weekRating, 'light');
+  assert.equal(r.win, 'Deload week done — lighter loads, good timing after 5 straight weeks of heavier loads.');
+  assert.equal(r.nextWeek, 'Back to full loads: Squat 112.5 kg.');
+  // A deload she took on her own keeps the step: the old rule is unchanged.
+  const own = computeWeeklyReview(liftReview({ progression: { squat: [...steadySquat, lwk(WEEK_START, 114.1, 92.5, 2, 1920)] } }));
+  assert.equal(own.nextWeek, 'Back to full loads: Squat 107.5 → 110 kg.');
+});
+
 test('before the first 4-week comparison the review and the goal card quote the same week over week, rounded from the change itself', () => {
   // 100.4 -> 102.6 kg: a 2.2 kg change is "+2" on both surfaces. It is not the difference of two rounded endpoints (100 -> 103 would say +3):
   // a constant +2.5 kg step read +3, +4, +3 week to week (wave 22s), and the text prints no endpoints for them to add up to.

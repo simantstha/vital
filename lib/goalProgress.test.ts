@@ -2214,6 +2214,35 @@ const squatBack = (...recent: number[]) => [
   ...recent.map((e, i) => lw(addDays('2026-09-28', 7 * i), e)),
 ];
 
+// ── Wave 24s P2-A: the card carries the deload cue the Monday review gave, all week ────────────────────────────────────────────────────────
+
+/** One lift-week per top load, a week apart from 08-24 (six loads end in the week of 09-28); the e1RM follows the load. */
+const climbingCard = (...tops: number[]) => tops.map((t, i) => lw(addDays('2026-08-24', 7 * i), t * 1.2, 2, { topLoadKg: t }));
+const deloadCardInput = (today: string, progression: ProgressionSummary, over: Partial<GoalProgressInput> = {}): GoalProgressInput => {
+  const days = [0, 7, 14, 21, 28, 35, 42].flatMap(o => daysAt(addDays('2026-08-24', o), [0, 1, 3, 5])).filter(d => d <= today);
+  return base({
+    goal: 'muscle', todayKey: today, target: { weightKg: null, date: null, weeklySessions: 4 }, progression, strengthDays: days.filter(d => d >= addDays(today, -27)), strengthHistoryDays: days,
+    start: { weightKg: 80, startedAt: '2026-07-01T09:00:00.000Z', startedDay: '2026-07-01' }, ...over,
+  });
+};
+
+test('after 5 straight weeks of heavier loads the goal card (and so the coach lines) carries the deload cue for the whole week, then drops it (wave 24s)', () => {
+  // Reviewed week 09-28 is the 5th step-up (100 -> 112.5 kg): from Monday 10-05 to Sunday 10-11 the card says so, neutral, third line at most.
+  const squat = climbingCard(100, 102.5, 105, 107.5, 110, 112.5);
+  for (const today of ['2026-10-05', '2026-10-08', '2026-10-11']) {
+    const p = computeGoalProgress(deloadCardInput(today, { squat }));
+    const line = p.reasons.find(r => r.kind === 'deload');
+    assert.ok(line, `${today}: ${JSON.stringify(p.reasons)}`);
+    assert.equal(line.text, "Deload week: ~85–90% of last week's loads, 2 working sets");
+    assert.equal(line.tone, 'neutral');
+    assert.ok(p.reasons.length <= 3);
+  }
+  // Four step-ups: no cue. The week after the deload (reviewed week 10-05 is the lighter one): no cue either.
+  assert.equal(computeGoalProgress(deloadCardInput('2026-10-05', { squat: squat.slice(1) })).reasons.some(r => r.kind === 'deload'), false);
+  const after = [...squat, lw('2026-10-05', 117, 2, { topLoadKg: 97.5, volumeKg: 1920 })];
+  assert.equal(computeGoalProgress(deloadCardInput('2026-10-12', { squat: after })).reasons.some(r => r.kind === 'deload'), false);
+});
+
 test('return from a break: "Building back", not "Stalled" — verdict building, no amber reason', () => {
   const p = computeGoalProgress(breakInput({
     squat: squatBack(136, 136),

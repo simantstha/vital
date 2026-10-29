@@ -905,6 +905,97 @@ export function nextLoadCues(
   });
 }
 
+// ── A proactive deload (wave 24s) ───────────────────────────────────────────
+
+/** Straight weeks of heavier loads after which the next-week cue is a deload week. */
+export const DELOAD_CUE_STREAK_WEEKS = 5;
+/** The middle of the "~85-90%" the cue names: what a lifter who follows it lifts (rounded to the 2.5 kg / 5 lb grid). */
+export const DELOAD_CUE_LOAD_FRACTION = 0.875;
+/**
+ * The deload cue's lead-in: the review's "Next week" opens with it ("Deload week: ~85–90% of last week's loads, 2 working sets — then back to
+ * Squat 112.5 kg, …"), the goal card carries exactly this line on every day of the cue's week, and so do the coach lines (they print the card).
+ */
+export const DELOAD_CUE_HEAD = "Deload week: ~85–90% of last week's loads, 2 working sets";
+/** Weeks back the streak is counted over: more than enough for the cue (5) and for the "good timing after N straight weeks" note. */
+const HEAVIER_STREAK_MAX_WEEKS = 10;
+
+/**
+ * True when the week starting `weekStart` stepped up: some main lift's top load is above its load the week before, no lift went backwards
+ * (`liftRegressed`: that lift's cue is a hold, not a step) and neither week is a lighter one (`isDeloadWeek`: a deload, an ill / short week
+ * and the first week back from one all fail it, so a week that only looks heavy against a light one never counts).
+ */
+function steppedUpWeek(progression: Record<string, LiftWeekPoint[]>, weekStart: string): boolean {
+  const before = shiftDay(weekStart, -7);
+  if (isDeloadWeek(progression, weekStart) || isDeloadWeek(progression, before)) return false;
+  let up = false;
+  for (const [key, weeks] of Object.entries(progression)) {
+    if (!isMainLift(key)) continue;
+    const now = weeks.find(w => w.weekStart === weekStart)?.topLoadKg ?? null;
+    const was = weeks.find(w => w.weekStart === before)?.topLoadKg ?? null;
+    if (now != null && liftRegressed(weeks, weekStart)) return false;
+    if (now != null && was != null && now > was + 1e-9) up = true;
+  }
+  return up;
+}
+
+/**
+ * Straight weeks of heavier loads ending at `endWeekStart` (inclusive): each week stepped up on the one before (`steppedUpWeek`). A lighter
+ * week, a short or ill week, a week without the lifts or a comeback ends the count, so the next-week cue steps up at most
+ * DELOAD_CUE_STREAK_WEEKS - 1 times in a row before it asks for a deload. 0 when `endWeekStart` itself did not step up.
+ */
+export function heavierLoadStreak(progression: Record<string, LiftWeekPoint[]>, endWeekStart: string): number {
+  let n = 0;
+  while (n < HEAVIER_STREAK_MAX_WEEKS && steppedUpWeek(progression, shiftDay(endWeekStart, -7 * n))) n += 1;
+  return n;
+}
+
+export interface DeloadCue {
+  /** Straight weeks of heavier loads behind the cue (at least DELOAD_CUE_STREAK_WEEKS). */
+  weeks: number;
+  /** The loads she goes back to after the deload week: her pre-deload top load of every cued lift (`load.from`, as logged), the lead lift first. */
+  resume: Array<{ key: string; load: NextLoad }>;
+}
+
+/**
+ * The proactive deload: after DELOAD_CUE_STREAK_WEEKS straight weeks of heavier loads ending at the reviewed week the next-week cue is
+ * "Deload week: ~85-90% of last week's loads, 2 working sets - then back to Squat 112.5 kg, ..." (a lifter who adds 2.5 kg to every lift every
+ * week for 14 weeks was only ever praised for a deload, never sent to one). Never while rebuilding after a break. The resume loads are the
+ * pre-deload top loads of the lifts trained that week (`cuedLifts`); the week after the deload goes back to exactly these.
+ */
+export function proactiveDeload(
+  progression: Record<string, LiftWeekPoint[]>,
+  reviewedWeekStart: string,
+  opts: { imperial: boolean; leadKey: string | null; rebuilding: boolean },
+): DeloadCue | null {
+  if (opts.rebuilding) return null;
+  const weeks = heavierLoadStreak(progression, reviewedWeekStart);
+  if (weeks < DELOAD_CUE_STREAK_WEEKS) return null;
+  const resume = cuedLifts(progression, reviewedWeekStart, opts.leadKey).map(key => ({
+    key,
+    load: nextWorkingLoad(latestTopLoadKg(progression[key], reviewedWeekStart) as number, key, opts.imperial),
+  }));
+  return { weeks, resume };
+}
+
+/**
+ * The review of the deload week itself: when the week before it was a proactive-deload cue (`proactiveDeload`) and `deloadWeekStart` was a lighter
+ * week, the pre-deload top load of every cued lift, to go back to as the cue promised (`load.from`; the +2.5 kg follows the week after). Null when
+ * the deload was not asked for (her own: "Back to full loads: Squat 107.5 -> 110 kg" keeps its step) or nothing is known.
+ */
+export function afterProactiveDeload(
+  progression: Record<string, LiftWeekPoint[]>,
+  deloadWeekStart: string,
+  opts: { imperial: boolean; leadKey: string | null },
+): Array<{ key: string; load: NextLoad }> | null {
+  if (!isDeloadWeek(progression, deloadWeekStart)) return null;
+  if (proactiveDeload(progression, shiftDay(deloadWeekStart, -7), { ...opts, rebuilding: false }) == null) return null;
+  const out = cuedLifts(progression, deloadWeekStart, opts.leadKey).flatMap(key => {
+    const pre = priorTopLoadKg(progression[key], deloadWeekStart, 4);
+    return pre == null ? [] : [{ key, load: nextWorkingLoad(pre, key, opts.imperial) }];
+  });
+  return out.length > 0 ? out : null;
+}
+
 // ── Next week's loads after a short week ────────────────────────────────────
 
 export interface ShortWeekLoadCue {
