@@ -2268,6 +2268,26 @@ test('after 5 straight weeks of heavier loads the goal card (and so the coach li
 
 const EST_1RM_SENTENCE = 'Est. 1RM = the most you could lift once, estimated from your sets and how hard they felt.';
 
+// ── Wave 24s P3-6: the baseline week is named when it is not 4 weeks back ───────────────────────────────────────────────────────────────────
+
+const BASELINE_DAYS = ['2026-09-14', '2026-09-21', '2026-09-28'].flatMap(m => daysAt(m, [0, 1, 3, 5])).concat(daysAt('2026-10-05', [0, 1]));
+
+test('"vs 4 weeks ago" names the real baseline week ("vs wk of Aug 31") when the 4-weeks-ago week has no e1RM; the numbers do not change (wave 24s)', () => {
+  const card = (weeks: Array<ReturnType<typeof lw>>) => computeGoalProgress(base({
+    goal: 'muscle', todayKey: '2026-10-07', target: { weightKg: null, date: null, weeklySessions: 4 }, start: { weightKg: 80, startedAt: '2026-07-01T09:00:00.000Z', startedDay: '2026-07-01' },
+    progression: { squat: weeks },
+    strengthDays: BASELINE_DAYS, strengthHistoryDays: BASELINE_DAYS,
+  }));
+  // 09-07 (4 weeks before the recent window ending 10-05) is empty - an ill week - and the baseline is 08-31, five weeks back.
+  const gap = card([lw('2026-08-31', 139), lw('2026-09-28', 148), lw('2026-10-05', 151)]);
+  assert.equal(gap.reasons.find(r => r.kind === 'lift')!.text, 'Squat est. 1RM +12 kg vs wk of Aug 31 (139 → 151 kg)');
+  assert.match(gap.headline, /^Progressing — Squat est\. 1RM \+12 kg vs wk of Aug 31$/);
+  // The 4-weeks-ago week trained: unchanged wording, same arithmetic.
+  const full = card([lw('2026-08-31', 139), lw('2026-09-07', 140), lw('2026-09-28', 148), lw('2026-10-05', 151)]);
+  assert.equal(full.reasons.find(r => r.kind === 'lift')!.text, 'Squat est. 1RM +11 kg vs 4 weeks ago (140 → 151 kg)');
+  assert.match(full.headline, /^Progressing — Squat est\. 1RM \+11 kg vs 4 weeks ago$/);
+});
+
 test('the card explains "est. 1RM" in the goal\'s first lift-comparison week (the second week of lift data), where the term first appears, and then never again (wave 24s)', () => {
   const days = (...mondays: string[]) => mondays.flatMap(m => daysAt(m, [0, 2, 4]));
   const card = (today: string, weeks: string[], over: Partial<GoalProgressInput> = {}) => computeGoalProgress(base({

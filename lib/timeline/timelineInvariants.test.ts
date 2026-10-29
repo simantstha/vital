@@ -4116,6 +4116,45 @@ invariant(LIFTERS, 'P3-8: an adherence line is never amber under a "Progressing"
   return out;
 });
 
+// ── P3-6. lifter_obedient day 70-76: "+12 kg vs 4 weeks ago (139 → 151 kg)" when the 139 was set five weeks back (the ill week has no squat). The comparison window keeps its
+// maths (iOS mirrors it); only the label changes: "vs 4 weeks ago" is printed only when the lift was trained in the week 4 weeks before the recent window, else "vs wk of Aug 31"
+// names the Monday of the baseline week actually used. Checked against the scenario's own rows, on the card (reason and headline), the review stat and the coach lines.
+const MONTH_ABBR_24S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthDay24s = (day: string): string => `${MONTH_ABBR_24S[Number(day.slice(5, 7)) - 1]} ${Number(day.slice(8, 10))}`;
+
+invariant(LIFTERS, 'P3-6: "vs 4 weeks ago" is printed only when the lift was trained 4 weeks before the recent window; otherwise the label names the baseline week ("vs wk of Apr 6")', (snaps, name) => {
+  const scn = buildScenario(name);
+  const display = new Map(scn.sets.map(x => [x.display.toLowerCase(), x.exercise]));
+  const out: Violation[] = [];
+  let labels = 0;
+  // `lastWeek`: the review cuts its lift data at the reviewed week (a session on its own Monday is not in it), the card reads everything up to today.
+  const check = (snap: DaySnapshot, where: string, text: string, anchor: string, lastWeek = anchor): void => {
+    const trained = (exercise: string, monday: string): boolean => monday <= lastWeek && weekTopKg24s(name, exercise, monday) != null;
+    const m = /^(?:[^—]+ — )?(?:This week: |Last week: )?([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM [+−-]?\d+ (?:kg|lb)?\s?(vs 4 weeks ago|vs wk of ([A-Z][a-z]{2} \d+))/.exec(plain(text));
+    if (!m) return;
+    const exercise = display.get(m[1].toLowerCase());
+    if (!exercise) return;
+    // The end of the recent window: the newest trained week among the anchor and the 2 before it.
+    const end = [0, 7, 14].map(o => addDays(anchor, -o)).find(w => trained(exercise, w));
+    if (end == null) return;
+    labels++;
+    const fourAgo = addDays(end, -28);
+    const baseline = [fourAgo, addDays(end, -35)].find(w => trained(exercise, w));
+    if (baseline == null) return;
+    if (m[2] === 'vs 4 weeks ago' && !trained(exercise, fourAgo)) out.push({ snap, detail: `${where}: "${visible(text)}" says 4 weeks ago, but ${m[1]} was not trained in the week of ${monthDay24s(fourAgo)} (the baseline is the week of ${monthDay24s(baseline)})` });
+    if (m[3] != null && (trained(exercise, fourAgo) || m[3] !== monthDay24s(baseline))) out.push({ snap, detail: `${where}: "${visible(text)}" names the week of ${m[3]}, the baseline week is ${monthDay24s(baseline)} (4 weeks back ${trained(exercise, fourAgo) ? 'was trained' : 'is empty'})` });
+  };
+  for (const snap of snaps) {
+    const anchor = mondayOfDate(snap.date);
+    for (const t of cardTexts(snap)) check(snap, t.where, t.text, anchor);
+    for (const t of coachTexts(snap)) if (t.where.startsWith('coach')) check(snap, t.where, t.text.replace(/^\s*-\s*/, ''), anchor);
+    const r = snap.review?.review;
+    if (r) for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) check(snap, `review.stat ${st.label}`, `${st.label} ${st.value} ${st.comparison}`, addDays(r.weekStart, 7), r.weekStart);
+  }
+  assert.ok(labels > 10, `${name}: only ${labels} 4-week labels were checked, so this invariant checked (almost) nothing`);
+  return out;
+});
+
 // ── P2-A. A proactive deload. lifter_obedient added +2.5 kg to every lift every week for 14 weeks (bench 80 → 110 kg; the day-98 cue was "bench 110 → 112.5 kg")
 // and the app only ever praised a deload ("good timing after 3 straight weeks of heavier loads"), it never prescribed one. After 5 straight weeks in which
 // the next-load cue stepped up, the next review's cue is "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 125 kg, …"; the

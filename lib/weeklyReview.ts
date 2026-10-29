@@ -41,6 +41,7 @@ import {
   latestTopLoadKg,
   liftDisplayChange,
   liftWeekChangeDisplay,
+  liftBaselineLabel,
   liftDisplayName,
   liftReturnDisplay,
   liftShortName,
@@ -886,7 +887,8 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
       key: picked.exercise,
       name: liftDisplayName(picked.exercise, input.exerciseDisplay),
       shown: liftDisplayChange(picked.change, imperial).change,
-      windowLabel: 'vs 4 weeks ago',
+      // "vs 4 weeks ago", or "vs wk of Aug 31" when the 4-weeks-ago week is empty (label only, wave 24s).
+      windowLabel: liftBaselineLabel(input.progression[picked.exercise], liftAnchor(week)),
       stalled: isLiftStalled(input.progression[picked.exercise], liftAnchor(week)),
     };
   } else {
