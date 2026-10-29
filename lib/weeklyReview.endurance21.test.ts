@@ -147,9 +147,9 @@ test('the cap note in "Next week" follows the plan\'s cadence, not every Monday'
 test('a jump in a cutback week is read against the cutback number the card showed that week (~20 km), and the hold next week still steps up from the 25 km week it replaced', () => {
   const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 40], { weekStart: '2026-10-19' }));
   assert.equal(r.weekRating, 'mixed');
-  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 20, targetKm: 30 });
-  assert.equal(r.headline, '4 sessions, 40 of ~20 km — well above the safe step · goal 30 km');
-  assert.equal(r.slip, "Jumped 20 km over this week's step — big jumps raise injury risk");
+  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 20, targetKm: 30, cutback: true });
+  assert.equal(r.headline, '4 sessions, 40 of ~20 km — well above the cutback · goal 30 km'); // (wave 24e: a cutback week's number is the cutback, on every surface)
+  assert.equal(r.slip, "Jumped 20 km over this week's cutback — big jumps raise injury risk");
   assert.equal(r.nextWeek, 'Hold around ~28 km next week, then build ~10% a week toward 30 km.');
 });
 
@@ -169,7 +169,7 @@ test('a comeback week more than 10% over its "up to" cap is "a touch over, fine"
   assert.equal(well.weekRating, 'mixed');
   assert.deepEqual(well.weekGap, { kind: 'spike', doneKm: 21, stepKm: 15, targetKm: 30, ceiling: true });
   assert.equal(well.slip, 'Ran 21 km against an up-to-15 km ceiling — big jumps raise injury risk');
-  assert.equal(well.nextWeek, "Stay at ~15 km next week — don't build on last week's jump; then build ~10% a week toward 30 km.");
+  assert.equal(well.nextWeek, "Stay at ~15 km next week — don't build on last week's jump; then up to ~25% a week until you're back at your usual ~22 km, about 10% after that.");
   // Exactly 10% over the ceiling is inside its slack: on plan, praised for the climb, and the ladder goes on.
   const within = computeWeeklyReview(planReview([...history, 16.5]));
   assert.match(within.headline, /^4 sessions, 16\.5 of up to ~15 km — on plan · goal 30 km/);
