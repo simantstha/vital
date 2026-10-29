@@ -1853,11 +1853,8 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       // "Held" only when the goal was run; a week short of it at its rounded reading is close, not held.
       const ran = distanceNumber(input, rp.week.km);
       const goal = distanceNumber(input, plan.goalKm);
-      if (ran < goal) {
-        // "Again" only when next week asks for the same number - and not for a week inside the 10% band the card calls done (wave 24e: no nudge for a week that did what the card said).
-        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === goal && rp.week.km < plan.goalKm * WEEK_ON_PLAN_FRACTION ? ` — aim for ${goal} again` : '';
-        return `Close to your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}${again}.`;
-      }
+      // (Wave 24e: a near miss has no win slot - "Close to your weekly goal: 28 of 30 km" is a neutral line that leads "Next week", see `nearMissNote`.)
+      if (ran < goal) return null;
       return plan.goalReachedBefore && plan.lastAtGoal
         ? `You held your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}.`
         : `You reached your weekly goal: ${ran} of ${distanceText(input, plan.goalKm)}.`;
@@ -1868,14 +1865,9 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       // A week well above its step is not praised for the extra.
       if (plan.targetKm != null && rp.week.km > plan.targetKm * ABOVE_STEP_FRACTION) return null;
       const target = plan.targetKm as number;
-      // "Hit" is the rounded reading reaching the step, or (wave 24e) 90% of it - the band in which the card says the week's km are done; 20 of ~22 km is close, and says what to aim for.
-      if (distanceNumber(input, rp.week.km) < distanceNumber(input, target) && rp.week.km < target * WEEK_ON_PLAN_FRACTION - 1e-9) {
-        // "Again" only when next week asks for the same step; a climb back after a break asks for more.
-        // (Wave 24e: and no nudge for a shortfall under 3 km / 2 mi - the card called that "one short easy run or rest, either is fine".)
-        const stubKm = (u < 1 ? 2 : 3) / u;
-        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) && target - rp.week.km >= stubKm - 1e-9 ? ` — aim for ~${distanceNumber(input, target)} again` : '';
-        return `Close to your step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${again}.`;
-      }
+      // "Hit" is the DISPLAYED reading reaching the displayed step (wave 24e, round 7: 90% of it is on plan, never a hit - "20 of ~22 km" is close, in km and in miles
+      // alike). A near miss has no win slot; `nearMissNote` leads "Next week" with the neutral line.
+      if (distanceNumber(input, rp.week.km) < distanceNumber(input, target)) return null;
       return `You hit this week's step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${pct != null && pct !== 0 ? ` (${signed(pct, `${Math.abs(pct)}%`)} ${onWhat})` : ''}.`;
     }
   }
@@ -2929,9 +2921,36 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
 }
 
 /** nextWeek is an action derived from the gap / slip — never a copy of the slip. */
+/**
+ * Wave 24e (round 7): the neutral line for a good week that finished inside the 10% band but short of the DISPLAYED step and asks for the same number again ("Close to your
+ * step: 20 of ~22 km — ~22 again next week"). It replaces the win ("You hit this week's step" was said of 20 of ~22 km in km and "close" of the same week in miles): no
+ * praise, no "aim for" (the card told a runner 2 km short "one short easy run or rest, either is fine"). Null when next week moves on (the plan line says where), for a
+ * week that hit it, was graded otherwise, or has its own story (cutback, hold, race, wind-down, the climb back).
+ */
+function nearMissNote(input: WeeklyReviewInput, assessment: WeekAssessment): string | null {
+  if (input.goal !== 'endurance' || assessment.rating !== 'good') return null;
+  const rp = reviewPlans(input);
+  const plan = rp.plan;
+  if (plan == null || rp.raceRun != null || isWindDownKind(plan.kind) || rp.holdBroken || plan.cutback != null || startedTaperingEarly(input, rp)) return null;
+  const u = unitsPerKmOf(input);
+  if (overUpToCap(plan, rp.week.km, u)) return null;
+  if (plan.comeback != null && rp.prevWeek.km > 0 && rp.week.km >= rp.prevWeek.km && rp.week.km < plan.goalKm) return null;
+  const nextSame = (target: number): boolean => rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target);
+  if (plan.kind === 'maintain') {
+    if (distanceNumber(input, rp.week.km) >= distanceNumber(input, plan.goalKm) || !nextSame(plan.goalKm)) return null;
+    return `Close to your weekly goal: ${distanceNumber(input, rp.week.km)} of ${distanceText(input, plan.goalKm)} — ${distanceNumber(input, plan.goalKm)} again next week.`;
+  }
+  if (plan.kind !== 'build' && plan.kind !== 'rebuild') return null;
+  const target = plan.targetKm as number;
+  if (rp.week.km >= plan.goalKm || rp.week.km > target * ABOVE_STEP_FRACTION || distanceNumber(input, rp.week.km) >= distanceNumber(input, target) || !nextSame(target)) return null;
+  return `Close to your step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)} — ~${distanceNumber(input, target)} again next week.`;
+}
+
 function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week, prevWeek: Week, assessment: WeekAssessment, slip: string | null): string {
-  const next = buildNextWeekRaw(input, cands, week, prevWeek, assessment);
-  return slip != null && normalizeSentence(next) === normalizeSentence(slip) ? fallbackNextWeek(input, week) : next;
+  const raw = buildNextWeekRaw(input, cands, week, prevWeek, assessment);
+  const next = slip != null && normalizeSentence(raw) === normalizeSentence(slip) ? fallbackNextWeek(input, week) : raw;
+  const note = nearMissNote(input, assessment);
+  return note != null ? `${note} ${next}` : next;
 }
 
 /** The weekend-plan tip: rotated for weight loss (it alternates with other tips), the one fixed line for muscle. */
