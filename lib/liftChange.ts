@@ -584,7 +584,7 @@ export function isLowerBodyCompound(exerciseKey: string): boolean {
 export interface NextLoad {
   /** The working load as logged, in display units (rounded to 0.5 kg / 1 lb): what a "hold" keeps. */
   from: number;
-  /** The load the step starts from: `from` rounded DOWN to the 2.5 kg / 5 lb grid, so the step is exactly one plate step and never more than one above `from`. */
+  /** The load the step starts from: `from` snapped to the NEAREST 2.5 kg / 5 lb grid value, so the step is exactly one plate step and the real step from `from` is half to one-and-a-half grid steps (2.5-7.5 lb, 1.25-3.75 kg). */
   start: number;
   /** The load to try next: `start` plus one step, always on the grid (capped at the logger's maximum). */
   to: number;
@@ -602,13 +602,15 @@ const MAX_LOAD_LB = 2200;
  * on the 2.5 kg / 5 lb grid, so every step is loadable with standard plates (a
  * 1.25 kg step is 0.625 kg a side — "bench 80 → 81.5 kg" needs 0.75 kg plates
  * nobody has). The load is first read as logged (`from`, to 0.5 kg / 1 lb), then
- * rounded DOWN to the grid (`start`, wave 23s) and stepped exactly once (`to` =
- * `start` + step): "bench ~190 → 195 lb" for a bench logged at 193 lb, never
- * "193 → 200" (a +7 that is no step) or "176 → 180" (a +4). Rounding down keeps
- * the real step from what she lifted at most one step (193 lb -> 195 is +2; the
- * nearest grid point gave 195 -> 200, a +7), and `approx` marks EVERY start that
- * moved from the logged load. `to` is capped at the logger's maximum and never
- * below `from`. `topLoadKg` is the lift's top working set.
+ * snapped to the NEAREST grid value (`start`, wave 24s) and stepped exactly once
+ * (`to` = `start` + step): "bench ~195 → 200 lb" for a bench logged at 193 lb,
+ * never "193 → 200" (a +7 that is no step) or "176 → 180" (a +4). Wave 23s
+ * rounded DOWN, which printed "Squat ~255 → 260 lb" after a 259 lb set (+1) and
+ * "bench ~190 → 195" after 193 (+2), steps that were no progression; the nearest
+ * value makes the real step from the logged load 2.5-7.5 lb (1.25-3.75 kg).
+ * `approx` marks EVERY start that moved from the logged load. `to` is capped at
+ * the logger's maximum and never below `from`. `topLoadKg` is the lift's top
+ * working set.
  * Mirrors LiftLoggerLogic.nextLoad (iOS), which returns `to`.
  */
 export function nextWorkingLoad(topLoadKg: number, _exerciseKey: string, imperial: boolean): NextLoad {
@@ -616,7 +618,7 @@ export function nextWorkingLoad(topLoadKg: number, _exerciseKey: string, imperia
   const step = imperial ? 5 : 2.5;
   const plate = imperial ? 1 : 0.5;
   const from = Math.round((imperial ? topLoadKg * LB_PER_KG : topLoadKg) / plate) * plate;
-  const start = Math.floor(from / step + 1e-9) * step;
+  const start = Math.round(from / step + 1e-9) * step;
   const to = Math.min(start + step, imperial ? MAX_LOAD_LB : MAX_LOAD_KG);
   return { from, start, to: Math.max(to, from), unit, approx: Math.abs(start - from) > 1e-9 };
 }
@@ -903,19 +905,116 @@ export function nextLoadCues(
   });
 }
 
+// ── A proactive deload (wave 24s) ───────────────────────────────────────────
+
+/** Straight weeks of heavier loads after which the next-week cue is a deload week. */
+export const DELOAD_CUE_STREAK_WEEKS = 5;
+/** The middle of the "~85-90%" the cue names: what a lifter who follows it lifts (rounded to the 2.5 kg / 5 lb grid). */
+export const DELOAD_CUE_LOAD_FRACTION = 0.875;
+/**
+ * The deload cue's lead-in: the review's "Next week" opens with it ("Deload week: ~85–90% of last week's loads, 2 working sets — then back to
+ * Squat 112.5 kg, …"), the goal card carries exactly this line on every day of the cue's week, and so do the coach lines (they print the card).
+ */
+export const DELOAD_CUE_HEAD = "Deload week: ~85–90% of last week's loads, 2 working sets";
+/** Weeks back the streak is counted over: more than enough for the cue (5) and for the "good timing after N straight weeks" note. */
+const HEAVIER_STREAK_MAX_WEEKS = 10;
+
+/**
+ * True when the week starting `weekStart` stepped up: some main lift's top load is above its load the week before, no lift went backwards
+ * (`liftRegressed`: that lift's cue is a hold, not a step) and neither week is a lighter one (`isDeloadWeek`: a deload, an ill / short week
+ * and the first week back from one all fail it, so a week that only looks heavy against a light one never counts).
+ */
+function steppedUpWeek(progression: Record<string, LiftWeekPoint[]>, weekStart: string): boolean {
+  const before = shiftDay(weekStart, -7);
+  if (isDeloadWeek(progression, weekStart) || isDeloadWeek(progression, before)) return false;
+  let up = false;
+  for (const [key, weeks] of Object.entries(progression)) {
+    if (!isMainLift(key)) continue;
+    const now = weeks.find(w => w.weekStart === weekStart)?.topLoadKg ?? null;
+    const was = weeks.find(w => w.weekStart === before)?.topLoadKg ?? null;
+    if (now != null && liftRegressed(weeks, weekStart)) return false;
+    if (now != null && was != null && now > was + 1e-9) up = true;
+  }
+  return up;
+}
+
+/**
+ * Straight weeks of heavier loads ending at `endWeekStart` (inclusive): each week stepped up on the one before (`steppedUpWeek`). A lighter
+ * week, a short or ill week, a week without the lifts or a comeback ends the count, so the next-week cue steps up at most
+ * DELOAD_CUE_STREAK_WEEKS - 1 times in a row before it asks for a deload. 0 when `endWeekStart` itself did not step up.
+ */
+export function heavierLoadStreak(progression: Record<string, LiftWeekPoint[]>, endWeekStart: string): number {
+  let n = 0;
+  while (n < HEAVIER_STREAK_MAX_WEEKS && steppedUpWeek(progression, shiftDay(endWeekStart, -7 * n))) n += 1;
+  return n;
+}
+
+export interface DeloadCue {
+  /** Straight weeks of heavier loads behind the cue (at least DELOAD_CUE_STREAK_WEEKS). */
+  weeks: number;
+  /** The loads she goes back to after the deload week: her pre-deload top load of every cued lift (`load.from`, as logged), the lead lift first. */
+  resume: Array<{ key: string; load: NextLoad }>;
+}
+
+/**
+ * The proactive deload: after DELOAD_CUE_STREAK_WEEKS straight weeks of heavier loads ending at the reviewed week the next-week cue is
+ * "Deload week: ~85-90% of last week's loads, 2 working sets - then back to Squat 112.5 kg, ..." (a lifter who adds 2.5 kg to every lift every
+ * week for 14 weeks was only ever praised for a deload, never sent to one). Never while rebuilding after a break. The resume loads are the
+ * pre-deload top loads of the lifts trained that week (`cuedLifts`); the week after the deload goes back to exactly these.
+ */
+export function proactiveDeload(
+  progression: Record<string, LiftWeekPoint[]>,
+  reviewedWeekStart: string,
+  opts: { imperial: boolean; leadKey: string | null; rebuilding: boolean },
+): DeloadCue | null {
+  if (opts.rebuilding) return null;
+  const weeks = heavierLoadStreak(progression, reviewedWeekStart);
+  if (weeks < DELOAD_CUE_STREAK_WEEKS) return null;
+  const resume = cuedLifts(progression, reviewedWeekStart, opts.leadKey).map(key => ({
+    key,
+    load: nextWorkingLoad(latestTopLoadKg(progression[key], reviewedWeekStart) as number, key, opts.imperial),
+  }));
+  return { weeks, resume };
+}
+
+/**
+ * The review of the deload week itself: when the week before it was a proactive-deload cue (`proactiveDeload`) and `deloadWeekStart` was a lighter
+ * week, the pre-deload top load of every cued lift, to go back to as the cue promised (`load.from`; the +2.5 kg follows the week after). Null when
+ * the deload was not asked for (her own: "Back to full loads: Squat 107.5 -> 110 kg" keeps its step) or nothing is known.
+ */
+export function afterProactiveDeload(
+  progression: Record<string, LiftWeekPoint[]>,
+  deloadWeekStart: string,
+  opts: { imperial: boolean; leadKey: string | null },
+): Array<{ key: string; load: NextLoad }> | null {
+  if (!isDeloadWeek(progression, deloadWeekStart)) return null;
+  if (proactiveDeload(progression, shiftDay(deloadWeekStart, -7), { ...opts, rebuilding: false }) == null) return null;
+  const out = cuedLifts(progression, deloadWeekStart, opts.leadKey).flatMap(key => {
+    const pre = priorTopLoadKg(progression[key], deloadWeekStart, 4);
+    return pre == null ? [] : [{ key, load: nextWorkingLoad(pre, key, opts.imperial) }];
+  });
+  return out.length > 0 ? out : null;
+}
+
 // ── Next week's loads after a short week ────────────────────────────────────
 
 export interface ShortWeekLoadCue {
   key: string;
   /**
-   * 'skipped': not trained that week, so its planned step repeats ("Squat 112.5 kg").
-   * 'light': trained, but only as a light / volume day (top set under 90% of its 4-week best): the planned step repeats too.
+   * 'skipped': not trained that week, so its LAST load repeats ("Squat 112.5 kg (your last load)"; wave 24s: the planned step it never lifted is not prescribed
+   *   after a fortnight without a heavy set).
+   * 'light': trained, but only as a light / volume day (top set under 90% of its 4-week best): its last load repeats too.
    * 'trained': trained at its working load, so the normal next-load rule applies.
    * 'hold': trained, but its e1RM fell last week: the load stays.
    */
   kind: 'skipped' | 'light' | 'trained' | 'hold';
-  /** `from` is the load the step starts at (the lift's last working load), `to` the one to try. */
+  /** `from` is the lift's last working load (what a repeat or a hold keeps), `to` the step above it (what only a 'trained' lift is cued). */
   load: NextLoad;
+}
+
+/** The load (display units) a short-week cue puts on the bar: the step for a 'trained' lift, the last working load for a repeat ('skipped', 'light') or a hold. */
+export function shortWeekLoadToLift(cue: ShortWeekLoadCue): number {
+  return cue.kind === 'trained' ? cue.load.to : cue.load.from;
 }
 
 /**
@@ -923,11 +1022,13 @@ export interface ShortWeekLoadCue {
  * (the review's "Back to 4 this week — don't make up the missed ones. Squat
  * 112.5 kg …"): every main lift in rotation, the lead lift first, at most
  * MAX_CUED_LIFTS. A lift that was not trained that week (or only as a light
- * volume day, under 90% of its 4-week best top set) repeats the step it was
- * already cued — the missed session is not made up and the step is not skipped
- * either; a lift trained at its working load follows the normal rule
- * (`nextWorkingLoad`, or a hold when its e1RM fell). A lift with no known load
- * in the last 4 weeks has no step to repeat and is left out.
+ * volume day, under 90% of its 4-week best top set) repeats its LAST working
+ * load (wave 24s): the missed session is not made up, and a step is not
+ * prescribed after a fortnight without a heavy set — the +2.5 kg follows the
+ * week after, from a load she has lifted again. A lift trained at its working
+ * load follows the normal rule (`nextWorkingLoad`, or a hold when its e1RM
+ * fell). A lift with no known load in the last 4 weeks has no load to repeat
+ * and is left out. `shortWeekLoadToLift` is the load each cue puts on the bar.
  */
 export function shortWeekLoadCues(
   progression: Record<string, LiftWeekPoint[]>,

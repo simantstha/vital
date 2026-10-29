@@ -272,8 +272,9 @@ test('"losing too fast" entering is an event: it may start mid-week, once, and i
 test('within a kilo of the target a too-fast loss is "nearly there": ease toward maintenance - the step is given once', () => {
   const fast = readings(range(0, 60), n => 92 - 0.19 * n);
   const over = { targetKg: 82.5, targetDate: D(80) };
-  // Someone who logs food (every other day, so never "8 days held" below) is given the step as a number.
-  const logs = intake(range(28, 60).filter(n => n % 2 === 0), () => 2000);
+  // Someone who logs food (every other day, so never "8 days held" below) is given the step as a number - and, from the step on, eats it (wave 24w:
+  // the standing level reads the food log, so "the step you started" needs logs at the level since the day it began).
+  const logs = intake(range(28, 60).filter(n => n % 2 === 0), n => (n < 48 ? 2000 : 2150));
   const p = planAt(fast, 48, { ...over, intakeDays: logs }); // Sunday 48: within a kilo - the event that gives the step
   assert.equal(p.nearlyThere, true);
   assert.equal(p.action.kind, 'ease_to_maintenance');
@@ -285,7 +286,9 @@ test('within a kilo of the target a too-fast loss is "nearly there": ease toward
   // From the next day it is a standing level, not the same sentence again (wave 23w) - and it is read on the first Monday 14+ days on.
   for (const n of [49, 52, 56, 62]) {
     const standing = planAt(fast, n, { ...over, intakeDays: logs });
-    assert.equal(plainSpaces(standing.action.text), 'Stay at ~2,150–2,200 kcal (the step you started Apr 19); we\'ll read it on Mon, May 4', `day ${n}`);
+    // (The first standing week has only the step's own Sunday logged: too few days to claim it - wave 24w; the week after has 4.)
+    const text = n < 56 ? 'Aim for ~2,150–2,200 kcal a day; we\'ll read it on Mon, May 4' : 'Stay at ~2,150–2,200 kcal (the step you started Apr 19); we\'ll read it on Mon, May 4';
+    assert.equal(plainSpaces(standing.action.text), text, `day ${n}`);
     assert.equal(standing.action.kind, 'ease_to_maintenance');
     assert.equal(standing.action.kcalTarget, 2150);
     assert.equal(standing.step?.phase, 'standing');
@@ -304,7 +307,7 @@ test('within a kilo of the target a too-fast loss is "nearly there": ease toward
 test('reached: "set a new target or switch to maintenance" for the first 7 days, then maintenance — not asked daily; the step is said once', () => {
   const calm = readings(range(0, 100), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
   const reachedAt = D(62);
-  const logs = intake(range(40, 100).filter(n => n % 2 === 0), () => 2000); // logs food, but never 8 days of 14
+  const logs = intake(range(40, 100).filter(n => n % 2 === 0), n => (n < 62 ? 2000 : 2150)); // logs food, but never 8 days of 14; eats the step from day 62 (wave 24w)
   const planOn = (n: number, over: Partial<WeightPlanInput> = {}) => planAt(calm, n, { reached: true, reachedAt, intakeDays: logs, ...over });
   // The reach day: the question, with the step in full - and why it is asked ("you no longer need a deficit").
   const reach = planOn(62);
@@ -317,7 +320,8 @@ test('reached: "set a new target or switch to maintenance" for the first 7 days,
     const p = planOn(n);
     assert.equal(p.state, 'reached', `day ${n}`);
     assert.equal(p.action.kind, 'next_target');
-    assert.equal(plainSpaces(p.action.text), 'Set a new target or switch to maintenance — stay at ~2,150–2,200 kcal (the step you started May 3); we\'ll read it on Mon, May 18', `day ${n}`);
+    // (Only the reach day itself is logged since the step began: too few days to claim it was taken.)
+    assert.equal(plainSpaces(p.action.text), 'Set a new target or switch to maintenance — aim for ~2,150–2,200 kcal a day; we\'ll read it on Mon, May 18', `day ${n}`);
     assert.equal(p.verdict, 'reached');
   }
   for (const n of range(70, 76)) {
@@ -356,7 +360,7 @@ test('P2-6: the step is a number - from the budget (capped at the TDEE estimate)
 
 test('P2-A: the step is read on the first Monday 14+ days after it was given: held within 0.5 kg - keep it; the level stands after that', () => {
   const calm = readings(range(0, 140), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
-  const logs = intake(range(40, 140).filter(n => n % 2 === 0), () => 2000);
+  const logs = intake(range(40, 140).filter(n => n % 2 === 0), n => (n < 62 ? 2000 : 2150)); // eats the step from day 62 (wave 24w)
   const at = (n: number, over: Partial<WeightPlanInput> = {}) => planAt(calm, n, { reached: true, reachedAt: D(62), intakeDays: logs, ...over });
   // Given May 3 (day 62); 14 days on is Sunday May 17, so the first plan Monday on or after it is May 18 (day 77).
   const read = at(77);
@@ -381,7 +385,8 @@ test('P2-A: the step is read on the first Monday 14+ days after it was given: he
   const food = (n: number) => planAt(calm, n, { reached: true, reachedAt: D(62) });
   assert.equal(plainSpaces(food(62).action.text), 'Set a new target or switch to maintenance — you no longer need a deficit, so add a ~150–200 kcal snack a day (e.g. yogurt and fruit) and watch the weekly average for 2 weeks');
   assert.equal(plainSpaces(food(70).action.text), 'Keep the daily snack (the step you started May 3); we\'ll read it on Mon, May 18');
-  assert.equal(plainSpaces(food(77).action.text), 'Your weekly average held within 0.5 kg — keep that snack, it\'s your maintenance');
+  // (Wave 24w, P3-5: plain words - no "weekly average held within", no "keep that snack, it's".)
+  assert.equal(plainSpaces(food(77).action.text), 'Your weight held — keep eating as you are, snack included; that\'s your maintenance');
   assert.equal(plainSpaces(food(84).action.text), 'Keep the daily snack — it\'s your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act');
   for (const n of [62, 70, 77, 84, 98]) {
     const p = food(n);
@@ -390,11 +395,17 @@ test('P2-A: the step is read on the first Monday 14+ days after it was given: he
   }
   // Imperial users read lb.
   assert.match(plainSpaces(at(77, { unitSystem: 'imperial' }).action.text), /^Your weekly average held within 1\.1 lb on ~2,150–2,200 kcal/);
+  // Held on logs that never reached the step (wave 24w): the maintenance is what the logs say, not the step's level.
+  const never = planAt(calm, 77, { reached: true, reachedAt: D(62), intakeDays: intake(range(40, 140).filter(n => n % 2 === 0), () => 2000) });
+  assert.equal(plainSpaces(never.action.text), "Your weekly average held within 0.5 kg on ~2,000 kcal without the step — that's your maintenance");
+  assert.equal(never.action.kcalTarget, 2000);
+  assert.equal(never.step?.phase, 'read');
 });
 
 test('P2-A: still falling after the step - add another ~150; rising - back off ~100; each notch is given once and stands too', () => {
   const falling = readings(range(0, 140), n => (n < 62 ? 92 - 0.13 * n : 83.94 - 0.1 * (n - 62)));
-  const logs = intake(range(40, 140).filter(n => n % 2 === 0), () => 2000);
+  // Eats each level from the day it is given (wave 24w: the standing level reads the food log): 2,150 from day 62, 2,300 from day 77.
+  const logs = intake(range(40, 140).filter(n => n % 2 === 0), n => (n < 62 ? 2000 : n < 77 ? 2150 : 2300));
   const fall = (n: number) => planAt(falling, n, { reached: true, reachedAt: D(62), intakeDays: logs });
   const more = fall(77);
   assert.equal(plainSpaces(more.action.text), 'Your weekly average is still falling (down 0.7 kg in a week) — add another ~150 kcal a day (to ~2,300–2,350 kcal); we\'ll read it on Mon, Jun 1');
@@ -411,6 +422,11 @@ test('P2-A: still falling after the step - add another ~150; rising - back off ~
   assert.match(plainSpaces(toCap.action.text), /add another ~150 kcal a day \(to ~2,200 kcal\); we'll read it on Mon, Jun 1$/);
   const capped = planAt(falling, 77, { reached: true, reachedAt: D(62), intakeDays: logs, formulaTdee: 2150 });
   assert.match(plainSpaces(capped.action.text), /^Your weekly average is still falling \(down 0\.7 kg in a week\) — you are already at the top of your maintenance estimate, so stay at ~2,150 kcal and we'll read it on Mon, Jun 1$/);
+  // Still falling on logs that never reached the step: no second notch on top of a step that was not taken (wave 24w).
+  const neverTook = planAt(falling, 77, { reached: true, reachedAt: D(62), intakeDays: intake(range(40, 140).filter(n => n % 2 === 0), () => 2000) });
+  assert.equal(plainSpaces(neverTook.action.text), 'Your weekly average is still falling (down 0.7 kg in a week), and your logs are still ~2,000 kcal — eat the step first (~2,150–2,200 kcal); we\'ll read it on Mon, Jun 1');
+  assert.equal(neverTook.action.kcalTarget, 2150);
+  assert.equal(neverTook.step?.loKcal, 2150);
   // Rising: back off, never under the budget.
   const rising = readings(range(0, 140), n => (n < 62 ? 92 - 0.13 * n : 83.94 + 0.1 * (n - 62)));
   const rise = (n: number, over: Partial<WeightPlanInput> = {}) => planAt(rising, n, { reached: true, reachedAt: D(62), intakeDays: logs, ...over });
@@ -438,8 +454,8 @@ test('held for 2+ weeks on logged intake, the weight names its own maintenance t
   const p = at(70);
   assert.equal(p.state, 'maintenance');
   assert.equal(p.action.kind, 'maintenance_target');
-  // (The week before gave the step to ~2,150-2,200: a different figure says it replaces it.)
-  assert.equal(plainSpaces(p.action.text), "You've held about 84 kg on ~2,050 kcal — make that your maintenance target (it replaces the step to ~2,150–2,200 kcal)");
+  // (The week before gave the step to ~2,150-2,200, and the logs since never reached it: the weight held without the step - wave 24w.)
+  assert.equal(plainSpaces(p.action.text), "You held about 84 kg on ~2,050 kcal without the step — that's your maintenance");
   assert.equal(p.action.kcalTarget, 2050);
   assert.equal(isInstruction(p.action), true);
   assert.equal(p.step?.phase, 'read');
@@ -468,9 +484,9 @@ test('held for 2+ weeks on logged intake, the weight names its own maintenance t
   // ...and a budget already there keeps its target.
   const same = at(70, { targetKcal: 2050 });
   assert.equal(same.action.kind, 'hold');
-  assert.match(plainSpaces(same.action.text), /keep your calorie target where it is \(it replaces the step to ~2,200–2,250 kcal\)$/);
+  assert.equal(plainSpaces(same.action.text), 'You held about 84 kg on ~2,050 kcal without the step — keep your calorie target where it is');
   // Imperial users read lb.
-  assert.match(plainSpaces(at(70, { unitSystem: 'imperial' }).action.text), /^You've held about 18[56] lb on ~2,050 kcal/);
+  assert.match(plainSpaces(at(70, { unitSystem: 'imperial' }).action.text), /^You held about 18[56] lb on ~2,050 kcal without the step/);
 });
 
 test('plan text joins numbers to units with U+00A0, in kg and in lb', () => {
@@ -752,4 +768,59 @@ test('P2-3: the reached question runs to the end of a calendar week - it never e
   const mondayReach = (n: number) => planAt(calm, n, { reached: true, reachedAt: D(63) });
   for (const n of range(63, 69)) assert.equal(mondayReach(n).action.kind, 'next_target', `day ${n}`);
   assert.notEqual(mondayReach(70).action.kind, 'next_target');
+});
+
+// ═══ wave 24w, P2-1: the easing step reads the food log ══════════════════════════════════════════════════════════════════════════
+
+/** Logged days from `from` to `to` (day numbers) at `kcal`. */
+const steady = (from: number, to: number, kcal: number) => intake(range(from, to), () => kcal);
+
+test('P2-1 (24w): "the step you started" is said only when the logs since the step show it; otherwise the logs are named, or nothing is claimed', () => {
+  const fast = readings(range(0, 70), n => 92 - 0.19 * n);
+  const over = { targetKg: 82.5, targetDate: D(80) };
+  // The step is given on Sunday day 48 (Apr 19); the plan weeks after it begin on Mondays 49 and 56 and are read on Monday 63 (May 4).
+  const before = steady(28, 47, 2000);
+  const at = (n: number, after: ReturnType<typeof steady>) => plainSpaces(planAt(fast, n, { ...over, intakeDays: [...before, ...after] }).action.text);
+  // Eating at the step's level since it began: claimed, in both standing weeks.
+  assert.equal(at(56, steady(48, 70, 2150)), "Stay at ~2,150–2,200 kcal (the step you started Apr 19); we'll read it on Mon, May 4");
+  // Within 50 kcal of the low end still counts (mean 2,100).
+  assert.equal(at(56, steady(48, 70, 2100)), "Stay at ~2,150–2,200 kcal (the step you started Apr 19); we'll read it on Mon, May 4");
+  // Logs still where they were: the step is not claimed. The logs are named, and the step is what it is.
+  assert.equal(at(56, steady(48, 70, 2000)), "Your logs are still ~2,000 kcal, so the step is about one extra snack a day (to ~2,150–2,200 kcal); we'll read it on Mon, May 4");
+  assert.equal(at(56, steady(48, 70, 2050)), "Your logs are still ~2,050 kcal, so the step is about one extra snack a day (to ~2,150–2,200 kcal); we'll read it on Mon, May 4");
+  // Days BEFORE the step began are not counted: a week at 2,300 before it does not make 2,000 after it a step taken.
+  const heavyBefore = steady(28, 47, 2300);
+  assert.equal(plainSpaces(planAt(fast, 56, { ...over, intakeDays: [...heavyBefore, ...steady(48, 70, 2000)] }).action.text),
+    "Your logs are still ~2,000 kcal, so the step is about one extra snack a day (to ~2,150–2,200 kcal); we'll read it on Mon, May 4");
+  // Fewer than 3 logged days since it began (week 49 sees only Sunday 48): nothing to claim, nothing to contradict.
+  assert.equal(at(49, steady(48, 70, 2000)), "Aim for ~2,150–2,200 kcal a day; we'll read it on Mon, May 4");
+  assert.equal(at(56, [...steady(48, 49, 2150), ...steady(60, 70, 2150)]), "Aim for ~2,150–2,200 kcal a day; we'll read it on Mon, May 4");
+  // The plan is one thing all week.
+  const week = range(56, 62).map(n => plainSpaces(planAt(fast, n, { ...over, intakeDays: [...before, ...steady(48, 70, 2000)] }).action.text));
+  assert.equal(new Set(week).size, 1);
+});
+
+test('P2-1 (24w): on the read day a step that was not taken is not "replaced": "You held about 84 kg on ~2,050 kcal without the step - that\'s your maintenance"', () => {
+  const calm = readings(range(0, 100), n => (n < 62 ? 92 - 0.13 * n : 84 + wobble(n)));
+  const at = (n: number, food: ReturnType<typeof intake>, over: Partial<WeightPlanInput> = {}) => planAt(calm, n, { reached: true, reachedAt: D(62), intakeDays: food, ...over });
+  const jitter = (n: number) => (n % 2 === 0 ? 40 : -40);
+  // Logs ~2,050 all along: the weight held, the step never was.
+  const notTaken = intake(range(40, 100), n => 2050 + jitter(n));
+  const p = at(70, notTaken);
+  assert.equal(plainSpaces(p.action.text), "You held about 84 kg on ~2,050 kcal without the step — that's your maintenance");
+  assert.doesNotMatch(p.action.text, /replaces/);
+  assert.equal(p.action.kind, 'maintenance_target');
+  assert.equal(p.action.kcalTarget, 2050);
+  // The level then stands as the maintenance.
+  assert.equal(plainSpaces(at(77, notTaken).action.text), 'Stay at ~2,050 kcal — your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act');
+  // A budget that already is that figure keeps its target.
+  assert.equal(plainSpaces(at(70, notTaken, { targetKcal: 2050 }).action.text), "You held about 84 kg on ~2,050 kcal without the step — keep your calorie target where it is");
+  // Imperial users read lb.
+  assert.match(plainSpaces(at(70, notTaken, { unitSystem: 'imperial' }).action.text), /^You held about 18[56] lb on ~2,050 kcal without the step — that's your maintenance$/);
+  // Logs that took the step (about 2,150, the low end) read as before: held on the step's level, no "without".
+  const taken = intake(range(40, 100), n => (n < 56 ? 2000 : 2150) + jitter(n));
+  assert.equal(plainSpaces(at(70, taken).action.text), "You've held about 84 kg on ~2,150 kcal — make that your maintenance target");
+  // Logs well above the step (it was taken, and then some): the old sentence - the figure replaces the step.
+  const higher = intake(range(40, 100), n => (n < 56 ? 2000 : 2400) + jitter(n));
+  assert.equal(plainSpaces(at(70, higher).action.text), "You've held about 84 kg on ~2,400 kcal — make that your maintenance target (it replaces the step to ~2,150–2,200 kcal)");
 });

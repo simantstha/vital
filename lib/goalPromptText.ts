@@ -397,7 +397,11 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
       const target = cause?.targetKcal ?? read.intake?.targetKcal ?? 0;
       lines.push(`- Plateau on the raw weekly averages (flat for 3 weeks) while the logged days ran over target (averaging ~${avg} vs ${target} kcal): lead with the logs — getting back to target is the first lever (don't lead with water; the logged days over target are the clearer lever). Only if still flat 2 weeks after that suggest ~150 kcal less a day.`);
     } else {
-      lines.push('- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.');
+      // The second step is the card's own (wave 24w): someone who logs no food is offered the walks and logging, never a kcal cut there is nothing to check against.
+      const cut = plan?.action.text == null || /\btrim ~/.test(plan.action.text);
+      lines.push(cut
+        ? '- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest ~150 kcal less a day or two 30-minute walks.'
+        : '- Plateau on the raw weekly averages (flat for 3 weeks): often water — not a failure. Keep the plan; only if still flat in 2 weeks suggest two 30-minute walks and logging a few days.');
     }
   }
   if (fresh && read?.state === 'moving_again') {

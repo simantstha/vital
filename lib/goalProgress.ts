@@ -102,10 +102,12 @@ import {
 import {
   FAT_LOSS_MIN_PCT,
   PLATEAU_SPAN_DAYS,
+  STEP_REACHED_FRACTION,
   WEEK_MEAN_MIN_WEIGH_INS,
   fmtWeekday,
   weightWeekPlan,
   type WeightPlanPace,
+  type WeightPlanStep,
   type WeightWeekPlan,
 } from './weightWeekPlan';
 import {
@@ -118,6 +120,7 @@ import {
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
 import {
+  DELOAD_CUE_HEAD,
   isDeloadWeek,
   isLiftProgressing,
   furthestBehindReturn,
@@ -135,6 +138,7 @@ import {
   liftTrainedAtWorkingWeight,
   pickHeadlineLift,
   pickWeekOverWeek,
+  proactiveDeload,
   rankLifts,
   weekOverWeekWording,
   type LiftReturnDisplay,
@@ -1070,6 +1074,38 @@ function calorieAdherenceStats(input: GoalProgressInput, levelKcal: number | nul
   return { target, hit, logged: logged.length, avgKcal, frac: hit / logged.length, level };
 }
 
+/**
+ * An eat-more step (wave 24w): "Reached ~2,150 kcal on 4 of 5 logged days since Jun 5". Only the logged days on or after the day the step began
+ * count (a day eaten against the old budget is never judged against the new level), and "reached" is the right word for an instruction to
+ * eat MORE - not "stayed within". After the step's first week the window is the last 7 days. Null under 3 logged days.
+ */
+function stepAdherenceReason(input: GoalProgressInput, step: WeightPlanStep): GoalProgressReason | null {
+  const lo = step.loKcal;
+  if (lo == null) return null;
+  const logged = lastSevenIntake(input).filter(
+    d => d.day >= step.since && d.source !== 'none' && d.kcal != null && d.kcal >= PARTIAL_LOG_KCAL_THRESHOLD,
+  );
+  if (logged.length < MIN_LOGGED_DAYS_FOR_ADHERENCE) return null;
+  const reached = logged.filter(d => (d.kcal as number) >= lo * STEP_REACHED_FRACTION).length;
+  const startedThisWeek = step.since > addDays(input.todayKey, -6);
+  const window = startedThisWeek ? `since ${fmtDate(step.since, input.todayKey)}` : 'in the last 7 days';
+  return {
+    kind: 'calorie_adherence',
+    text: `Reached ~${withUnit(fmtKcal(lo), 'kcal')} on ${reached} of ${logged.length} logged ${plural(logged.length, 'day')} ${window}`,
+    tone: 'neutral',
+  };
+}
+
+/** The adherence line of a weight-loss week: the step toward maintenance is graded as a step (see `stepAdherenceReason`), anything else against its level or the budget. */
+function weightAdherenceReason(input: GoalProgressInput, plan: WeightWeekPlan): GoalProgressReason | null {
+  const step = plan.step;
+  const budget = input.budget?.targetKcal;
+  if (step != null && step.loKcal != null && budget != null && step.loKcal > budget && (step.phase === 'given' || step.phase === 'standing')) {
+    return stepAdherenceReason(input, step);
+  }
+  return calorieAdherenceReason(input, step?.loKcal ?? null);
+}
+
 function calorieAdherenceReason(input: GoalProgressInput, levelKcal: number | null = null): GoalProgressReason | null {
   const stats = calorieAdherenceStats(input, levelKcal);
   if (stats == null) return null;
@@ -1596,13 +1632,14 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
  * a pace wobbling around 1% never flips the tone from one day to the next; with the call on, a pace between 0.9% and the ceiling
  * keeps the watch ("close to the ceiling", hysteresis) and is not called "safe".
  * `easeToMaintenance`: the target is reached and the loss is still past the ceiling, so the warning says what to do.
+ * `stepCovers` (wave 24w): ...and the plan already gives the easing step, which is that instruction - the warning says so instead of adding another.
  * `other` (wave 22w): the pace a week earlier, when "on pace" rests on two paces that straddle the date - the rate is then the honest
  * range ("Down 0.37-0.58 kg/wk"), not one number that lands weeks off the date it is called on track for.
  */
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepCovers?: boolean; about?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
   if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
@@ -1610,12 +1647,16 @@ function paceReason(
   const abs = round2(Math.abs(pace.pctPerWeek));
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
-  let text = `${dir} ${fmtWeight(input, Math.abs(pace.kgPerWeek), 2)}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
+  // The headline of an unconfirmed pace says "losing about 0.6 kg a week" (one decimal): the rate line is that very figure, "about 0.6 kg/wk", not a
+  // second rounding of it ("0.58") on the same card (wave 24w).
+  const perWeek = opts.about ? `about ${fmtWeight(input, Math.abs(pace.kgPerWeek))}` : fmtWeight(input, Math.abs(pace.kgPerWeek), 2);
+  let text = `${dir} ${perWeek}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pace.kgPerWeek < 0) {
     if (opts.tooFast && abs > band.maxPct) {
       tone = 'watch';
-      text += `, above the ${band.maxPct}% a week ceiling${opts.easeToMaintenance ? ' — ease calories toward maintenance' : ''}`;
+      // While the plan's easing step is the instruction, the warning adds no second one (wave 24w): the step covers it.
+      text += `, above the ${band.maxPct}% a week ceiling${opts.stepCovers ? ' — your easing step covers this' : opts.easeToMaintenance ? ' — ease calories toward maintenance' : ''}`;
     } else if (opts.tooFast && abs >= band.minPct) {
       tone = 'watch';
       text += `, close to the ${band.maxPct}% a week ceiling`;
@@ -1889,7 +1930,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     && assessWeekendOvereating(toSignalPoints(input.intakeDays.filter(d => d.day < input.todayKey))) != null;
   const { weekend, underEating } = signalReasons(weekendSteady ? signals : signals.filter(s => s.kind !== 'weekend_overeating'));
   // The week's plan may state a calorie level above the budget (the step toward maintenance): the days are counted against it.
-  const adherence = calorieAdherenceReason(input, plan.step?.loKcal ?? null);
+  const adherence = weightAdherenceReason(input, plan);
   const tdee = tdeeReason(input);
   const toGo = Math.abs(w.neededKg ?? 0);
   const pace = plan.pace;
@@ -1906,8 +1947,10 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     // The goal is done: lead with the reach, never show continued loss as a
     // green "inside the safe band", and say what to do next. A safety watch
     // (under-eating, still losing past the ceiling) still gets the second slot.
+    // One calorie instruction per card (wave 24w): while the step is given or standing it is the instruction; once it is read there is none to repeat.
+    const stepActive = plan.step != null && (plan.step.phase === 'given' || plan.step.phase === 'standing');
     const stillFast = pace != null && plan.tooFast && pace.kgPerWeek < 0
-      ? paceReason(input, pace, { tooFast: true, easeToMaintenance: true })
+      ? paceReason(input, pace, { tooFast: true, easeToMaintenance: plan.step == null, stepCovers: stepActive })
       : null;
     const watch = underEating ?? stillFast;
     const when = w.reachedAt ? ` (${fmtDate(w.reachedAt, input.todayKey)})` : '';
@@ -1936,7 +1979,9 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  const rate = paceReason(input, p, { tooFast: plan.tooFast, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null });
+  // The headline quotes the rate ("losing about 0.6 kg a week") only for a pace nothing has confirmed yet: the rate line then says the same figure.
+  const quotesRate = !plan.confirmed && !plan.tooFast && !plan.nearlyThere && p.kgPerWeek < 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
+  const rate = paceReason(input, p, { tooFast: plan.tooFast, about: quotesRate, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null });
   const action = planActionReason(plan);
 
   if (plan.tooFast && !plan.nearlyThere) {
@@ -1951,9 +1996,13 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     // dates give (the card does not turn "too fast" for the last few days and "reached" right after).
     // The week the step is given it starts the easing; the weeks after, it is a level to keep until the step is read (wave 23w).
     const standing = plan.step != null && plan.step.phase !== 'given';
+    // A standing step says what to eat, not "your easing step" (wave 24w): the level, or the snack for someone who logs no food.
+    const level = plan.step?.loKcal != null && plan.step.hiKcal != null
+      ? `stay at ~${plan.step.loKcal === plan.step.hiKcal ? withUnit(fmtKcal(plan.step.hiKcal), 'kcal') : `${fmtKcal(plan.step.loKcal)}–${withUnit(fmtKcal(plan.step.hiKcal), 'kcal')}`}`
+      : 'keep your daily snack';
     return {
       verdict: plan.verdict,
-      headline: clip(standing ? 'Nearly there — keep to your easing step' : 'Nearly there — start easing calories toward maintenance'),
+      headline: clip(standing ? `Nearly there — ${level}` : 'Nearly there — start easing calories toward maintenance'),
       reasons: build(rate, action),
     };
   }
@@ -2401,6 +2450,13 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
     : ret ? liftReturnReasons(rets.length > 0 ? rets : [ret], input, slackWeek ? exercise => !trainedThisWeek(exercise) : undefined) : [liftReasons[0] ?? weekOverWeekReason(input)];
   // "Back after a 15-day break" explains a rebuild; once every pre-break best is regained it is no longer news.
   const returnBreak = ret && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null ? liftReturnBreakReason(ret, input) : null;
+  // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach
+  // lines (they print the card). The same pure rule as the review, read for the last completed week; never while rebuilding after a break.
+  // It stays on a lapsed day too: the week's plan is still the deload.
+  const deloadLine: GoalProgressReason | null =
+    proactiveDeload(input.progression, addDays(weekStart(input.todayKey), -7), { imperial: input.unitSystem === 'imperial', leadKey: null, rebuilding: returnBreak != null }) != null
+      ? { kind: 'deload', text: DELOAD_CUE_HEAD, tone: 'neutral' }
+      : null;
   // A lapse is not a time to praise the scale either: the weight line is neutral and says so.
   const rateLapse = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
   // ... nor a green weight line in a slack week (the scale moved; the sessions did not).
@@ -2413,6 +2469,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   const reasons = windowStale
     ? capReasons([
         ...leadLifts,
+        deloadLine,
         weekSessions ?? sessions,
         ret ? returnBreak : young ? null : adherenceDemoted,
         reachLead,
@@ -2426,6 +2483,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         adherenceLow ? adherence : null,
         weekShort ? weekSessions : null,
         ...leadLifts,
+        deloadLine,
         adherenceLow ? null : sessions,
         reachLead,
         rateTop ? rateShown : null,

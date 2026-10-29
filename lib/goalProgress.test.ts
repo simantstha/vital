@@ -2215,6 +2215,35 @@ const squatBack = (...recent: number[]) => [
   ...recent.map((e, i) => lw(addDays('2026-09-28', 7 * i), e)),
 ];
 
+// ── Wave 24s P2-A: the card carries the deload cue the Monday review gave, all week ────────────────────────────────────────────────────────
+
+/** One lift-week per top load, a week apart from 08-24 (six loads end in the week of 09-28); the e1RM follows the load. */
+const climbingCard = (...tops: number[]) => tops.map((t, i) => lw(addDays('2026-08-24', 7 * i), t * 1.2, 2, { topLoadKg: t }));
+const deloadCardInput = (today: string, progression: ProgressionSummary, over: Partial<GoalProgressInput> = {}): GoalProgressInput => {
+  const days = [0, 7, 14, 21, 28, 35, 42].flatMap(o => daysAt(addDays('2026-08-24', o), [0, 1, 3, 5])).filter(d => d <= today);
+  return base({
+    goal: 'muscle', todayKey: today, target: { weightKg: null, date: null, weeklySessions: 4 }, progression, strengthDays: days.filter(d => d >= addDays(today, -27)), strengthHistoryDays: days,
+    start: { weightKg: 80, startedAt: '2026-07-01T09:00:00.000Z', startedDay: '2026-07-01' }, ...over,
+  });
+};
+
+test('after 5 straight weeks of heavier loads the goal card (and so the coach lines) carries the deload cue for the whole week, then drops it (wave 24s)', () => {
+  // Reviewed week 09-28 is the 5th step-up (100 -> 112.5 kg): from Monday 10-05 to Sunday 10-11 the card says so, neutral, third line at most.
+  const squat = climbingCard(100, 102.5, 105, 107.5, 110, 112.5);
+  for (const today of ['2026-10-05', '2026-10-08', '2026-10-11']) {
+    const p = computeGoalProgress(deloadCardInput(today, { squat }));
+    const line = p.reasons.find(r => r.kind === 'deload');
+    assert.ok(line, `${today}: ${JSON.stringify(p.reasons)}`);
+    assert.equal(line.text, "Deload week: ~85–90% of last week's loads, 2 working sets");
+    assert.equal(line.tone, 'neutral');
+    assert.ok(p.reasons.length <= 3);
+  }
+  // Four step-ups: no cue. The week after the deload (reviewed week 10-05 is the lighter one): no cue either.
+  assert.equal(computeGoalProgress(deloadCardInput('2026-10-05', { squat: squat.slice(1) })).reasons.some(r => r.kind === 'deload'), false);
+  const after = [...squat, lw('2026-10-05', 117, 2, { topLoadKg: 97.5, volumeKg: 1920 })];
+  assert.equal(computeGoalProgress(deloadCardInput('2026-10-12', { squat: after })).reasons.some(r => r.kind === 'deload'), false);
+});
+
 test('return from a break: "Building back", not "Stalled" — verdict building, no amber reason', () => {
   const p = computeGoalProgress(breakInput({
     squat: squatBack(136, 136),
@@ -2645,6 +2674,8 @@ test('A. a pace nothing has confirmed yet makes no call: with only today\'s pace
   assert.equal(p.eta, null);
   assert.equal(p.weightRead?.weeksVsTarget, null);
   assert.match(p.headline, /^Progressing — losing about 0\.5 kg a week$/);
+  // Wave 24w (P3-3): the headline's "about 0.5 kg a week" and the rate line are one figure, rounded the same way ("Down 0.49 kg/wk" next to it was two).
+  assert.match(p.reasons.find(r => r.kind === 'rate')!.text, /^Down about 0\.5 kg\/wk \(0\.\d\d% of bodyweight\) over the last \d weeks?, /);
 });
 
 test('A. one margin: ±7 days is on pace in the card, the same figure the opener and iOS use; weeks are whole and at least 1', () => {
@@ -3320,6 +3351,44 @@ test('B2. within a kilo of the target a too-fast loss is "Nearly there — start
   assertWellFormed(near);
 });
 
+// ── wave 24w, P2-1: the easing step reads the food log ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A fat loss that gets within a kilo of the 84 kg target on Fri Oct 2 (the step is given that day) and is in the standing week of Mon Oct 5 on
+ * TODAY (Tue Oct 6): a logger (older logs are at the 2,000 kcal budget) whose last 5 days are `lastDays` (Oct 2 .. Oct 6).
+ */
+function easingStepInput(lastDays: number[]): GoalProgressInput {
+  const older = [-25, -24, -20, -19, -15, -12, -6, -5].map(o => ({ day: addDays(TODAY, o), kcal: 2000, proteinG: 100, source: 'logged' as const }));
+  const since = lastDays.map((kcal, i) => ({ day: addDays(TODAY, -4 + i), kcal, proteinG: 100, source: 'logged' as const }));
+  return base({
+    target: { weightKg: 84, date: addDays(TODAY, 30), weeklySessions: 3 },
+    start: { weightKg: 92, startedAt: `${addDays(TODAY, -79)}T08:00:00.000Z` },
+    weightReadings: onDays(span(-59, 0), o => 91.31 - 0.12 * (o + 60)),
+    intakeDays: [...older, ...since],
+    budget: BUDGET_2000,
+  });
+}
+
+test('P2-1 (24w): an eat-more step is graded "Reached ~2,150 kcal on N of M logged days since <start>" - never "stayed within", never on days before it began', () => {
+  // Eating at the step since it began (Oct 2: 2,150, 2,300, 2,100, 2,000, 2,050): the step is claimed; 4 of the 5 days reached ~2,150 (2,000 did not).
+  const taken = computeGoalProgress(easingStepInput([2150, 2300, 2100, 2000, 2050]));
+  assert.equal(taken.weightRead?.plan?.step?.phase, 'standing');
+  assert.equal(taken.weightRead?.plan?.step?.since, addDays(TODAY, -4));
+  assert.equal(taken.reasons.find(r => r.kind === 'action')?.text, "Stay at ~2,150–2,200 kcal (the step you started Oct 2); we'll read it on Mon, Oct 19");
+  assert.equal(taken.reasons.find(r => r.kind === 'calorie_adherence')?.text, 'Reached ~2,150 kcal on 4 of 5 logged days since Oct 2');
+  assert.equal(taken.headline, 'Nearly there — stay at ~2,150–2,200 kcal');
+  // Still eating the budget: the logs are named, the step is not claimed, and nothing says "keep to your easing step".
+  const notTaken = computeGoalProgress(easingStepInput([2000, 2040, 1990, 2000, 2030]));
+  assert.equal(notTaken.reasons.find(r => r.kind === 'action')?.text, "Your logs are still ~2,000 kcal, so the step is about one extra snack a day (to ~2,150–2,200 kcal); we'll read it on Mon, Oct 19");
+  assert.equal(notTaken.reasons.find(r => r.kind === 'calorie_adherence')?.text, 'Reached ~2,150 kcal on 0 of 5 logged days since Oct 2');
+  assert.doesNotMatch(notTaken.headline, /easing step/);
+  assert.equal(notTaken.headline, 'Nearly there — stay at ~2,150–2,200 kcal');
+  // The days before the step (Sep 30 - Oct 1, at the budget) are never in the count: with 2 logged days since it began there is no line at all.
+  const input = easingStepInput([2150, 2150, 2150, 2150, 2150]);
+  const fewDays = computeGoalProgress({ ...input, intakeDays: input.intakeDays.filter(d => d.day >= addDays(TODAY, -1) || d.day < addDays(TODAY, -6)) });
+  assert.equal(fewDays.reasons.find(r => r.kind === 'calorie_adherence'), undefined);
+});
+
 test('B3. behind pace projects the date whenever the scale is falling, and says what the target date would take', () => {
   // 0.28 kg/wk (0.31%): the date is 90 days out with 5.3 kg to go (the 7-day average is 89.3 kg) — about 6 weeks out of reach.
   // (Wave 21w: more than 8 weeks past the date no projection is quoted — see the next test — so this date is 90 days out, not 60.)
@@ -3448,6 +3517,18 @@ test('B8. reached: "within 1 kg of 84 kg", and a loss still past the ceiling say
   assert.equal(p.verdict, 'reached');
   const warn = p.reasons.find(r => r.kind === 'rate');
   assert.ok(warn, JSON.stringify(p.reasons));
-  assert.match(warn!.text, /above the 1% a week ceiling — ease calories toward maintenance$/);
+  // Wave 24w (P3-1): the reach step ("switch to maintenance - keep the daily snack...") IS the instruction, so the rate warning does not add a second
+  // one: it says the step covers it.
+  assert.ok(p.weightRead?.plan?.step != null, 'the reach carries the maintenance step');
+  assert.match(warn!.text, /above the 1% a week ceiling — your easing step covers this$/);
+  assert.doesNotMatch(warn!.text, /ease calories/);
   assert.equal(warn!.tone, 'watch');
+  // A budget that already is maintenance has no step, so the warning is the one instruction.
+  const noStep = computeGoalProgress(youngGoal(80, {
+    target: { weightKg: 84, date: addDays(TODAY, 10), weeklySessions: 3 },
+    weightReadings: readings,
+    budget: { ...BUDGET_2000, formulaTdee: 2000 },
+  }));
+  assert.equal(noStep.weightRead?.plan?.step, null);
+  assert.match(noStep.reasons.find(r => r.kind === 'rate')!.text, /above the 1% a week ceiling — ease calories toward maintenance$/);
 });

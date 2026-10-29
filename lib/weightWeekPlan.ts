@@ -28,6 +28,12 @@
  * maintenance; still falling - add another ~150; rising - back off ~100. A held weight on logged intake names the target as soon as two
  * held weeks exist. `weightWeekPlan` composes the raw weekly plan (`makeWeekPlan`) with that history (`withStandingStep`).
  *
+ * The standing level reads the FOOD LOG (wave 24w), over the logged days on or after the day the step began (never the days before it): "the step
+ * you started Jun 5" only when 3+ logged days average at least the step's low end minus 50 kcal; "Your logs are still ~2,050 kcal, so the step is
+ * about one extra snack a day" when they do not; "Aim for ~2,150-2,200 kcal a day" (no claim either way) under 3 logged days. A weight that held
+ * on logs that never reached the step reads "You held about 84 kg on ~2,050 kcal without the step - that's your maintenance", never "it replaces
+ * the step"; and a weekly average still falling on such logs adds no second notch.
+ *
  * The state may change mid-week only for events, each at most once a week:
  *  - the target is reached;
  *  - welcome back, after a gap of 7+ days without a weigh-in;
@@ -148,6 +154,14 @@ export const MAINTENANCE_MORE_KCAL = 150;
 export const MAINTENANCE_BACK_OFF_KCAL = 100;
 /** How many weeks back the step's history is read (the step is given once, so its first week must be found). */
 const STEP_LOOKBACK_WEEKS = 16;
+/**
+ * Wave 24w: a step UP is read from the food log, over the logged days on or after the day it began (never the days before it): it is "taken"
+ * when 3+ days are logged and their mean is at least the step's low end minus this many kcal. With fewer logged days nothing is claimed.
+ */
+export const STEP_LOGS_MIN_DAYS = 3;
+export const STEP_TAKEN_MARGIN_KCAL = 50;
+/** A logged day "reached" a step's low end when it is within this share under it (the mirror of the 5% over a budget that the adherence line allows). */
+export const STEP_REACHED_FRACTION = 0.95;
 
 const KG_TO_LB = 2.20462;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -961,10 +975,22 @@ function nextStepLevel(input: WeightPlanInput, level: StepLevel, outcome: 'falli
   return { lo, hi };
 }
 
+/** What the logged days since a step began say of it: taken (null when it cannot be told: no level, or under 3 logged days) and what they average (nearest 50 kcal). */
+interface StepLogs { taken: boolean | null; avgKcal: number | null }
+
+/** The step's level read against the logged days from `from` (the day it began) to `to`. Days before `from` are never counted. */
+function readStepLogs(input: WeightPlanInput, level: StepLevel, from: string, to: string): StepLogs {
+  if (level.lo == null) return { taken: null, avgKcal: null };
+  const logged = loggedInSpan(input.intakeDays, from, to);
+  if (logged.length < STEP_LOGS_MIN_DAYS) return { taken: null, avgKcal: null };
+  const mean = avg(logged.map(l => l.kcal));
+  return { taken: mean >= level.lo - STEP_TAKEN_MARGIN_KCAL, avgKcal: roundTo(mean, TRIM_ROUND_KCAL) };
+}
+
 type StepEvent =
-  | { kind: 'held_named'; was: StepLevel; replacesNamed: boolean }
-  | { kind: 'read_held' }
-  | { kind: 'more' | 'back_off'; deltaKg: number; was: StepLevel; levelMoved: boolean };
+  | { kind: 'held_named'; was: StepLevel; replacesNamed: boolean; logs: StepLogs }
+  | { kind: 'read_held'; logs: StepLogs }
+  | { kind: 'more' | 'back_off'; deltaKg: number; was: StepLevel; levelMoved: boolean; logs: StepLogs };
 
 const lowerFirst = (t: string): string => t.charAt(0).toLowerCase() + t.slice(1);
 
@@ -1015,8 +1041,10 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
     const wk = weeks[i];
     const heldKcal = heldKcalOf(wk.plan);
     if (!settled) {
+      // What the logged days since the step (or its latest notch) began say of it, read as of the Sunday before this week.
+      const logs = readStepLogs(input, level, given, addDays(wk.weekStart, -1));
       if (heldKcal != null) {
-        event = { kind: 'held_named', was: level, replacesNamed: false };
+        event = { kind: 'held_named', was: level, replacesNamed: false, logs };
         settled = true;
         lastOutcome = 'held';
         level = { lo: heldKcal, hi: heldKcal };
@@ -1026,11 +1054,14 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
         if (read == null) continue; // too few weigh-ins to read it: it waits for the next Monday
         lastOutcome = read.outcome;
         if (read.outcome === 'held') {
-          event = { kind: 'read_held' };
+          event = { kind: 'read_held', logs };
           settled = true;
+          // Held on logs that never reached the step: the maintenance is what the logs say, not the step's level.
+          if (logs.taken === false && logs.avgKcal != null) level = { lo: logs.avgKcal, hi: logs.avgKcal };
         } else {
-          const next = nextStepLevel(input, level, read.outcome);
-          event = { kind: read.outcome === 'falling' ? 'more' : 'back_off', deltaKg: read.deltaKg, was: level, levelMoved: next.lo !== level.lo || next.hi !== level.hi || level.lo == null };
+          // Still falling on logs that never reached the step: another notch would stack on a step that was not taken - the level stays.
+          const next = read.outcome === 'falling' && logs.taken === false ? level : nextStepLevel(input, level, read.outcome);
+          event = { kind: read.outcome === 'falling' ? 'more' : 'back_off', deltaKg: read.deltaKg, was: level, levelMoved: next.lo !== level.lo || next.hi !== level.hi || level.lo == null, logs };
           level = next;
           given = wk.weekStart;
         }
@@ -1039,7 +1070,7 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
       // Named again only when two Mondays in a row say it (a week of logs that rounds 100 kcal away is noise, not a new maintenance).
       const before = heldKcalOf(weeks[i - 1].plan);
       if (before != null && Math.sign(before - level.lo) === Math.sign(heldKcal - level.lo) && Math.abs(before - level.lo) >= 100) {
-        event = { kind: 'held_named', was: level, replacesNamed: true };
+        event = { kind: 'held_named', was: level, replacesNamed: true, logs: { taken: null, avgKcal: null } };
         level = { lo: heldKcal, hi: heldKcal };
       }
     }
@@ -1064,13 +1095,20 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
     const was = event.was;
     const differs = was.lo != null && was.hi != null && numeric && ((level.lo as number) < was.lo - 50 || (level.lo as number) > was.hi + 50);
     const replaces = event.replacesNamed ? `~${levelText(was.lo as number, was.hi as number)}` : `the step to ~${levelText(was.lo as number, was.hi as number)}`;
+    // Wave 24w: a step the logs show was never taken is not "replaced" by the intake the weight held on - it was not part of it.
+    if (!event.replacesNamed && event.logs.taken === false && numeric && plan.heldKg != null) {
+      const rest = plan.action.kind === 'hold' ? 'keep your calorie target where it is' : "that's your maintenance";
+      return result({ ...plan.action, text: said(`You held ${heldAbout(input, plan.heldKg)} on ~${kcalText(level.lo as number)} without the step — ${rest}`), ...withKcal }, 'read');
+    }
     const text = differs ? `${plan.action.text} (it replaces ${replaces})` : plan.action.text;
     return result({ ...plan.action, text: said(text), ...withKcal }, 'read');
   }
   if (event?.kind === 'read_held') {
-    const text = numeric
-      ? `Your weekly average held within ${held} on ${levelStr} — keep it, that's your maintenance`
-      : `Your weekly average held within ${held} — keep that snack, it's your maintenance`;
+    const text = !numeric
+      ? "Your weight held — keep eating as you are, snack included; that's your maintenance"
+      : event.logs.taken === false
+        ? `Your weekly average held within ${held} on ${levelStr} without the step — that's your maintenance`
+        : `Your weekly average held within ${held} on ${levelStr} — keep it, that's your maintenance`;
     return result({ kind, text: said(text), ...withKcal }, 'read');
   }
   if (event != null) {
@@ -1082,6 +1120,9 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
       text = falling
         ? `${lead} — add another small snack (~${fmtKcal(MAINTENANCE_MORE_KCAL)} kcal); we'll read it on ${when}`
         : `${lead} — make the snack ~${fmtKcal(MAINTENANCE_BACK_OFF_KCAL)} kcal smaller; we'll read it on ${when}`;
+    } else if (falling && event.logs.taken === false && event.logs.avgKcal != null) {
+      // Falling because the step was never taken (wave 24w): no second notch on top of it.
+      text = `${lead}, and your logs are still ~${kcalText(event.logs.avgKcal)} — eat the step first (${levelStr}); we'll read it on ${when}`;
     } else if (falling && !event.levelMoved) {
       text = `${lead} — you are already at the top of your maintenance estimate, so stay at ${levelStr} and we'll read it on ${when}`;
     } else if (falling) {
@@ -1099,10 +1140,20 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
       : `Keep the daily snack — it's your maintenance; if your average drifts ${cue}, that is your cue to act`;
     return result({ kind: ask ? 'next_target' : 'hold', text: said(text), ...withKcal }, 'settled');
   }
-  const text = numeric
-    ? `Stay at ${levelStr} (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`
-    : `Keep the daily snack (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
+  // The standing level reads the food log (wave 24w): "the step you started" only when the logged days since it began show it, the logs named
+  // when they do not, and no claim at all under 3 logged days. Days before the step began are never counted.
+  const logs = readStepLogs(input, level, given, addDays(plan.weekStart, -1));
+  let text: string;
+  if (!numeric) text = `Keep the daily snack (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
+  else if (logs.taken === true) text = `Stay at ${levelStr} (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
+  else if (logs.taken === false && logs.avgKcal != null) text = `Your logs are still ~${kcalText(logs.avgKcal)}, so the step is about one extra snack a day (to ${levelStr}); we'll read it on ${when}`;
+  else text = `Aim for ${levelStr} a day; we'll read it on ${when}`;
   return result({ kind, text: said(text), ...withKcal }, 'standing');
+}
+
+/** "about 84 kg" / "about 185 lb": the held weight said as approximate, in whole units (the card's own lines carry the weekly average to a decimal). */
+function heldAbout(input: Pick<WeightPlanInput, 'unitSystem'>, kg: number): string {
+  return `about ${withUnit(Math.round(isImperial(input) ? kg * KG_TO_LB : kg), isImperial(input) ? 'lb' : 'kg')}`;
 }
 
 /**
@@ -1639,7 +1690,7 @@ function reachedPlan(c: Ctx, blank: WeightWeekPlan, asOf: string): WeightWeekPla
   if (held != null) {
     // "Held about 84 kg": whole units, said as approximate - the card's own lines carry the weekly average to a decimal ("Holding at 83.7 kg"),
     // and a bare "84 kg" next to it read as a second, different number.
-    const heldText = `about ${withUnit(Math.round(isImperial(input) ? held.kg * KG_TO_LB : held.kg), isImperial(input) ? 'lb' : 'kg')}`;
+    const heldText = heldAbout(input, held.kg);
     const already = input.targetKcal != null && Math.abs(input.targetKcal - held.kcal) <= MAINTENANCE_ALREADY_KCAL;
     return {
       ...base,

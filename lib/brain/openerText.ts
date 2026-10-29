@@ -247,10 +247,12 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     const since = shortDate(read.returned.sinceDay);
     const delta = read.returned.sinceKg - read.scaleKg;
     if (since) {
+      // One short clause (wave 24w): where the scale stands against the last weigh-in, and what to do. "Progress now counts from your latest
+      // reading" is the card's own pace note, not the opener's.
       const change = Math.abs(delta) < 0.1
-        ? `the scale is about the same as ${since}`
-        : `the scale is ${delta > 0 ? 'down' : 'up'} ${weightAmount(Math.abs(delta), units)} ${unit} since ${since}`;
-      return `Welcome back — ${change} — progress now counts from your latest reading; keep weighing in so your trend catches up.`;
+        ? `your weight is about the same as on ${since}`
+        : `you're ${weightAmount(Math.abs(delta), units)} ${unit} ${delta > 0 ? 'lighter' : 'heavier'} than on ${since}`;
+      return `Welcome back — ${change}; weigh in a couple more mornings.`;
     }
   }
   const current = progressKg(gp);

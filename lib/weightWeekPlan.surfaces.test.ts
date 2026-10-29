@@ -212,7 +212,8 @@ test('held for two weeks on logged intake: the maintenance target is that intake
   const { card, review } = reviewOn(reached, meals, 70);
   assert.equal(card.verdict, 'reached');
   assert.equal(card.weightRead?.plan?.state, 'maintenance');
-  const named = "You've held about 84 kg on ~2,050 kcal — make that your maintenance target (it replaces the step to ~2,150–2,200 kcal)";
+  // (Wave 24w: the meals never reached the step, so the weight held WITHOUT it - the step is not "replaced".)
+  const named = "You held about 84 kg on ~2,050 kcal without the step — that's your maintenance";
   assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), named);
   assert.equal(review.nextWeek, card.weightRead?.plan?.action.text);
   assert.doesNotMatch(review.nextWeek, /Switch to maintenance in Goals/);
@@ -222,7 +223,7 @@ test('held for two weeks on logged intake: the maintenance target is that intake
   assert.equal(plainSpaces(later.card.reasons.find(r => r.kind === 'next_step')?.text ?? ''), 'Stay at ~2,050 kcal — your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act');
   assert.equal(plainSpaces(goalOpenerLine(later.card, 'metric') ?? ''), "You're holding at 84 kg — stay around ~2,050 kcal this week and keep weighing in.");
   assert.equal(requiredOpenerLine(card, 'weight_loss', 'metric'), goalOpenerLine(card, 'metric'));
-  assert.equal(goalFallbackOpener(card, 'weight_loss', 'metric')?.startsWith("You've held"), true);
+  assert.equal(goalFallbackOpener(card, 'weight_loss', 'metric')?.startsWith('You held'), true);
   // NBSP between the number and its unit, in the card's own copy.
   assert.ok(card.reasons.some(r => r.text.includes(`2,050${NBSP}kcal`)));
 });
@@ -234,7 +235,7 @@ test('after the first week a reached goal is told to hold, not to "switch to mai
   const standing = reviewOn(reached, [], 70).review;
   assert.match(plainSpaces(standing.nextWeek), /^Keep the daily snack \(the step you started \w{3} \d{1,2}\); we'll read it on Mon, May 18$/);
   const { review } = reviewOn(reached, [], 77);
-  assert.equal(plainSpaces(review.nextWeek), "Your weekly average held within 0.5 kg — keep that snack, it's your maintenance");
+  assert.equal(plainSpaces(review.nextWeek), "Your weight held — keep eating as you are, snack included; that's your maintenance");
   assert.doesNotMatch(review.nextWeek, /switch to maintenance/i);
   // Later it is the kept level, with the two-sided watch.
   const later = reviewOn(reached, [], 98).review;
