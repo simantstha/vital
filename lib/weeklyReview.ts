@@ -1812,7 +1812,9 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       // "Hit" is the rounded reading reaching the step, or (wave 24e) 90% of it - the band in which the card says the week's km are done; 20 of ~22 km is close, and says what to aim for.
       if (distanceNumber(input, rp.week.km) < distanceNumber(input, target) && rp.week.km < target * WEEK_ON_PLAN_FRACTION - 1e-9) {
         // "Again" only when next week asks for the same step; a climb back after a break asks for more.
-        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) ? ` — aim for ~${distanceNumber(input, target)} again` : '';
+        // (Wave 24e: and no nudge for a shortfall under 3 km / 2 mi - the card called that "one short easy run or rest, either is fine".)
+        const stubKm = (u < 1 ? 2 : 3) / u;
+        const again = rp.next?.targetKm != null && distanceNumber(input, rp.next.targetKm) === distanceNumber(input, target) && target - rp.week.km >= stubKm - 1e-9 ? ` — aim for ~${distanceNumber(input, target)} again` : '';
         return `Close to your step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${again}.`;
       }
       return `You hit this week's step: ${distanceNumber(input, rp.week.km)} of ~${distanceText(input, target)}${pct != null && pct !== 0 ? ` (${signed(pct, `${Math.abs(pct)}%`)} ${onWhat})` : ''}.`;

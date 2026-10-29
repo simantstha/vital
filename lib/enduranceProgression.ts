@@ -1517,7 +1517,7 @@ export function restOfWeekPhrase(
     case 'small': {
       const rest = trim.easyOk ? ' or rest, either is fine' : '';
       const small = withUnit(round1(trim.remainingKm * u), unit);
-      if (opts.form === 'headline') return `~${small} left`;
+      if (opts.form === 'headline') return `~${small} left${trim.easyOk ? ', or rest' : ''}`;
       return `~${small} left${sep} one short easy run${rest}${opts.form === 'coach' ? ', no catch-up volume' : ''}`;
     }
     case 'named': {

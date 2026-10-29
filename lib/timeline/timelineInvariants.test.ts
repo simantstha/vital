@@ -4620,7 +4620,7 @@ function w24Compliance(v: W23View, runKm: Map<string, number>, sundayDate: strin
     switch (i.kind) {
       case 'cap': {
         // "≤ N" / "at most N" is a ceiling; "to ~N" / "N km left" is the amount to run.
-        const ceilingOnly = /[≤]|at most|under/i.test(phrase);
+        const ceilingOnly = /[≤]|at most|under|or rest/i.test(phrase); // ("~2 km left - one short easy run or rest, either is fine": resting complies)
         if (rest > i.hi + W24_SLACK_KM) return { ok: false, why: `"${phrase}" but ${km(rest)} followed` };
         if (!ceilingOnly) { sizesRest = true; if (rest < i.hi - W24_SLACK_KM) return { ok: false, why: `"${phrase}" but only ${km(rest)} followed` }; }
         break;

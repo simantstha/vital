@@ -58,7 +58,7 @@ function range(m: RegExpExecArray, first: number): { lo: number; hi: number } {
 // "keep Sunday's run ≤ 4 km" / "keep the rest of the week ≤ 8 km" / "keep tomorrow's run ≤ 3 km" / "keep the rest to ~4 km" / "keep Sunday's long run to ~6 km"
 const CAP = new RegExp(`\\bkeep (?:the rest of the week|the rest|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)['’]s (?:long(?:est)? )?run|tomorrow['’]s (?:long(?:est)? )?run|today['’]s (?:long(?:est)? )?run|the long run|the days before the race)(?: to| ≤| at most| under) ${AMOUNT}`, 'gi');
 // Wave 24e: "6 km left this week - one easy run of ~6 km, or two of ~3 km" and "~2 km left - one short easy run" (+ " or rest, either is fine"): the rest of the week.
-const LEFT = new RegExp(`~?${NUM}\\s?(km|mi) left\\b(?:[^.;]*?\\bor rest, either is fine)?`, 'gi');
+const LEFT = new RegExp(`~?${NUM}\\s?(km|mi) left\\b(?:[^.;]*?\\bor rest(?:, either is fine)?)?`, 'gi');
 // Wave 24e: a restart that begins mid-week: "Starting today? ~10 km over the rest of this week in 2-3 easy runs, nothing over ~4 km; the restart week (~18 km) starts Monday".
 const REST_OF_WEEK = new RegExp(`~?${NUM}\\s?(km|mi) over the rest of this week`, 'gi');
 const NOTHING_OVER = new RegExp(`nothing over ~?${NUM}\\s?(km|mi)`, 'gi');
@@ -116,7 +116,7 @@ export function extractInstructions(
     while ((m = LEFT.exec(text)) != null) {
       const n = toKm(Number(m[1]), m[2]);
       // "... or rest, either is fine": resting is as good as the run, so it is a ceiling; otherwise the rest of the week is exactly this much.
-      if (/or rest, either is fine/.test(m[0])) out.push({ where, text: m[0], kind: 'cap', lo: 0, hi: n });
+      if (/or rest/.test(m[0])) out.push({ where, text: m[0], kind: 'cap', lo: 0, hi: n });
       else out.push({ where, text: m[0], kind: 'exact', lo: n, hi: n });
     }
     REST_OF_WEEK.lastIndex = 0;
