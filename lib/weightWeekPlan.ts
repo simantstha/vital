@@ -160,8 +160,18 @@ const STEP_LOOKBACK_WEEKS = 16;
  */
 export const STEP_LOGS_MIN_DAYS = 3;
 export const STEP_TAKEN_MARGIN_KCAL = 50;
-/** A logged day "reached" a step's low end when it is within this share under it (the mirror of the 5% over a budget that the adherence line allows). */
+/** A logged day "reached" a step's low end when it is within this share under it (the mirror of the 5% over a budget that the adherence line allows)... */
 export const STEP_REACHED_FRACTION = 0.95;
+/** ...and not above its high end by more than this share: 2,594 kcal on a 2,150-2,200 step is over it, not reached (wave 24w group 6). */
+export const STEP_REACHED_CEILING = 1.05;
+
+/**
+ * ONE rule for "this logged day reached the eat-more step", for the card's "Reached ~2,150 kcal on N of M" line and the weekly review alike: within the
+ * step's range +/-5% (2,150-2,200 -> 2,042.5 to 2,310). Below it the day fell short; above it the day is over, not reached.
+ */
+export function stepDayReached(kcal: number, loKcal: number, hiKcal: number): boolean {
+  return kcal >= loKcal * STEP_REACHED_FRACTION && kcal <= hiKcal * STEP_REACHED_CEILING;
+}
 
 const KG_TO_LB = 2.20462;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
