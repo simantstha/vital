@@ -23,7 +23,7 @@ import { KG_TO_LB, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, ra
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { WEIGH_IN_GAP_DAYS, dayNumber, meanOver, rawPlateau } from './weightPace';
-import { isInstruction, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
+import { isInstruction, STEP_REACHED_FRACTION, WEEK_MEAN_MIN_WEIGH_INS, type WeightWeekPlan } from './weightWeekPlan';
 import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
@@ -595,14 +595,36 @@ function weightCandidate(input: WeeklyReviewInput, week: Week, prevWeek: Week): 
   return cand;
 }
 
-/** Logged days of the week within the calorie budget; null without a target or under MIN_INTAKE_DAYS logged days. */
-function budgetDays(input: WeeklyReviewInput, week: Week): { target: number; hit: number; logged: number } | null {
+/**
+ * Logged days of the week within the calorie budget; null without a target or under MIN_INTAKE_DAYS logged days.
+ *
+ * Each day is graded against the level in force ON THAT DAY (wave 24w; the whole week used to be graded against the coming week's step level,
+ * so days eaten against the 2,000 kcal budget were counted against 2,150). When the coming week's plan is an eat-more step the user is following
+ * (given or standing, no read yet) only the days BEFORE it began are budget days; the days on or after it are reported as "reached ~2,150 kcal
+ * on N of M days" (`step`), never as "in budget". After a read the level before the latest notch is not known here, so no day is graded.
+ */
+function budgetDays(input: WeeklyReviewInput, week: Week): { target: number; hit: number; logged: number; step: { loKcal: number; since: string; reached: number; logged: number } | null } | null {
   const target = input.budget?.targetKcal;
   if (target == null) return null;
-  const logged = loggedIntake(input.intakeDays, week);
-  if (logged.length < MIN_INTAKE_DAYS) return null;
-  const hit = logged.filter(d => (d.kcal as number) <= target * CALORIE_ADHERENCE_TOLERANCE).length;
-  return { target, hit, logged: logged.length };
+  const all = loggedIntake(input.intakeDays, week);
+  const plan = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
+  const up = plan != null && plan.loKcal != null && plan.loKcal > target;
+  const following = up && (plan.phase === 'given' || plan.phase === 'standing') && plan.outcome == null;
+  const graded = !up ? all : following ? all.filter(d => d.day < plan.since) : [];
+  if (graded.length < MIN_INTAKE_DAYS) return null;
+  const hit = graded.filter(d => (d.kcal as number) <= target * CALORIE_ADHERENCE_TOLERANCE).length;
+  const onStep = following ? all.filter(d => d.day >= plan.since) : [];
+  const loKcal = plan?.loKcal ?? 0;
+  return {
+    target, hit, logged: graded.length,
+    step: onStep.length > 0 && plan != null ? { loKcal, since: plan.since, reached: onStep.filter(d => (d.kcal as number) >= loKcal * STEP_REACHED_FRACTION).length, logged: onStep.length } : null,
+  };
+}
+
+const REVIEW_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function monthDayText(day: string): string {
+  const [, m, d] = day.split('-').map(Number);
+  return `${REVIEW_MONTHS[m - 1]} ${d}`;
 }
 
 function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
@@ -611,11 +633,13 @@ function budgetCandidate(input: WeeklyReviewInput, week: Week): Candidate | null
   const { target, hit, logged } = days;
   const frac = hit / logged;
   const tone: ReviewTone = frac >= 0.7 ? 'good' : frac < 0.5 ? 'watch' : 'neutral';
+  // The step's own days (an eat-more step began in the week) are said as what they are: reached, or not (wave 24w).
+  const onStep = days.step != null ? ` · reached ~${withUnit(fmtKcal(days.step.loKcal), 'kcal')} on ${days.step.reached} of ${days.step.logged} days since ${monthDayText(days.step.since)}` : '';
   const cand: Candidate = {
     stat: {
       label: 'Days in budget',
       value: `${hit}/${logged}`,
-      comparison: logged < 7 ? `${logged} ${plural(logged, 'day')} logged` : 'across the week',
+      comparison: `${logged < 7 ? `${logged} ${plural(logged, 'day')} logged` : 'across the week'}${onStep}`,
       tone,
     },
   };
@@ -2978,18 +3002,6 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
   };
 }
 
-/**
- * Weight loss (wave 23w): while the coming week's plan states a calorie level above the budget (the step toward maintenance, or the
- * maintenance it settled on), the week is graded against that level - "In budget 4 of 7 days (2,000 kcal target)" next to "Stay at ~2,150
- * kcal" would grade a week against a budget the plan has just moved past.
- */
-function gradedAgainstStepLevel(input: WeeklyReviewInput): WeeklyReviewInput {
-  const level = input.goal === 'weight_loss' ? input.weightPlan?.step?.loKcal ?? null : null;
-  const budget = input.budget;
-  if (level == null || budget?.targetKcal == null || level <= budget.targetKcal) return input;
-  return { ...input, budget: { ...budget, targetKcal: level } };
-}
-
 export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
   const week = makeWeek(rawInput.weekStart, rawInput.signupDay);
   // A session logged on the review's own Monday (the loader reads relative to the real clock; the review is recomputed when opened) is kept apart
@@ -2998,7 +3010,7 @@ export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
   const lifterInput = rawInput.goal === 'muscle' && Object.values(rawInput.progression).some(ws => ws.some(w => w.weekStart > week.days[0]))
     ? { ...rawInput, progression: progressionUpTo(rawInput.progression, week.days[0]) }
     : rawInput;
-  const input = gradedAgainstStepLevel(lifterInput);
+  const input = lifterInput; // (the budget stays the one in force: `budgetDays` splits the week at an eat-more step's start - wave 24w)
   const prevWeek = makeWeek(addDays(input.weekStart, -7), input.signupDay);
   const daysWithData = countDataDays(input, week);
   const cands = buildCandidates(input, week, prevWeek);
