@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, midWeekRestartText, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm } from './enduranceProgression';
+import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, midWeekRestartText, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -196,7 +196,8 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
     case 'hold':
       // A cutback week that ran more than 10% over its lowered number: hold at the week it replaced.
       if (plan.skippedCutback) {
-        return `- This week's target: hold ~${t} — last week's cutback ran as a normal week (fine, not a failure); an easier week before building again, so do not build 10% on it, and do not scold${strides}`;
+        const why = skippedCutbackHoldReason(plan.lastKm, plan.targetKm ?? 0, units === 'imperial' ? 1 / KM_PER_MILE : 1);
+        return `- This week's target: hold ~${t} — last week's cutback ran as a normal week (fine, not a failure); ${why.easier ? 'an easier week before building again, so ' : ''}do not build 10% on it, and do not scold${strides}`;
       }
       // A comeback week far past its "up to" ceiling: stay at that ceiling.
       if (plan.overCapRead === 'well') {

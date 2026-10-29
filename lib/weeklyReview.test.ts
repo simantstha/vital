@@ -2886,3 +2886,33 @@ test('B8. a reached goal says "switch to maintenance" until the calorie target a
   assert.ok(atMaintenance.some(t => /stay on maintenance and enjoy holding here/.test(t)), atMaintenance.join(' | '));
   assert.ok(!atMaintenance.some(t => /^Switch to maintenance|switch to maintenance and enjoy/.test(t)), atMaintenance.join(' | '));
 });
+
+test('wave 24w group 5: every logged day is graded against the level in force ON THAT DAY - days before an eat-more step against the budget, the step\'s own days as "reached", never "in budget"', () => {
+  // Mon-Thu ate 1900 / 2200 / 2000 / 1850 against the 2,000 kcal budget (2200 is over 2,100); Fri-Sun, on the step, 2150 / 2100 / 1950.
+  const kcal = [1900, 2200, 2000, 1850, 2150, 2100, 1950];
+  const plan = (since: string, phase: 'given' | 'standing' = 'standing', outcome: 'falling' | null = null) => ({
+    state: 'pace', verdict: 'on_track', nearlyThere: true,
+    action: { kind: 'ease_to_maintenance', text: `Stay at ~2,150–2,200 kcal (the step you started ${since}); we'll read it later`, kcalTarget: 2150 },
+    step: { since, readOn: '2026-10-19', phase, outcome, loKcal: 2150, hiKcal: 2200, food: false },
+  }) as unknown as NonNullable<WeeklyReviewInput['weightPlan']>;
+  const review = (weightPlan: WeeklyReviewInput['weightPlan']) => computeWeeklyReview(weightLossInput({
+    intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, ...kcal]),
+    weightPlan,
+  }));
+  // The step began Friday (WEEK[4]): Mon-Thu are graded against 2,000 (3 of 4: the 2,200 is over), Fri-Sun are "reached" days (2 of 3: the 1,950 is not).
+  const mid = review(plan(WEEK[4]));
+  const stat = statByLabel(mid, 'Days in budget')!;
+  assert.equal(stat.value, '3/4');
+  assert.equal(stat.comparison, `4 days logged · reached ~2,150 kcal on 2 of 3 days since Oct 2`);
+  assert.match(mid.headline, /in budget 3 of 4 logged days$/);
+  assert.doesNotMatch(JSON.stringify(mid), /2,150.kcal target/);
+  // The step starts the day AFTER the week (next Monday): nothing in the week was on it - all seven days against the budget.
+  const after = review(plan(addDays(WEEK[6], 1), 'given'));
+  assert.equal(statByLabel(after, 'Days in budget')!.value, '5/7'); // (2,200 and 2,150 are over 2,100; graded against 2,150 the old way all seven were in)
+  assert.equal(statByLabel(after, 'Days in budget')!.comparison, 'across the week');
+  // A step that began before the week: no day of it is a budget day (3+ reached days are the read, 7 of 7 here are the step's own).
+  const before = review(plan(addDays(WEEK[0], -3)));
+  assert.equal(statByLabel(before, 'Days in budget'), undefined);
+  // A later notch (a read has happened): the days before it were on a level this review cannot see - they are not graded against the budget.
+  assert.equal(statByLabel(review(plan(WEEK[4], 'given', 'falling')), 'Days in budget'), undefined);
+});

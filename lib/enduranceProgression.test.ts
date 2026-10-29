@@ -616,8 +616,8 @@ test('race phases on the Mondays of a SUNDAY race: build, taper, race week, reco
   assert.deepEqual(kinds(21.1), ['maintain', 'maintain', 'taper', 'race_week', 'recovery', 'recovery', 'rebuild', 'rebuild', 'maintain']);
   assert.deepEqual(kinds(42.2), ['maintain', 'taper', 'taper', 'race_week', 'recovery', 'recovery', 'rebuild', 'rebuild', 'maintain']);
   // 10K: no taper, one recovery week.
-  // (The third Monday of the 10K is the week after a cutback week this 30-km-every-week runner skipped: a hold at the week it replaced, wave 22e.)
-  assert.deepEqual(kinds(10), ['maintain', 'maintain', 'hold', 'race_week', 'recovery', 'rebuild', 'rebuild', 'rebuild', 'maintain']);
+  // (The third Monday of the 10K is the week after a cutback week this 30-km-every-week runner skipped: the week it replaced WAS the goal, so (wave 24e) it is a maintain week, not a hold below the goal.)
+  assert.deepEqual(kinds(10), ['maintain', 'maintain', 'maintain', 'race_week', 'recovery', 'rebuild', 'rebuild', 'rebuild', 'maintain']);
 });
 
 test('taper, race week and recovery targets come from the peak week; a half taper week spells out the intensity', () => {
@@ -863,7 +863,7 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   assert.equal(skipped.kind, 'hold');
   assert.equal(skipped.targetKm, 25);
   assert.deepEqual(skipped.hold, { spikeKm: 25, spikeStepKm: 20, skippedCutback: true });
-  assert.equal(nbsp(skipped.purpose), 'Your cutback became a normal week — fine. Hold ~25~km this week, long run 10~km — an easier week before building again');
+  assert.equal(nbsp(skipped.purpose), 'Your cutback became a normal week — fine. Hold ~25~km this week, long run 10~km — no 10% step on top of it');
   assert.equal(skipped.last?.cutback, true);
   assert.equal(skipped.last?.grade?.gap, 'over'); // (wave 23e: a good week - no failure - that still owes the cutback)
   assert.equal(skipped.last?.grade?.level, 'good');

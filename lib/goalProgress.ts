@@ -151,7 +151,7 @@ import { KM_PER_MILE } from './metricFormat';
 import {
   PEAK_PLAN_SLACK_KM,
   PHASE_CEILING_TOLERANCE,
-  holdOverrun,
+  holdOverrunRead,
   midWeekRestartText,
   restOfWeekPhrase,
   weekLimitFraction,
@@ -185,6 +185,7 @@ import {
   recoveryWeek,
   roundLongRunKm,
   weekStepOrGoalKm,
+  type HoldOverRead,
   type EnduranceWeekKind,
   type EnduranceWeekPlan,
   type LongRunShare,
@@ -365,6 +366,8 @@ export interface GoalWeekPlan {
    * `pending` = still on the break (what to take if the runner starts today), else the week as it is. The next Monday is the full `fullKm` restart week.
    */
   midWeekRestart?: { fullKm: number; km: number; longCapKm: number; pending: boolean };
+  /** Additive (wave 24e): last week's km (the compact plan's coach lines compare a hold with it: "an easier week" only when the hold really is easier). */
+  lastKm?: number;
   /**
    * Additive (wave 23e): the week after a cutback steps from the last full week before it, not from the cutback: `stepPct` is against `stepBaseKm`
    * ("+9% on your last full week (23 km)"). Absent otherwise.
@@ -2867,6 +2870,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.taperHold && plan.wind != null ? { taperHold: true, taperPeakKm: round1(plan.wind.peakKm) } : {}),
             ...(plan.cutback != null ? { cutback: true } : {}),
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
+            ...(plan.last != null ? { lastKm: plan.last.km } : {}),
             ...(plan.restart?.midWeek != null ? { midWeekRestart: { fullKm: plan.restart.midWeek.fullKm, km: plan.restart.midWeek.km, longCapKm: plan.restart.midWeek.longCapKm, pending: plan.restart.midWeek.pending } } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
             ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
@@ -3442,7 +3446,7 @@ function thisWeekDoneOutcome(
   input: GoalProgressInput, plan: EnduranceWeekPlan, grade: WeekGrade, doneKm: number, target: number,
   finish: (verdict: GoalVerdict, headline: string, reasons: GoalProgressReason[]) => Outcome,
   planBody: () => GoalProgressReason[],
-  holdOver = false,
+  holdRead: HoldOverRead | null = null,
 ): Outcome | null {
   const fmt = (km: number): string => fmtDistance(input, km);
   const done = distanceNum(input, doneKm);
@@ -3459,7 +3463,9 @@ function thisWeekDoneOutcome(
   if (grade.level === 'tough') return finish('behind', `Behind — ${done} of ~${fmt(target)} this week`, planBody());
   const read = plan.upTo ? comebackCapRead(plan, doneKm, unitsPerKm(input)) : 'within';
   // Wave 23e: a hold week he built through ("28 of ~25 km, long run 12 against 11") is neither "on plan" nor praised as held.
-  const note = holdOver ? 'above the hold'
+  // (Wave 24e: a hold whose km were kept but whose long run broke it says THAT - "above the hold" is for a week that built past its number.)
+  const note = holdRead?.kind === 'km' ? 'above the hold'
+    : holdRead?.kind === 'long' ? `long run ${fmt(holdRead.longKm)} over the held ${fmt(holdRead.heldKm)}`
     : read !== 'within' ? overCapPhrase(read)
     : grade.level === 'mixed' ? 'a bit under the step'
     : doneKm > target * ABOVE_STEP_FRACTION ? (plan.cutback != null ? 'a normal week' : 'above the step')
@@ -3640,7 +3646,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
       // The last day of a hold week: the week is done, so the headline judges THIS week (not the jump two weeks back), as in a build week.
       if (weekdayOf(input.todayKey) === 0 && doneKm > 0 && !longRunPending && current != null && current.level !== 'light') {
         const longestThisWeek = Math.max(0, ...ec.runs.filter(r => r.day >= ec.weekStart && r.day <= input.todayKey && r.day !== input.race?.date).map(r => r.km));
-        const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody, holdOverrun(plan, doneKm, longestThisWeek));
+        const thisWeek = thisWeekDoneOutcome(input, plan, current, doneKm, target, finish, planBody, holdOverrunRead(plan, doneKm, longestThisWeek));
         if (thisWeek != null) return thisWeek;
       }
       // A cutback week that ran more than 10% over its lowered number: no +10% build on the skip - hold at the week it replaced.
@@ -3648,7 +3654,8 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
         // (Wave 23e: no guilt. The cutback became a normal week, which is fine; the bar stays where it was.)
         const skippedInfo: GoalProgressReason = { kind: 'volume', text: `Last week's ${fmt(hold.spikeKm)} ran as a normal week, not the ~${fmt(hold.spikeStepKm)} cutback — your bar stays ~${fmt(target)}`, tone: 'neutral' };
         // (With a remaining-km line the plan line follows it: the headline already says the cutback became a normal week.)
-        return finish('holding', `Your cutback became a normal week — hold ~${fmt(target)} this week`, stepWarn != null
+        // (Verdict 'building': the hold after a cutback that became a normal week is the plan, not a warning - a runner who keeps to it is on plan, wave 24e.)
+        return finishB('building', `Your cutback became a normal week — hold ~${fmt(target)} this week`, stepWarn != null
           ? body(stepWarn, [planLine, skippedInfo])
           : body(skippedInfo, [planLine]));
       }
@@ -3731,6 +3738,7 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
   }
   const how = last?.kind === 'baseline' ? ', your baseline'
     : last?.kind === 'restart' || last?.kind === 'rebuild' && plan.restart != null ? ', back after your break'
+    : last?.holdOverRead === 'long' && last.holdLongKm != null && last.holdHeldLongKm != null ? `, long run ${fmt(last.holdLongKm)} over the held ${fmt(last.holdHeldLongKm)}`
     : last?.holdOver && lastPlanKm != null ? `, above the ~${fmt(lastPlanKm)} hold`
     : last?.cutback && !above && level === 'good' ? ', your cutback week'
     : above ? `, above the ~${fmt(lastPlanKm as number)} ${last?.cutback ? 'cutback' : 'step'}`

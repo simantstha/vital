@@ -82,3 +82,63 @@ test('a restart that began mid-week is graded against its scaled number: 10 of ~
   assert.equal(r.win, 'Back out there: 10 km after the break.');
   assert.match(r.nextWeek, /^Restart at ~17 km next week with easy runs/);
 });
+
+// ── wave 24e group 2: hold and cutback rules ─────────────────────────────────
+
+/** The calendar's cutback weeks are Mondays 2026-10-19, 2026-11-16 ...: `weeksOf` counted back from `lastMonday` (the reviewed week). */
+function weeksFrom(kms: number[], lastMonday: string): Array<ReturnType<typeof run>> {
+  const out: Array<ReturnType<typeof run>> = [];
+  kms.forEach((km, i) => {
+    if (km <= 0) return;
+    const monday = addDays(lastMonday, -7 * (kms.length - 1 - i));
+    out.push(run(addDays(monday, 1), km * 0.2), run(addDays(monday, 3), km * 0.2), run(addDays(monday, 5), km * 0.2), run(addDays(monday, 6), km * 0.4));
+  });
+  return out;
+}
+
+test('a cutback run as a normal week: rated good, NO win, a neutral Volume stat, no slip - and a neutral note opens "Next week" (first time)', () => {
+  const r = review(weeksFrom([15, 17, 19, 21, 23, 25], '2026-10-19'), { weekStart: '2026-10-19' });
+  assert.equal(r.weekRating, 'good');
+  assert.equal(r.win, null);
+  assert.equal(r.slip, null);
+  assert.equal(r.weekGap, null);
+  assert.equal(r.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
+  assert.equal(r.nextWeek, 'Ran the cutback as a normal week — hold ~25 km next week; long run 10 km, no 10% step on top of it.');
+  assert.doesNotMatch(`${r.headline} ${r.nextWeek}`, /skipped|easier week before building/);
+});
+
+test('"an easier week" is said only when the hold really is easier than the week just run (a cutback run at 25.9 km, hold ~25)', () => {
+  const r = review(weeksFrom([15, 17, 19, 21, 23, 25.9], '2026-10-19'), { weekStart: '2026-10-19' });
+  assert.match(r.nextWeek, /^Ran the cutback as a normal week — next week's hold \(~25 km\) is your easier week; long run \d+(?:\.\d)? km before building again\.$/);
+});
+
+test('the SECOND cutback in a row run as a normal week gets a factual slip; still rated good', () => {
+  // Weeks 1-6 build with the week-6 cutback run as 25 km, hold 25, build 27, 30, then the owed cutback (calendar week of 2026-11-16, ~24 km) run as 30 km.
+  const r = review(weeksFrom([15, 17, 19, 21, 23, 25, 25, 27, 30, 30], '2026-11-16'), { weekStart: '2026-11-16' });
+  assert.equal(r.weekRating, 'good');
+  assert.match(r.slip ?? '', /^Second cutback run as a normal week: 30 km vs ~24 km planned$/);
+  assert.equal(r.win, null);
+  assert.equal(r.weekGap, null);
+});
+
+test('a hold week is not graded more harshly than a maintain week: a long run past the held one is "over the held" only when oversized (55% of the week)', () => {
+  const hold = weeksFrom([15, 17, 19, 21, 23, 25, 25], '2026-10-26');
+  const withSunday = (sun: number, sat: number) => hold.map(w => (w.day === '2026-11-01' ? { ...w, distanceKm: sun } : w.day === '2026-10-31' ? { ...w, distanceKm: sat } : w));
+  const ok = review(withSunday(13, 2), { weekStart: '2026-10-26' }); // 13 of 25 km = 52%
+  assert.equal(ok.weekRating, 'good');
+  assert.doesNotMatch(ok.headline, /over the held|above the hold/);
+  const over = review(withSunday(14, 1), { weekStart: '2026-10-26' }); // 14 of 25 km = 56%
+  assert.equal(over.weekRating, 'good');
+  assert.match(over.headline, /25 of ~25 km — long run 14 km, over the held 10 km/);
+  assert.doesNotMatch(over.headline, /above the hold/);
+  // A week that built past its NUMBER is still "above the hold".
+  const built = review(weeksFrom([15, 17, 19, 21, 23, 25, 28], '2026-10-26'), { weekStart: '2026-10-26' });
+  assert.equal(built.weekRating, 'mixed');
+  assert.match(built.headline, /above the hold/);
+});
+
+test('imperial: the distance wording of a broken hold is unit-aware ("miles", never "km") and the long-run slip says "distance"', () => {
+  const r = review(weeksFrom([15, 17, 19, 21, 23, 25, 28], '2026-10-26'), { weekStart: '2026-10-26', unitSystem: 'imperial' });
+  assert.doesNotMatch(`${r.headline} ${r.slip} ${r.nextWeek}`, /\bkm\b/);
+  assert.match(r.slip ?? '', /^Built again instead of holding: [\d.]+ vs ~[\d.]+ mi$/);
+});

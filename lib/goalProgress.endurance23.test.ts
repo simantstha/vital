@@ -194,8 +194,9 @@ test('the Sunday of a hold week he built through reads "above the hold", not "on
   const kept = computeGoalProgress(input(weeks(sun, [[[1, 5], [3, 5], [5, 5], [6, 10]], ...history]), { todayKey: sun }));
   assert.equal(kept.headline, 'Week done — 25 of ~25 km, on plan');
   // The long run alone can break the hold: 25 km, a 13 km Sunday against the held ~10.
-  const longBroke = computeGoalProgress(input(weeks(sun, [[[1, 4], [3, 4], [5, 4], [6, 13]], ...history]), { todayKey: sun }));
-  assert.match(longBroke.headline, /^Week done — 25 of ~25 km, above the hold$/);
+  // Wave 24e: when only the long run broke it (14 km = 56% of the week), the headline says THAT - "above the hold" is for a week that built past its number.
+  const longBroke = computeGoalProgress(input(weeks(sun, [[[1, 4], [3, 4], [5, 3], [6, 14]], ...history]), { todayKey: sun }));
+  assert.match(longBroke.headline, /^Week done — 25 of ~25 km, long run 14 km over the held 10 km$/);
   // Monday after the built-through hold week: last week is named for what it was.
   const monday = '2026-11-02';
   const next = computeGoalProgress(input(weeks(monday, [[], [[1, 5.6], [3, 5.6], [5, 5.6], [6, 11.2]], ...history]), { todayKey: monday }));
