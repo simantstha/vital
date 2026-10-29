@@ -7,6 +7,7 @@ import {
   EST_1RM_EXPLAINER,
   lastCompletedWeekStart,
   REVIEW_HEADLINE_MAX_CHARS,
+  STAT_COMPARISON_MAX_CHARS,
   type WeeklyReview,
   type WeeklyReviewInput,
 } from './weeklyReview';
@@ -2905,13 +2906,14 @@ test('wave 24w group 5/6: every logged day is graded against the level in force 
   const stat = dayStat(mid)!;
   assert.equal(stat.label, 'Days on plan');
   assert.equal(stat.value, '5/7');
-  assert.equal(stat.comparison, '3 of 4 before the step · 2 of 3 since Oct 2 — 7 days logged');
+  assert.equal(stat.comparison, '3/4 before the step · 2/3 since Oct 2');
   assert.equal(stat.tone, 'good');
   assert.match(mid.headline, /on plan 5 of 7 logged days$/);
   assert.doesNotMatch(JSON.stringify(mid), /2,150.kcal target/);
-  // Not every logged day is graded: a Wednesday with no log leaves "6 days logged", counted whole even though 3 are budget days and 2 are step days.
+  // A Wednesday with no log: 6 days logged - the value's denominator - not 7.
   const sparse = review(plan(WEEK[4]), [1900, 2200, NaN, 1850, 2150, 2100, 1950].map(k => (Number.isNaN(k) ? 0 : k)));
-  assert.equal(dayStat(sparse)!.comparison, '2 of 3 before the step · 2 of 3 since Oct 2 — 6 days logged'.replace('2 of 3 before', '2 of 3 before'));
+  assert.equal(dayStat(sparse)!.value, '4/6'); // (the value's denominator is the logged total: 6 days)
+  assert.equal(dayStat(sparse)!.comparison, '2/3 before the step · 2/3 since Oct 2');
   // A step week where under half the step days were reached is not [good]: the same budget days, 0 of 3 on the step.
   const missed = review(plan(WEEK[4]), [1900, 2000, 2000, 1850, 1900, 1950, 2000]);
   assert.equal(dayStat(missed)!.value, '4/7');
@@ -2925,7 +2927,7 @@ test('wave 24w group 5/6: every logged day is graded against the level in force 
   const before = dayStat(review(plan(addDays(WEEK[0], -3))))!;
   assert.equal(before.label, 'On the step');
   assert.equal(before.value, '3/7');
-  assert.equal(before.comparison, 'reached ~2,150 kcal since Sep 25 · 7 days logged');
+  assert.equal(before.comparison, '~2,150 kcal since Sep 25 · 7 logged');
   assert.equal(before.tone, 'watch');
   // A later notch (a read has happened): the days before it were on a level this review cannot see - only the days on the latest notch are graded.
   const notch = dayStat(review(plan(WEEK[4], 'standing', 'falling')))!;
@@ -2935,5 +2937,9 @@ test('wave 24w group 5/6: every logged day is graded against the level in force 
   assert.equal(dayStat(review(plan(WEEK[4], 'settled'))), undefined);
   // Above the step's range +5% is over, not reached: a 2,594 day on the step does not count (2,150-2,200 -> 2,043-2,310).
   const binge = dayStat(review(plan(WEEK[4]), [1900, 2200, 2000, 1850, 2150, 2594, 1950]))!;
-  assert.equal(binge.comparison, '3 of 4 before the step · 1 of 3 since Oct 2 — 7 days logged');
+  assert.equal(binge.comparison, '3/4 before the step · 1/3 since Oct 2');
+  // The iOS tile cuts a comparison at ~44 characters: every day-stat comparison fits (the longest date is "Sep 25" / "Sep 28").
+  for (const r of [mid, sparse, review(plan(WEEK[4]), [1900, 2000, 2000, 1850, 1900, 1950, 2000]), after, review(plan(addDays(WEEK[0], -3))), review(plan(WEEK[4], 'standing', 'falling')), review(plan(WEEK[4]), [1900, 2200, 2000, 1850, 2150, 2594, 1950])]) {
+    for (const st of r.stats) assert.ok((st.comparison ?? '').length <= STAT_COMPARISON_MAX_CHARS, `${st.label}: "${st.comparison}"`);
+  }
 });
