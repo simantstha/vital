@@ -41,8 +41,11 @@ import {
   latestTopLoadKg,
   liftDisplayChange,
   liftWeekChangeDisplay,
+  formatLiftWeek,
   liftBaselineLabel,
   liftDisplayName,
+  liftLastBest,
+  liftRecentEndWeek,
   liftReturnDisplay,
   liftShortName,
   liftTrainedAtWorkingWeight,
@@ -947,13 +950,29 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
   // ONE headline-lift rule (lib/liftChange.ts pickHeadlineLift): the most-trained
   // lift with a 4-week comparison — the same lift the Trends goal card names.
   const picked = pickHeadlineLift(input.progression, liftAnchor(week));
+  // A lift not trained in the REVIEWED week has no change "vs 4 weeks before" to quote: the comparison would quietly end on the last week it was trained
+  // (lifter_obedient day 49: the ill week had no squat, and "+13 kg vs 4 weeks ago" compared the weeks of Apr 6 and Mar 9 beside the card's "+6 kg"). The stat gives
+  // its last value, dated, and says so - the way the card does on Thursday to Sunday ("Squat est. 1RM 139 kg (wk of Apr 6)"). Neutral: no win, no slip (wave 24s).
+  if (picked && liftRecentEndWeek(input.progression[picked.exercise], liftAnchor(week)) !== week.days[0]) {
+    const last = liftLastBest(input.progression[picked.exercise], liftAnchor(week));
+    if (last) {
+      return {
+        stat: {
+          label: `${liftDisplayName(picked.exercise, input.exerciseDisplay)} est. 1RM`,
+          value: withUnit(Math.round(last.kg * (imperial ? KG_TO_LB : 1)), unit),
+          comparison: `wk of ${formatLiftWeek(last.weekStart)} · not trained last week`,
+          tone: 'neutral',
+        },
+      };
+    }
+  }
   if (picked) {
     best = {
       key: picked.exercise,
       name: liftDisplayName(picked.exercise, input.exerciseDisplay),
       shown: liftDisplayChange(picked.change, imperial).change,
-      // "vs 4 weeks ago", or "vs wk of Aug 31" when the 4-weeks-ago week is empty (label only, wave 24s).
-      windowLabel: liftBaselineLabel(input.progression[picked.exercise], liftAnchor(week)),
+      // "vs 4 weeks before" (the window ends at the reviewed week, not today), or "vs wk of Aug 31" when the baseline came from the week before it (label only, wave 24s).
+      windowLabel: liftBaselineLabel(input.progression[picked.exercise], liftAnchor(week), 'before'),
       stalled: isLiftStalled(input.progression[picked.exercise], liftAnchor(week)),
     };
   } else {
