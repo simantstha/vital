@@ -153,7 +153,7 @@ export const HALF_RECOVERY_WEEK2_FRACTION = 0.7;
 export const SHORT_RACE_WEEK_FRACTION = 0.6;
 export const SHORT_RECOVERY_FRACTION = 0.5;
 
-/** The peak week is the biggest of this many 7-day blocks ending the day before the taper began. */
+/** The peak week is the biggest of this many 7-day blocks, the newest ending on `peakWeekEndDaysOut`. */
 const PEAK_WEEKS = 4;
 
 /** 10K and shorter / half marathon / longer: the race phases are not the same length for all of them. */
@@ -259,12 +259,23 @@ export function recoveryWeek(daysSince: number): 1 | 2 {
 }
 
 /**
+ * Wave 24e (round 7): the day the newest 7-day block of the peak week ends, as days before the race. It used to end the day before the taper began, which for a half
+ * (and a marathon) dropped the peak long run: that run is planned `peakLongRunLeadDays` out, the same day the taper starts, so a half's "peak week" was the 7 days
+ * before it (a 24 km week after a 28 km one, and "Taper: ~18 km"). The peak week now ENDS on the peak long run's day when that is the taper's first day; a 10K has
+ * no taper, its peak long run is 10 days out, before race week, and the window still ends the day before race week (8 days out).
+ */
+export function peakWeekEndDaysOut(raceDistanceKm?: number | null): number {
+  const rules = raceRules(raceDistanceKm);
+  return Math.min(rules.taperStartDays + 1, rules.peakLongRunLeadDays);
+}
+
+/**
  * The peak week (km) the taper and recovery targets are shares of: the biggest
- * of the four 7-day blocks of running that end the day before the taper began
- * (21 days before a marathon, 14 before a half, 7 before a 10K or shorter —
- * `raceRules(raceDistanceKm).taperStartDays`). `runs` are running workouts (day
+ * of the four 7-day blocks of running that end on the peak long run's day
+ * (`peakWeekEndDaysOut`: 14 days before a half, 21 before a marathon, 8 before a
+ * 10K or shorter). `runs` are running workouts (day
  * + km, any order; runs outside that 28-day window are ignored). `null` when
- * nothing was run in the window or the best block is under one km — callers
+ * nothing was run in the window or the best block is under one km - callers
  * fall back to the weekly distance goal then.
  */
 export function peakWeekKmBeforeTaper(
@@ -272,12 +283,12 @@ export function peakWeekKmBeforeTaper(
   raceDate: string,
   raceDistanceKm?: number | null,
 ): number | null {
-  const taperStart = dayIndex(raceDate) - raceRules(raceDistanceKm).taperStartDays;
-  if (!Number.isFinite(taperStart)) return null;
+  const windowEnd = dayIndex(raceDate) - peakWeekEndDaysOut(raceDistanceKm);
+  if (!Number.isFinite(windowEnd)) return null;
   const blocks = new Array<number>(PEAK_WEEKS).fill(0);
   for (const r of runs) {
     if (!Number.isFinite(r.km) || r.km <= 0) continue;
-    const before = taperStart - dayIndex(r.day); // 1 = the day before the taper began
+    const before = windowEnd + 1 - dayIndex(r.day); // 1 = the last day of the window
     if (!Number.isFinite(before) || before < 1 || before > PEAK_WEEKS * 7) continue;
     blocks[Math.floor((before - 1) / 7)] += r.km;
   }
@@ -926,7 +937,7 @@ export interface EnduranceWeekPlan {
 export interface RestOfWeekBudget {
   /** The long run the week would otherwise plan. */
   fullKm: number;
-  /** The week's km so far; on the week's last day the km through yesterday (Sunday keeps Saturday's number). */
+  /** The week's km so far; on the week's last day the km through yesterday (Sunday keeps Saturday's number) - until today's run is in (`afterRun`) and the "km left" is a total, when it is the km through today. */
   doneKm: number;
   /** The week's number minus `doneKm`, km (0 when passed). */
   remainingKm: number;
@@ -942,7 +953,7 @@ export interface RestOfWeekBudget {
   small: boolean;
   /** `small`, and the week already sits in the plan's good band: resting is fine too. */
   easyOk: boolean;
-  /** The last day, and today's run is in: the numbers are the morning's (Saturday's). */
+  /** The last day, and today's run is in: the long-run figure ("keep Sunday's long run to ~6 km") is Saturday's; a "N km left" / "done" is recomputed from today's total. */
   afterRun: boolean;
   /** The most the week may reach: the number x `weekLimitFraction(kind)`. */
   limitKm: number;
@@ -1558,6 +1569,8 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   // Wave 23e: the week's km are run before its long run: no long run is planned, the plan line says so (the card's remaining-km line has the rest).
   if (plan.longRunTrim?.weekDone) {
     const head = plan.cutback != null ? 'Cutback week: ' : plan.kind === 'taper' ? 'Taper: ' : plan.kind === 'hold' ? 'Hold week: ' : '';
+    // (Wave 24e: on the last day with today's run in there is no long run left to skip.)
+    if (plan.longRunTrim.afterRun) return `${head}~${formatKm(t ?? plan.goalKm, u)} this week, done`;
     return `${head}~${formatKm(t ?? plan.goalKm, u)} this week, done — no long run (rest or a 20-min jog)`;
   }
   // Wave 24e: the km left are a total (several usual run days are left, or under 3 km): the plan line says that number, never a long run of its own.
@@ -1735,7 +1748,9 @@ function typicalOffStreak(ctx: PlanCtx, w: string): number {
  */
 function priorWeekProfiles(ctx: PlanCtx, w: string): number[][] {
   const out: number[][] = [];
-  for (let k = 1; k <= MEDIAN_WEEKS; k++) {
+  // (Wave 24e, round 7: wind-down weeks - taper, race week, recovery - are skipped WITHOUT using up one of the 4: the rebuild after a race reads the rhythm of his
+  // pre-race training weeks, like `trainingWeeksBefore`; it used to find none and fall back to "Sunday".)
+  for (let k = 1; k <= MAX_LOOKBACK_WEEKS && out.length < MEDIAN_WEEKS; k++) {
     const wk = addDayKey(w, -7 * k);
     if (ctx.firstRunWeek == null || wk < ctx.firstRunWeek) break;
     if (isWindWeek(ctx, wk)) continue;
@@ -1752,11 +1767,12 @@ function priorWeekProfiles(ctx: PlanCtx, w: string): number[][] {
 
 /**
  * Wave 24e: the weekdays (Monday = 0) still ahead on which the runner USUALLY runs, read from their last weeks (up to 4 training weeks): a weekday they
- * ran on in at least half of them. Today counts while its run is not in. With no history to read a rhythm from, Sunday (the long run's day) is the one day left.
+ * ran on in at least half of them. Today counts while its run is not in. With no history to read a rhythm from there is no usual day to name: the km left are a TOTAL
+ * ("4 km left this week - one easy run of ~4 km, or two of ~2 km"), never "Sunday's".
  */
 function usualRunDaysLeft(ctx: PlanCtx, w: string, dowToday: number, ranToday: boolean): number[] {
   const profiles = priorWeekProfiles(ctx, w);
-  if (profiles.length === 0) return [6];
+  if (profiles.length === 0) return [];
   const need = Math.ceil(profiles.length / 2);
   const out: number[] = [];
   for (let d = ranToday ? dowToday + 1 : dowToday; d <= 6; d++) {
@@ -2145,20 +2161,30 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       const tooMuch = longestThen < plannedNextKm * LONG_RUN_DONE_FRACTION && doneNow + plannedNextKm > limit + 1e-9;
       const allButRun = left < stub - 1e-9;
       if (tooMuch || allButRun) {
-        const weekDone = left <= targetKm * WEEK_DONE_BAND + 1e-9 || floorLongRunKm(left, ctx.units) <= 0;
-        const small = !weekDone && left < stub - 1e-9;
+        let weekDone = left <= targetKm * WEEK_DONE_BAND + 1e-9 || floorLongRunKm(left, ctx.units) <= 0;
+        let small = !weekDone && left < stub - 1e-9;
         const dow = dayIndex(ctx.today) - dayIndex(w);
         const usual = lastDay || kind === 'taper' ? [6] : usualRunDaysLeft(ctx, w, dow, ctx.runs.some(r => r.day === ctx.today && r.day !== ctx.raceDate));
+        // Wave 24e (round 7): the last day KEEPS Saturday's long-run figure ("keep Sunday's long run to ~6 km"), but a "N km left" clause is only true as of the
+        // card: once today's run is in it is recomputed from the week's total ("15 of ~10 km" next to "~2 km left" was Sunday's card after a 7 km run).
+        let remaining = left;
+        let doneShown = doneNow;
+        if (ranOnLastDay && (weekDone || small)) {
+          doneShown = ctx.runs.filter(r => r.day >= w && r.day <= ctx.today && r.day !== ctx.raceDate).reduce((a, r) => a + r.km, 0);
+          remaining = Math.max(0, targetKm - doneShown);
+          weekDone = remaining <= targetKm * WEEK_DONE_BAND + 1e-9 || floorLongRunKm(remaining, ctx.units) <= 0;
+          small = !weekDone && remaining < stub - 1e-9;
+        }
         longRunTrim = {
           fullKm: plannedNextKm,
-          doneKm: round1(doneNow),
-          remainingKm: round1(left),
+          doneKm: round1(doneShown),
+          remainingKm: round1(remaining),
           weekDone,
           today: lastDay,
           daysLeft: usual.length,
           day: usual.length === 1 ? WEEKDAY_NAMES[usual[0]] : null,
           small,
-          easyOk: small && band.goodFromKm > 0 && doneNow >= band.goodFromKm - 1e-9,
+          easyOk: small && band.goodFromKm > 0 && doneShown >= band.goodFromKm - 1e-9,
           afterRun: ranOnLastDay,
           limitKm: round1(limit),
         };

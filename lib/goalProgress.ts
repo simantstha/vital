@@ -156,6 +156,7 @@ import {
   midWeekRestartText,
   restOfWeekPhrase,
   weekLimitFraction,
+  WEEK_DONE_BAND,
   RACE_EVE_LINE,
   enduranceWeekPlan,
   raceEveConservativeLine,
@@ -3654,7 +3655,11 @@ function planOutcome(input: GoalProgressInput, ec: EnduranceCtx, race: GoalRaceP
     }
     case 'restart':
       // A restart that began mid-week is a stub of the restart week: the headline says what is left of this week, not the full restart number.
-      if (plan.restart?.midWeek != null && !plan.restart.midWeek.pending) return finishB('building', `Building back — ~${fmt(target)} this week, restarted mid-week`, body(planLine));
+      // (Wave 24e, round 7: once its km are run the headline says so - "Building back — 15 of ~10 km, this week's km are done" - not the stub's number alone.)
+      if (plan.restart?.midWeek != null && !plan.restart.midWeek.pending) {
+        const stubRun = doneKm > 0 && doneKm >= target * (1 - WEEK_DONE_BAND) - 1e-9;
+        return finishB('building', stubRun ? `Building back — ${done} of ~${fmt(target)}, this week's km are done` : `Building back — ~${fmt(target)} this week, restarted mid-week`, body(planLine));
+      }
       return finishB('building', `Building back — restart at ~${fmt(target)} this week`, body(planLine));
     case 'hold': {
       const hold = plan.hold as NonNullable<EnduranceWeekPlan['hold']>;

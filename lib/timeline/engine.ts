@@ -34,7 +34,7 @@ import {
   peakWeekKmBeforeTaper,
   racePhase,
   racePhaseInfo,
-  raceRules,
+  peakWeekEndDaysOut,
 } from '../enduranceProgression';
 import { localDayKey, previousDayKey, weekDayKeys } from '../localDay';
 import { endOfLocalWeek } from '../weeklyReviewFreshness';
@@ -107,9 +107,8 @@ function racePeakWeekKmAsOf(scn: Scenario, asOf: string, onDays: string[]): numb
   const raceDate = scn.user.raceDate;
   const raceKm = scn.user.raceDistanceKm;
   if (!raceDate || !onDays.some(day => isWindDownPhase(racePhase(raceDate, day, raceKm)))) return null;
-  const taperStart = addDays(raceDate, -raceRules(raceKm).taperStartDays);
-  const from = addDays(taperStart, -28);
-  const to = addDays(taperStart, -1);
+  const to = addDays(raceDate, -peakWeekEndDaysOut(raceKm));
+  const from = addDays(to, -27);
   const runs: Array<{ day: string; km: number }> = [];
   for (const w of scn.workouts) {
     if (w.day < from || w.day > to || w.day > asOf) continue;

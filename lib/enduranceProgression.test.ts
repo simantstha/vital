@@ -205,15 +205,15 @@ test('windDownBand: taper 60%..125% of the target (and 3 km / 2 mi over); race w
   assert.equal(windDownBand('recovery', 24, 16), 'over');
 });
 
-test('peakWeekKmBeforeTaper: the biggest 7-day block in the 28 days before the taper began', () => {
-  const taperStart = addDays(RACE, -21);
-  const run = (before: number, km: number) => ({ day: addDays(taperStart, -before), km });
-  // Blocks (days before the taper began): 1-7, 8-14, 15-21, 22-28.
+test('peakWeekKmBeforeTaper: the biggest 7-day block in the 28 days ending on the peak long run (wave 24e: the taper\'s first day, not the day before it)', () => {
+  const windowEnd = addDays(RACE, -21); // a marathon's peak long run: 21 days out, the day its taper begins
+  const run = (before: number, km: number) => ({ day: addDays(windowEnd, -(before - 1)), km });
+  // Blocks (days back from the window's last day): 1-7, 8-14, 15-21, 22-28.
   const runs = [run(1, 10), run(5, 8), run(9, 20), run(14, 15), run(16, 12), run(25, 30)];
   // block1 = 18, block2 = 35, block3 = 12, block4 = 30.
   assert.equal(peakWeekKmBeforeTaper(runs, RACE), 35);
-  // Runs on/after the taper start and older than 28 days do not count.
-  assert.equal(peakWeekKmBeforeTaper([{ day: taperStart, km: 99 }, run(29, 99), run(2, 12)], RACE), 12);
+  // Runs after the window and older than 28 days do not count.
+  assert.equal(peakWeekKmBeforeTaper([{ day: addDays(windowEnd, 1), km: 99 }, run(29, 99), run(2, 12)], RACE), 12);
 });
 
 test('peakWeekKmBeforeTaper: null without runs in the window, under 1 km, or with a bad date', () => {
@@ -276,11 +276,24 @@ test('race phase targets by distance (shares of the peak week): half x0.75 / x0.
 
 test('peakWeekKmBeforeTaper: the window moves with the taper start (a half: 14 days out, a 10K: 7)', () => {
   const runAt = (daysOut: number, km: number): PlanRun => ({ day: addDays(RACE, -daysOut), km });
-  // Half: the window ends the day before the taper began (15 days out).
-  assert.equal(peakWeekKmBeforeTaper([runAt(15, 10), runAt(16, 5), runAt(30, 12), runAt(14, 99)], RACE, 21.1), 15);
+  // Half (wave 24e: the window ends on the peak long run's day, 14 days out - the taper's first day): runs 13 days out and closer are taper-time runs.
+  assert.equal(peakWeekKmBeforeTaper([runAt(14, 10), runAt(15, 5), runAt(30, 12), runAt(13, 99)], RACE, 21.1), 15);
   // A marathon's taper began a week earlier: the run 15 days out is a taper-time run, not part of the peak window.
   assert.equal(peakWeekKmBeforeTaper([runAt(15, 10), runAt(22, 12), runAt(14, 99)], RACE, 42.2), 12);
   // 10K: race week starts 7 days out, the window ends 8 days out.
+  assert.equal(peakWeekKmBeforeTaper([runAt(8, 9), runAt(7, 99)], RACE, 10), 9);
+});
+
+test('peakWeekKmBeforeTaper (wave 24e, round 7): the peak week is the 7 days ENDING on the peak long run - the half\'s peak run 14 days out is the taper\'s first day and still belongs to it', () => {
+  const runAt = (daysOut: number, km: number): PlanRun => ({ day: addDays(RACE, -daysOut), km });
+  // The week of Mon..Sun ending 14 days out: 5 + 5 + 4 + the 14 km peak long run = 28. The week before it: 12 + 4 + 4 + 4 = 24.
+  const runs = [runAt(14, 14), runAt(16, 5), runAt(18, 5), runAt(20, 4), runAt(21, 12), runAt(23, 4), runAt(25, 4), runAt(27, 4)];
+  // (Seen from the day before the taper began, the 7 days were 16..22 days out: the peak run was dropped and the previous Sunday's counted - 26, "Taper: ~18 km" after a 28 km week.)
+  assert.equal(peakWeekKmBeforeTaper(runs, RACE, 21.1), 28);
+  // A marathon's peak long run is 21 days out, also its taper's first day.
+  const marathon = [runAt(21, 32), runAt(23, 5), runAt(25, 5), runAt(27, 6), runAt(28, 20), runAt(30, 5), runAt(32, 5), runAt(34, 5)];
+  assert.equal(peakWeekKmBeforeTaper(marathon, RACE, 42.2), 48);
+  // A 10K has no taper: its peak long run (10 days out) is before race week, so the window still ends the day before it (8 days out).
   assert.equal(peakWeekKmBeforeTaper([runAt(8, 9), runAt(7, 99)], RACE, 10), 9);
 });
 

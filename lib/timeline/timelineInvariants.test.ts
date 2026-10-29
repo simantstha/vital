@@ -12,7 +12,7 @@ import { easedLoad, liftLapseMinDays, liftReturnDisplay, liftShortName, nextWork
 import { KM_PER_MILE } from '../metricFormat';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
 import { runTimeline, stepDay } from './engine';
-import { extractInstructions } from './instructions';
+import { extractInstructions, instructionTexts } from './instructions';
 import { COMEBACK_OBEDIENT_ILL_DAYS, OBEDIENT_SHORT_WEEK, SCENARIO_NAMES, SKIP_THEN_OBEDIENT_SCRIPTED_WEEKS, buildScenario, type ScenarioName } from './scenarios';
 import { addDays, dayDiff, weekdayOf, type DaySnapshot } from './types';
 
@@ -1938,8 +1938,9 @@ invariant(['runner_messy'], 'messy comeback: week 12 is "a touch over, fine" (ne
   };
   check(84, 22, /^Building — 20 of up to ~18 km last week, a touch over, fine$/, /^4 sessions, 20 of up to ~18 km — a touch over, fine · goal 30 km$/);
   check(91, 29, /, on plan$/, /24 of up to ~22 km — on plan/);
-  // Week 14 ran 28 of up to ~29 km: inside its ceiling, no over-the-ceiling grade on either surface (the ladder is over; the Monday after it is the taper's, ~18 km).
-  check(98, 18, /^(?!.*\b(?:touch over|well over)\b)/, /^4 sessions, 28 of up to ~29 km(?: — on plan)? · goal 30 km/);
+  // Week 14 ran 28 of up to ~29 km: inside its ceiling, no over-the-ceiling grade on either surface (the ladder is over; the Monday after it is the taper's).
+  // (Wave 24e, round 7: ~21 km = 75% of the 28 km peak week. This said ~18 km, 75% of a 24 km "peak" that left out the peak long run on the taper's first day.)
+  check(98, 21, /^(?!.*\b(?:touch over|well over)\b)/, /^4 sessions, 28 of up to ~29 km(?: — on plan)? · goal 30 km/);
   return out;
 });
 
@@ -4912,5 +4913,32 @@ invariant(['runner_on_plan_imperial'], 'the same weeks get the same hit / close 
     if (a !== b) out.push({ snap, detail: `week ${snap.review?.weekStart}: km says ${a} ("${visible(twin.win ?? twin.nextWeek)}") but miles say ${b} ("${visible(rv.win ?? rv.nextWeek)}")` });
   }
   assert.ok(compared > 3, `${name}: only ${compared} reviews exist in both units, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// ── group 6 (round 7): the rest-of-week figures are as of the card that says them ─────────────────────────────────────
+
+const W24_KM_LEFT = /~?(\d+(?:\.\d+)?)\s?(km|mi) left\b/gi;
+
+invariant(RUNNERS, 'no card, coach line or opener says "N km left" for more than the week has left as of that card (the week\'s number minus the km run through that day, 0 once it is run): the scaled-restart Sunday after its run no longer carries Saturday\'s "~2 km left"', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const v of w23Views(name, snaps, true)) {
+    const target = v.snap.card?.distance?.stepTargetKm;
+    if (target == null) continue;
+    const left = Math.max(0, target - v.doneKm);
+    for (const t of instructionTexts(v.snap)) {
+      const text = plain(t.text);
+      W24_KM_LEFT.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = W24_KM_LEFT.exec(text)) != null) {
+        checked++;
+        const said = m[2] === 'mi' ? Number(m[1]) / KM_PER_MILE : Number(m[1]);
+        // (0.25 km: the miles are shown to 0.1 and the km floored / rounded to 0.1.)
+        if (said > left + 0.25) out.push({ snap: v.snap, detail: w23Where(v, `${t.where}: "${visible(t.text)}" says ${m[0]}, the week has ${Math.round(left * 10) / 10} km left (${target} km target, ${v.doneKm} km run)`) });
+      }
+    }
+  }
+  if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(checked > 3, `${name}: only ${checked} "N km left" figures were checked, so this invariant checked (almost) nothing`);
   return out;
 });

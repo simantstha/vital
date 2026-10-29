@@ -143,3 +143,49 @@ test('the coach says the same rest of the week as the card (total, named day, sm
   const named = coachOf(computeGoalProgress(input(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat })));
   assert.match(named, /keep Sunday's long run to ~6 km so the week stays at ~20 km/);
 });
+
+// ── group 6 (round 7) ───────────────────────────────────────────────────────────────────────────────────────────────
+
+test('the scaled-restart Sunday after its run no longer says "~2 km left" (messy d68 -> d69): the clause and the headline are recomputed from the week\'s total', async () => {
+  const { runTimeline } = await import('./timeline/engine');
+  const snaps = runTimeline('runner_messy');
+  const saturday = snaps.find(s => s.idx === 68);
+  const sunday = snaps.find(s => s.idx === 69);
+  const cardText = (s: typeof sunday): string => [s?.card?.headline ?? '', ...(s?.card?.reasons.map(r => r.text) ?? []), ...(s?.coach ?? [])].map(plainSpaces).join(' | ');
+  // Saturday, 8 of ~10 km: 2 km left is true.
+  assert.equal(plainSpaces(saturday?.card?.headline ?? ''), 'Building back — 8 of ~10 km, ~2 km left, or rest');
+  // Sunday, a 7 km long run later (15 of ~10 km): nothing is left, and the headline says so (it kept "~10 km this week, restarted mid-week").
+  assert.equal(plainSpaces(sunday?.card?.headline ?? ''), "Building back — 15 of ~10 km, this week's km are done");
+  assert.equal(plainSpaces(sunday?.card?.reasons.find(r => r.kind === 'plan')?.text ?? ''), '~10 km this week, done');
+  assert.doesNotMatch(cardText(sunday), /km left/);
+  // Sunday keeps Saturday's long-run FIGURE: the long-run row still reads the 7 km it was.
+  assert.match(cardText(sunday), /Long run 7 km/);
+});
+
+test('an obedient Saturday "~2.5 km left: one short easy run" then Sunday\'s 2.5 km run reads as done on Sunday evening, not "~2.5 km left"', () => {
+  const sat = '2026-10-17';
+  const sun = '2026-10-18';
+  const hist = (): Run[] => weeks(sat, [[[1, 6.8], [3, 6.8], [5, 6.9]], wk(21), wk(19), wk(17), wk(15)]);
+  const morning = enduranceWeekPlan({ runs: toPlanRuns(hist()), weekStart: '2026-10-12', goalKm: 30, today: sun });
+  assert.match(plainSpaces(morning.purpose), /2\.5 km left: one short easy run/); // (Sunday morning keeps Saturday's number)
+  const evening = enduranceWeekPlan({ runs: toPlanRuns([...hist(), run(sun, 2.5)]), weekStart: '2026-10-12', goalKm: 30, today: sun });
+  assert.equal(evening.longRunTrim?.afterRun, true);
+  assert.equal(evening.longRunTrim?.weekDone, true);
+  assert.doesNotMatch(plainSpaces(evening.purpose), /km left/);
+  // A 0.1 km jog instead leaves 2.4 km (more than the 10% band): the clause is recomputed, not Saturday's 2.5.
+  const short = enduranceWeekPlan({ runs: toPlanRuns([...hist(), run(sun, 0.1)]), weekStart: '2026-10-12', goalKm: 30, today: sun });
+  assert.match(plainSpaces(short.purpose), /2\.4 km left: one short easy run/);
+});
+
+test('the rebuild week\'s Thursday gives the TOTAL and never names Sunday (messy d129): the rhythm is read from his pre-race training weeks, not from the wind-down weeks that follow the race', async () => {
+  const { runTimeline } = await import('./timeline/engine');
+  const snaps = runTimeline('runner_messy');
+  for (const idx of [129, 130]) {
+    const s = snaps.find(x => x.idx === idx);
+    const texts = [s?.card?.headline ?? '', ...(s?.card?.reasons.map(r => r.text) ?? []), ...(s?.coach ?? [])].map(plainSpaces);
+    assert.doesNotMatch(texts.join(' | '), /Sunday/, `day ${idx}`);
+    assert.equal(plainSpaces(s?.card?.headline ?? ''), 'Rebuilding — 10 of ~14 km, 4 km left this week');
+    assert.equal(plainSpaces(s?.card?.reasons.find(r => r.kind === 'volume')?.text ?? ''), '10 of ~14 km — 4 km left this week: one easy run of ~4 km, or two of ~2 km');
+    assert.ok(texts.some(t => /4 km left this week: one easy run of ~4 km, or two of ~2 km, so the week stays at ~14 km/.test(t)), `day ${idx}: the coach says the same total`);
+  }
+});

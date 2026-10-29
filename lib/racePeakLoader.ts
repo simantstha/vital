@@ -3,8 +3,8 @@
  *
  * The taper, race-week and recovery targets (lib/enduranceProgression.ts) are
  * shares of the runner's peak week: the biggest weekly running km in the 4
- * weeks before the taper began (21 days before the race). That window ends
- * 22–49 days before the race, further back than the 28-day windows the goal
+ * weeks ending on the peak long run's day (21 days before a marathon, 14 before a
+ * half). That window ends 14–21 days before the race and reaches back 41–48 days, further back than the 28-day windows the goal
  * progress and weekly review loaders read, so it is read here — and only
  * while a taper / race week / recovery is actually under way. No scoring logic
  * lives here; the pure `peakWeekKmBeforeTaper` does the arithmetic.
@@ -12,7 +12,7 @@
 
 import { and, eq, gte, lte } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { isWindDownPhase, peakWeekKmBeforeTaper, racePhase, raceRules } from '@/lib/enduranceProgression';
+import { isWindDownPhase, peakWeekEndDaysOut, peakWeekKmBeforeTaper, racePhase } from '@/lib/enduranceProgression';
 import { isRunningWorkoutType } from '@/lib/goalProgress';
 
 /** Days of running history before the taper that the peak week is taken from. */
@@ -40,9 +40,9 @@ export async function loadRacePeakWeekKm(
 ): Promise<number | null> {
   const days = Array.isArray(onDays) ? onDays : [onDays];
   if (!raceDate || !days.some(day => isWindDownPhase(racePhase(raceDate, day, raceDistanceKm)))) return null;
-  const taperStart = addDays(raceDate, -raceRules(raceDistanceKm).taperStartDays);
-  const from = addDays(taperStart, -PEAK_WINDOW_DAYS);
-  const to = addDays(taperStart, -1);
+  // (Wave 24e: the window ends on the peak long run's day - the half's first taper day - not the day before; see `peakWeekEndDaysOut`.)
+  const to = addDays(raceDate, -peakWeekEndDaysOut(raceDistanceKm));
+  const from = addDays(to, -(PEAK_WINDOW_DAYS - 1));
 
   const rows = await db
     .select({ date: schema.daily_metrics.date, payload: schema.daily_metrics.payload })
