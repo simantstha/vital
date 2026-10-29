@@ -3348,6 +3348,44 @@ test('B2. within a kilo of the target a too-fast loss is "Nearly there — start
   assertWellFormed(near);
 });
 
+// ── wave 24w, P2-1: the easing step reads the food log ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A fat loss that gets within a kilo of the 84 kg target on Fri Oct 2 (the step is given that day) and is in the standing week of Mon Oct 5 on
+ * TODAY (Tue Oct 6): a logger (older logs are at the 2,000 kcal budget) whose last 5 days are `lastDays` (Oct 2 .. Oct 6).
+ */
+function easingStepInput(lastDays: number[]): GoalProgressInput {
+  const older = [-25, -24, -20, -19, -15, -12, -6, -5].map(o => ({ day: addDays(TODAY, o), kcal: 2000, proteinG: 100, source: 'logged' as const }));
+  const since = lastDays.map((kcal, i) => ({ day: addDays(TODAY, -4 + i), kcal, proteinG: 100, source: 'logged' as const }));
+  return base({
+    target: { weightKg: 84, date: addDays(TODAY, 30), weeklySessions: 3 },
+    start: { weightKg: 92, startedAt: `${addDays(TODAY, -79)}T08:00:00.000Z` },
+    weightReadings: onDays(span(-59, 0), o => 91.31 - 0.12 * (o + 60)),
+    intakeDays: [...older, ...since],
+    budget: BUDGET_2000,
+  });
+}
+
+test('P2-1 (24w): an eat-more step is graded "Reached ~2,150 kcal on N of M logged days since <start>" - never "stayed within", never on days before it began', () => {
+  // Eating at the step since it began (Oct 2: 2,150, 2,300, 2,100, 2,000, 2,050): the step is claimed; 4 of the 5 days reached ~2,150 (2,000 did not).
+  const taken = computeGoalProgress(easingStepInput([2150, 2300, 2100, 2000, 2050]));
+  assert.equal(taken.weightRead?.plan?.step?.phase, 'standing');
+  assert.equal(taken.weightRead?.plan?.step?.since, addDays(TODAY, -4));
+  assert.equal(taken.reasons.find(r => r.kind === 'action')?.text, "Stay at ~2,150–2,200 kcal (the step you started Oct 2); we'll read it on Mon, Oct 19");
+  assert.equal(taken.reasons.find(r => r.kind === 'calorie_adherence')?.text, 'Reached ~2,150 kcal on 4 of 5 logged days since Oct 2');
+  assert.equal(taken.headline, 'Nearly there — stay at ~2,150–2,200 kcal');
+  // Still eating the budget: the logs are named, the step is not claimed, and nothing says "keep to your easing step".
+  const notTaken = computeGoalProgress(easingStepInput([2000, 2040, 1990, 2000, 2030]));
+  assert.equal(notTaken.reasons.find(r => r.kind === 'action')?.text, "Your logs are still ~2,000 kcal, so the step is about one extra snack a day (to ~2,150–2,200 kcal); we'll read it on Mon, Oct 19");
+  assert.equal(notTaken.reasons.find(r => r.kind === 'calorie_adherence')?.text, 'Reached ~2,150 kcal on 0 of 5 logged days since Oct 2');
+  assert.doesNotMatch(notTaken.headline, /easing step/);
+  assert.equal(notTaken.headline, 'Nearly there — stay at ~2,150–2,200 kcal');
+  // The days before the step (Sep 30 - Oct 1, at the budget) are never in the count: with 2 logged days since it began there is no line at all.
+  const input = easingStepInput([2150, 2150, 2150, 2150, 2150]);
+  const fewDays = computeGoalProgress({ ...input, intakeDays: input.intakeDays.filter(d => d.day >= addDays(TODAY, -1) || d.day < addDays(TODAY, -6)) });
+  assert.equal(fewDays.reasons.find(r => r.kind === 'calorie_adherence'), undefined);
+});
+
 test('B3. behind pace projects the date whenever the scale is falling, and says what the target date would take', () => {
   // 0.28 kg/wk (0.31%): the date is 90 days out with 5.3 kg to go (the 7-day average is 89.3 kg) — about 6 weeks out of reach.
   // (Wave 21w: more than 8 weeks past the date no projection is quoted — see the next test — so this date is 90 days out, not 60.)
