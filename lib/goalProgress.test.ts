@@ -2704,7 +2704,7 @@ test('A. one pace for every surface: ratePerWeek is the least-squares slope of t
   // Wave 21w: `current.weightKg` is the one displayed weight (the weekly average); the chart's lagging trend is `trendKg`, untouched.
   assert.ok(p.current.trendKg! - p.weightRead!.scaleKg! >= 0.5, 'the displayed trend line is untouched (still lagging the scale)');
   assert.equal(p.current.weightKg, p.weightRead!.weekMeanKg);
-  assert.match(p.reasons[0].text, /^Down 0\.7 kg\/wk \(0\.7\d% of bodyweight\) over the last 3 weeks, inside the 0\.25–1% safe band$/);
+  assert.match(p.reasons[0].text, /^Down about 0\.7 kg\/wk \(0\.7\d% of bodyweight\) over the last 3 weeks, inside the 0\.25–1% safe band$/);
 });
 
 /** A target of 80 kg with a 70-day-old goal; `date` is the target date. */
@@ -3537,10 +3537,10 @@ test('B3. behind pace projects the date whenever the scale is falling, and says 
   assert.equal(p.onPaceForTargetDate, false);
   const action = p.reasons.find(r => r.kind === 'action')!;
   // The trim is the ONE step (TRIM_STEP_KCAL, 150 kcal) a plateau uses too.
-  assert.match(action.text, /^To make Jan 4, 2027 you'd need ~0\.4\d kg\/wk — move the date or trim ~150 kcal a day \(to ~1,850 kcal\)$/);
+  assert.match(action.text, /^To make Jan 4, 2027 you'd need ~0\.4 kg\/wk — move the date or trim ~150 kcal a day \(to ~1,850 kcal\)$/);
   // No food log: activity and logging first, not a trim there is nothing to check against.
   const noLogs = computeGoalProgress({ ...input, intakeDays: [], intakeHistoryDays: undefined }).reasons.find(r => r.kind === 'action')!;
-  assert.match(noLogs.text, /^To make Jan 4, 2027 you'd need ~0\.4\d kg\/wk — move the date, or add two 30-minute walks and log a few days so we can see where the calories go$/);
+  assert.match(noLogs.text, /^To make Jan 4, 2027 you'd need ~0\.4 kg\/wk — move the date, or add two 30-minute walks and log a few days so we can see where the calories go$/);
   assert.doesNotMatch(noLogs.text, /trim/);
   // Unknown parts are omitted: no budget, no "(to ~... kcal)".
   const noBudget = computeGoalProgress({ ...input, budget: null }).reasons.find(r => r.kind === 'action')!;
@@ -3558,7 +3558,7 @@ test('B3. behind pace projects the date whenever the scale is falling, and says 
   assert.match(tight.reasons.find(r => r.kind === 'action')!.text, /faster than is comfortable to keep; move the date$/);
   // Imperial: lb and the same copy.
   const lb = computeGoalProgressRaw({ ...input, unitSystem: 'imperial' }).reasons.find(r => r.kind === 'action')!;
-  assert.match(lb.text, new RegExp(`~0\\.9\\d${NBSP}lb/wk`));
+  assert.match(lb.text, new RegExp(`~0\\.9${NBSP}lb/wk`)); // (wave 25w: one decimal)
   assertWellFormed(p);
 });
 

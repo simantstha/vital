@@ -15,7 +15,7 @@ import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, p
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
 import { shortDate } from './brain/openerText';
-import { isInstruction } from './weightWeekPlan';
+import { isInstruction, weeklyRateFigure } from './weightWeekPlan';
 import type { UnitSystem } from './units';
 
 const GOAL_LABELS: Record<GoalKind, string> = {
@@ -38,6 +38,12 @@ function distKm(km: number, units: UnitSystem): string {
 
 function signedWt(kg: number, units: UnitSystem, digits = 1): string {
   return `${kg > 0 ? '+' : ''}${wt(kg, units, digits)}`;
+}
+/** A weight-loss goal's SINGLE weekly rate, in the card's own figure (wave 25w, `weeklyRateFigure`): "-0.9 kg", one decimal - what the model quotes is what the card says. */
+function signedRate(kgPerWeek: number, units: UnitSystem): string {
+  const { value, digits } = weeklyRateFigure(units, kgPerWeek);
+  // (Trailing zeros dropped, as the card prints it: "-1 lb", "-0.9 kg", "-0.04 kg".)
+  return `${kgPerWeek > 0 ? '+' : kgPerWeek < 0 ? '-' : ''}${digits === 1 ? String(value) : value.toFixed(2)} ${units === 'imperial' ? 'lb' : 'kg'}`;
 }
 
 /** A planned distance (the long run) in the coach's plain spaces: imperial rounded to the nearest half mile. */
@@ -298,7 +304,9 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
     } else {
       // Both paces land on the same side of the date (wave 23w): the pace is the current one, and the earlier one is said as what it was.
       const was = earlierKg != null ? ` (a week ago the pace was ${wt(Math.abs(earlierKg), units, 2)}/wk)` : '';
-      nowBits.push(`rate ${signedWt(gp.ratePerWeek.kg, units, 2)}/wk${pct}${overWeeks}${was}`);
+      // One decimal for a single weight-loss rate (wave 25w); a range, and the pace "a week ago" beside the current one, keep the two decimals the card's range shows.
+      const single = gp.goal === 'weight_loss' && earlierKg == null ? signedRate(gp.ratePerWeek.kg, units) : signedWt(gp.ratePerWeek.kg, units, 2);
+      nowBits.push(`rate ${single}/wk${pct}${overWeeks}${was}`);
     }
   }
   if (gp.distance?.thisWeekKm != null) nowBits.push(plainSpaces(gp.distance.text));

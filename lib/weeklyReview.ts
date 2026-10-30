@@ -638,7 +638,7 @@ function dayGrades(input: WeeklyReviewInput, week: Week): DayGrades | null {
   const plan = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
   const up = plan != null && plan.loKcal != null && plan.loKcal > target;
   const following = up && (plan.phase === 'given' || plan.phase === 'standing');
-  const before = !up ? all : following && plan.outcome == null ? all.filter(d => d.day < plan.since) : [];
+  const before = budgetGradedDays(input, week, all);
   const onStep = following ? all.filter(d => d.day >= plan.since) : [];
   const lo = plan?.loKcal ?? 0;
   const hi = plan?.hiKcal ?? lo;
@@ -649,6 +649,18 @@ function dayGrades(input: WeeklyReviewInput, week: Week): DayGrades | null {
     step: onStep.length > 0 && plan != null ? { loKcal: lo, since: plan.since, reached: onStep.filter(d => stepDayReached(d.kcal as number, lo, hi)).length, logged: onStep.length } : null,
     allLogged: all.length,
   };
+}
+
+/**
+ * The logged days graded against the calorie BUDGET: every logged day without an eat-more step, the days before the step began while it is given or standing and no
+ * read has moved the level (after a read the level before the latest notch is not known here), none otherwise. Shared by `dayGrades` and the "name your busiest days" tip.
+ */
+function budgetGradedDays(input: WeeklyReviewInput, week: Week, all = loggedIntake(input.intakeDays, week)): GoalProgressIntakeDay[] {
+  const target = input.budget?.targetKcal;
+  const plan = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
+  const up = target != null && plan != null && plan.loKcal != null && plan.loKcal > target;
+  const following = up && plan != null && (plan.phase === 'given' || plan.phase === 'standing');
+  return !up ? all : following && plan != null && plan.outcome == null ? all.filter(d => d.day < plan.since) : [];
 }
 
 /** The budget days of the week (the rating and the budget gap grade these); null without a target or under MIN_INTAKE_DAYS of them. */
@@ -2231,11 +2243,29 @@ function calorieTarget(input: WeeklyReviewInput): string {
   return target != null && target > 0 ? `your ${withUnit(fmtKcal(target), 'kcal')} target` : 'your calorie target';
 }
 
+/** The (up to) two logged days of the week that ran furthest over the calorie target - "Tuesday", "Sunday" - in week order: the days most likely to run over again. */
+function busiestDayNames(input: WeeklyReviewInput, week: Week): string[] {
+  const target = input.budget?.targetKcal;
+  if (target == null || target <= 0) return [];
+  return budgetGradedDays(input, week)
+    .filter(d => (d.kcal as number) > target * CALORIE_ADHERENCE_TOLERANCE)
+    .sort((a, b) => (b.kcal as number) - (a.kcal as number) || (a.day < b.day ? -1 : 1))
+    .slice(0, 2)
+    .map(d => d.day)
+    .sort()
+    .map(day => WEEKDAY_NAMES[week.days.indexOf(day)])
+    .filter((n): n is (typeof WEEKDAY_NAMES)[number] => n != null);
+}
+
 /** Weight loss, a week over budget: the weekend plan alternates with other ways in, so it is never the tip two weeks running. */
-function budgetTips(input: WeeklyReviewInput, weekendHigh: boolean): string[] {
+function budgetTips(input: WeeklyReviewInput, week: Week, weekendHigh: boolean): string[] {
   const target = input.budget?.targetKcal;
   const plan = 'Pick the two days most likely to run over and plan those meals ahead.';
-  const written = 'Log your meals before you eat them on your two busiest days — a plan on paper is easier to follow.';
+  // Wave 25w: the days are NAMED from the logs ("Log Tuesday's and Sunday's meals before you eat them."); with no day over the target to name, the earlier weekend-meal tip.
+  const busiest = busiestDayNames(input, week);
+  const written = busiest.length > 0
+    ? `Log ${busiest.map(n => `${n}'s`).join(' and ')} meals before you eat them.`
+    : 'Pick the weekend meal most likely to run over and decide it ahead of time.';
   const goTo = target != null && target > 0
     ? `Keep one go-to dinner that fits your ${withUnit(fmtKcal(target), 'kcal')} day and use it on your busiest night.`
     : 'Keep one go-to dinner that fits your calorie target and use it on your busiest night.';
@@ -2923,7 +2953,7 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
     case 'phase': return windDownNextWeek(input, week) ?? fallbackNextWeek(input, week);
     case 'budget':
       return input.goal === 'weight_loss'
-        ? rotateTip(input, week, budgetTips(input, false))
+        ? rotateTip(input, week, budgetTips(input, week, false))
         : 'Pick the two days most likely to run over and plan those meals ahead.';
     case 'protein': return 'Add a protein-first breakfast so the day starts ahead of your target.';
     case 'weight':
@@ -2972,7 +3002,7 @@ function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week,
 
 /** The weekend-plan tip: rotated for weight loss (it alternates with other tips), the one fixed line for muscle. */
 function weekendTip(input: WeeklyReviewInput, week: Week): string {
-  return input.goal === 'weight_loss' ? rotateTip(input, week, budgetTips(input, true)) : WEEKEND_NEXT_WEEK;
+  return input.goal === 'weight_loss' ? rotateTip(input, week, budgetTips(input, week, true)) : WEEKEND_NEXT_WEEK;
 }
 
 function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: Week, prevWeek: Week, assessment: WeekAssessment): string {
@@ -3116,6 +3146,9 @@ function returnWeekWeighIns(input: WeeklyReviewInput, week: Week): number {
   return prev != null && dayNumber(inWeek[0].day) - dayNumber(prev) - 1 >= WEIGH_IN_GAP_DAYS ? inWeek.length : 0;
 }
 
+/** "Next week" of a return week's review (the first weigh-ins after a gap of 7+ days): the one thing to do. */
+const RETURN_WEEK_NEXT_WEEK = 'Weigh in a couple of mornings this week — your review fills in next Monday.';
+
 function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysWithData: number, statCount: number): WeeklyReview {
   // A weight-loss user who has weighed in before but not once last week (wave 23w): say what is missing and that the plan waits for it.
   const noWeighIns = input.goal === 'weight_loss' && input.weightReadings.length > 0 && weekWeighIns(input, week).length === 0;
@@ -3132,7 +3165,10 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
     stats: [],
     win: null,
     slip: null,
-    nextWeek: noWeighIns ? 'Weigh in on a few mornings this week and your plan picks up from where it left off.' : emptyReviewNextWeek(input, week, prevWeek),
+    // A return week (wave 25w) is one line, not the list of every gap (weigh-ins, meals, workouts): the way back is to weigh in, and the review fills in on its own.
+    nextWeek: noWeighIns
+      ? 'Weigh in on a few mornings this week and your plan picks up from where it left off.'
+      : returned > 0 ? RETURN_WEEK_NEXT_WEEK : emptyReviewNextWeek(input, week, prevWeek),
     dataSufficiency: { daysWithData, statCount, sufficient: false },
   };
 }

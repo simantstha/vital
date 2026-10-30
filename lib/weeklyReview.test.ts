@@ -1426,9 +1426,11 @@ const WEEKEND_TIPS = [
 ];
 const BUDGET_TIPS = [
   'Pick the two days most likely to run over and plan those meals ahead.',
-  'Log your meals before you eat them on your two busiest days — a plan on paper is easier to follow.',
+  // (Wave 25w: the "log before you eat" tip names the days from the logs - see the test below.)
+  /^Log \w+day's( and \w+day's)? meals before you eat them\.$/,
   'Keep one go-to dinner that fits your 2,000 kcal day and use it on your busiest night.',
 ];
+const isBudgetTip = (text: string): boolean => BUDGET_TIPS.some(t => (typeof t === 'string' ? t === text : t.test(text)));
 
 test('weight loss: days out of budget are the gap — Slip names them, Next week plans the days', () => {
   const r = computeWeeklyReview(weightLossInput({
@@ -1449,7 +1451,30 @@ test('weight loss: days out of budget are the gap — Slip names them, Next week
     intakeDays: intake([...PREV, ...WEEK], [2300, 2250, 2400, 2300, 2350, 2500, 2450, 1900, 1950, 2000, 2200, 2200, 2200, 2200]),
   }));
   assert.equal(flatWeekend.slip, 'In budget 3 of 7 logged days (2,000 kcal target)');
-  assert.ok(BUDGET_TIPS.includes(flatWeekend.nextWeek), flatWeekend.nextWeek);
+  assert.ok(isBudgetTip(flatWeekend.nextWeek), flatWeekend.nextWeek);
+});
+
+test('wave 25w item 6: the "log your meals before you eat them" tip names the two days that ran furthest over, from the logs - never "on paper"', () => {
+  // This week (Mon..Sun): 1,900 · 2,500 · 2,300 · 2,150 · 2,200 · 2,400 · 2,250 against a 2,000 kcal target: Tuesday and Saturday ran furthest over.
+  const named = (kcal: number[], weeks = 3): Array<{ gap: string | undefined; nextWeek: string }> => Array.from({ length: weeks }, (_, k) => {
+    // (The tip rotates with the week number: three consecutive weeks of the same pattern show all three tips.)
+    const week = Array.from({ length: 7 }, (_, i) => addDays(WEEK_START, 7 * k + i));
+    const prev = Array.from({ length: 7 }, (_, i) => addDays(PREV_START, 7 * k + i));
+    const r = computeWeeklyReview(base({
+      weekStart: week[0],
+      weightReadings: weigh([...prev, ...week], i => 82 - i * 0.07),
+      intakeDays: intake([...prev, ...week], [2300, 2250, 2400, 2300, 2350, 2500, 2450, ...kcal]),
+    }));
+    return { gap: r.weekGap?.kind, nextWeek: r.nextWeek };
+  });
+  const two = named([1900, 2500, 2300, 2150, 2200, 2400, 2250]);
+  assert.deepEqual(two.map(t => t.gap), ['budget', 'budget', 'budget']);
+  assert.ok(two.some(t => t.nextWeek === "Log Tuesday's and Saturday's meals before you eat them."), two.map(t => t.nextWeek).join(' | '));
+  // One day over the target: that day, alone. (Three logged days, 2 in budget; Tuesday's 2,500 is the only day past 2,100.)
+  const one = named([1900, 2500, 1950]);
+  assert.deepEqual(one.map(t => t.gap), ['budget', 'budget', 'budget']);
+  assert.ok(one.some(t => t.nextWeek === "Log Tuesday's meals before you eat them."), one.map(t => `${t.gap}: ${t.nextWeek}`).join(' | '));
+  for (const t of [...two, ...one]) assert.doesNotMatch(t.nextWeek, /on paper|two busiest days/);
 });
 
 test('weight loss: a good budget week dragged down by the weight trend names the weight', () => {
@@ -2306,11 +2331,14 @@ test('wave 23w: a week with no weigh-ins at all says so and that the plan waits 
 test('wave 24w P3-7: the return week (one weigh-in after a gap of 7+ days) welcomes the user back and says the review fills in next Monday', () => {
   const back = computeWeeklyReview(base({ verdict: 'progressing', weightReadings: [...weigh(PREV2, () => 88.4), ...weigh([WEEK[1]], () => 88.2)] }));
   assert.equal(back.headline, 'Welcome back — one weigh-in last week; your review fills in next Monday');
+  // Wave 25w item 7: next week is ONE line - the way back is to weigh in - not the list of every gap ("You weighed in 1 day, logged meals on 2 days ...").
+  assert.equal(back.nextWeek, 'Weigh in a couple of mornings this week — your review fills in next Monday.');
   assert.equal(back.dataSufficiency.sufficient, false);
   assert.equal(back.stats.length, 0);
   // Two weigh-ins back: the same, counted.
   const two = computeWeeklyReview(base({ verdict: 'progressing', weightReadings: [...weigh(PREV2, () => 88.4), ...weigh([WEEK[1], WEEK[3]], () => 88.2)] }));
   assert.equal(two.headline, 'Welcome back — 2 weigh-ins last week; your review fills in next Monday');
+  assert.equal(two.nextWeek, 'Weigh in a couple of mornings this week — your review fills in next Monday.');
   // A user who weighed in the week before, or whose first ever weigh-in this is, gets the generic line.
   assert.equal(computeWeeklyReview(base({ verdict: 'progressing', weightReadings: weigh([WEEK[1]], () => 88.2) })).headline, 'Not enough data for a weekly review yet');
   assert.equal(computeWeeklyReview(base({ goal: 'muscle', verdict: 'progressing', weightReadings: [...weigh(PREV2, () => 88.4), ...weigh([WEEK[1]], () => 88.2)] })).headline.startsWith('Welcome back'), false);

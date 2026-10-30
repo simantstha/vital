@@ -107,6 +107,7 @@ import {
   stepHeadlineClause,
   stepRateTail,
   fmtWeekday,
+  weeklyRateText,
   weightWeekPlan,
   type WeightPlanPace,
   type WeightPlanStep,
@@ -1671,7 +1672,7 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepTail?: string; about?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepTail?: string; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
   if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
@@ -1679,9 +1680,9 @@ function paceReason(
   const abs = round2(Math.abs(pace.pctPerWeek));
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
-  // The headline of an unconfirmed pace says "losing about 0.6 kg a week" (one decimal): the rate line is that very figure, "about 0.6 kg/wk", not a
-  // second rounding of it ("0.58") on the same card (wave 24w).
-  const perWeek = opts.about ? `about ${fmtWeight(input, Math.abs(pace.kgPerWeek))}` : fmtWeight(input, Math.abs(pace.kgPerWeek), 2);
+  // A single rate is one decimal, "about 0.9 kg/wk" (wave 25w, `weeklyRateText`): the same rule as the headline of an unconfirmed pace ("losing about 0.6 kg a week",
+  // wave 24w) and the figure the app's hero prints, never "0.85" one week and "0.9" the next. A range (below) keeps the two decimals the app recomposes.
+  const perWeek = weeklyRateText(input, pace.kgPerWeek);
   let text = `${dir} ${perWeek}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pace.kgPerWeek < 0) {
@@ -2011,12 +2012,10 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  // The headline quotes the rate ("losing about 0.6 kg a week") only for a pace nothing has confirmed yet: the rate line then says the same figure.
-  const quotesRate = !plan.confirmed && !plan.tooFast && !plan.nearlyThere && p.kgPerWeek < 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
   // While the easing step is the week's instruction (given or standing) a ceiling warning says where it is (wave 25w), never stands alone beside "Aim for ~2,150 kcal".
   const stepOn = plan.step != null && (plan.step.phase === 'given' || plan.step.phase === 'standing');
   const rate = paceReason(input, p, {
-    tooFast: plan.tooFast, about: quotesRate, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null,
+    tooFast: plan.tooFast, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null,
     stepTail: stepOn && plan.step != null ? stepRateTail(plan.step) : undefined,
   });
   const action = planActionReason(plan);
@@ -2048,7 +2047,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     if (plan.verdict === 'behind') {
       return {
         verdict: 'behind',
-        headline: clip(`Weight is up ${fmtWeight(input, p.kgPerWeek, 2)} a week, away from your target`),
+        headline: clip(`Weight is up ${weeklyRateText(input, p.kgPerWeek)} a week, away from your target`),
         reasons: build(rate),
       };
     }
@@ -2060,7 +2059,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     return {
       verdict: 'progressing',
       // "About" and one decimal (wave 23w): the 2-decimal rate stays on the rate line below, where it is the measurement.
-      headline: clip(`Progressing — losing about ${fmtWeight(input, Math.abs(p.kgPerWeek))} a week`),
+      headline: clip(`Progressing — losing ${weeklyRateText(input, p.kgPerWeek)} a week`),
       reasons: build(rate, action),
     };
   }

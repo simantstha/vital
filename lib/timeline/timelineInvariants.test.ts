@@ -5163,3 +5163,105 @@ invariant(['weight_loss'], 'item 4: a user who logs no food is never told "Keep 
   assert.ok(said > 0, `${name}: the settled non-logger wording never appeared, so this invariant checked nothing`);
   return out;
 });
+
+//   G2  tidy: item 6 the weekly "log before you eat" tip names the days from the logs; item 7 a return week gets ONE line for next week; item 8 one rule for a
+//       weekly rate in text - one decimal ("Down about 0.9 kg/wk") - for every SINGLE rate. A RANGE ("Down 0.37-0.59 kg/wk") keeps its two decimals: the iOS hero, the Trends
+//       pill and the goal sheet recompose that range themselves from plan.pace / plan.earlierPace (GoalProgressLogic.paceRange, UnitFormat.weightRateRange), so a
+//       server-only change would put "0.4-0.6" on the card beside "0.37-0.59" in the hero. Locked below until the iOS side moves with it.
+
+const W25_DAY_NAMES: Record<string, string> = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
+
+invariant(WEIGHT, 'item 6: the weekly tip is never "Log your meals before you eat them on your two busiest days — a plan on paper ..." (vague, "on paper"): it names the days from the logs, "Log Tuesday\'s and Sunday\'s meals before you eat them."', (snaps, name) => {
+  const scn = buildScenario(name);
+  const budget = scn.budget.targetKcal as number;
+  const out: Violation[] = [...textMatches(snaps, allTexts, /on paper|two busiest days/)];
+  let named = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (rv == null || !/before you eat them/.test(plain(rv.review.nextWeek))) continue;
+    named++;
+    const week = scn.intake
+      .filter(i => i.day >= rv.weekStart && i.day <= addDays(rv.weekStart, 6) && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD && i.kcal > budget * 1.05)
+      .sort((a, b) => b.kcal - a.kcal || (a.day < b.day ? -1 : 1))
+      .slice(0, 2)
+      .map(i => i.day)
+      .sort();
+    const want = week.length === 0 ? null : `Log ${week.map(d => `${W25_DAY_NAMES[weekdayOf(d)]}'s`).join(' and ')} meals before you eat them.`;
+    if (plain(rv.review.nextWeek) !== want) out.push({ snap, detail: `week of ${rv.weekStart}: next week says "${visible(rv.review.nextWeek)}" but the logged days furthest over ${budget} kcal are ${week.join(', ') || '(none)'}` });
+  }
+  if (name === 'weight_loss_logged') assert.ok(named > 0, `${name}: the "log before you eat them" tip never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 7: the review of a return week (the first weigh-ins after a gap of 7+ days) says ONE thing for next week, "Weigh in a couple of mornings this week — your review fills in next Monday.", not a list of every gap', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    if (rv == null || rv.review.dataSufficiency.sufficient) continue;
+    const week = scn.weighIns.filter(w => w.day >= rv.weekStart && w.day <= addDays(rv.weekStart, 6));
+    const before = scn.weighIns.filter(w => w.day < rv.weekStart);
+    const prev = before.length > 0 ? before[before.length - 1].day : null;
+    if (week.length < 1 || prev == null || dayDiff(week[0].day, prev) - 1 < 7) continue;
+    seen++;
+    if (plain(rv.review.nextWeek) !== 'Weigh in a couple of mornings this week — your review fills in next Monday.') out.push({ snap, detail: `week of ${rv.weekStart} (${week.length} weigh-in(s) after a gap since ${prev}): next week says "${visible(rv.review.nextWeek)}"` });
+  }
+  assert.ok(seen > 0, `${name}: no return week had an unsufficient review, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 8: a SINGLE weekly rate on the card is one decimal and the figure the app\'s own hero prints for ratePerWeek.kg ("Down about 0.9 kg/wk"), never "0.85 kg/wk"', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const kg = snap.card?.ratePerWeek.kg;
+    for (const r of snap.card?.reasons ?? []) {
+      const text = plain(r.text);
+      if (r.kind !== 'rate' || !/^(?:Down|Up) /.test(text) || /^(?:Down|Up) [\d.]+–[\d.]+ kg\/wk/.test(text)) continue; // (a range keeps two decimals: see the block header)
+      seen++;
+      const m = /^(Down|Up) about (\d+\.\d) kg\/wk \(/.exec(text);
+      // (iOS: UnitFormat.weightDelta rounds the payload's two-decimal ratePerWeek.kg to one decimal.)
+      const hero = kg == null ? null : (Math.round(Math.abs(kg) * 10) / 10).toFixed(1);
+      if (m == null) out.push({ snap, detail: `[rate] "${visible(r.text)}" is not "Down about X.X kg/wk (...)"` });
+      else if (hero != null && m[2] !== hero) out.push({ snap, detail: `[rate] "${visible(r.text)}" but ratePerWeek.kg ${kg} reads ${hero} in the hero` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no single-rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 8: the coach\'s single weekly rate is one decimal too ("rate -0.9 kg/wk (-1.02% bw)"), so the model quotes the card\'s figure', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    for (const t of coachTexts(snap)) {
+      const m = /rate (-?\d+\.\d+) kg\/wk(?! over the last \d+ weeks of weigh-ins \(two)/.exec(plain(t.text));
+      if (m == null || /a week ago the pace was/.test(plain(t.text)) || /rate -?\d+\.\d+ to -?\d+\.\d+ kg\/wk/.test(plain(t.text))) continue;
+      seen++;
+      // (A rate under 0.05 kg/wk would print as 0.0: it keeps its second decimal.)
+      const decimals = m[1].split('.')[1].length;
+      if (decimals !== 1 && Math.abs(Number(m[1])) >= 0.05) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no coach rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 8 (parity): a RANGE on the card ("Down 0.37–0.59 kg/wk") shows exactly the two-decimal figures the iOS hero recomposes from plan.pace and plan.earlierPace, until iOS moves with it', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    for (const r of snap.card?.reasons ?? []) {
+      const m = r.kind === 'rate' ? /^Down ([\d.]+)–([\d.]+) kg\/wk/.exec(plain(r.text)) : null;
+      if (m == null) continue;
+      seen++;
+      const fmt = (kg: number): string => String(Math.round(Math.abs(kg) * 100) / 100);
+      const want = [plan?.pace?.kgPerWeek, plan?.earlierPace?.kgPerWeek].filter((x): x is number => x != null).map(fmt).sort((a, b) => Number(a) - Number(b));
+      if (want.length !== 2 || m[1] !== want[0] || m[2] !== want[1]) out.push({ snap, detail: `[rate] "${visible(r.text)}" but plan.pace / plan.earlierPace give ${want.join('–')}` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no range line appeared, so this invariant checked nothing`);
+  return out;
+});
