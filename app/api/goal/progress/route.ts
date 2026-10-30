@@ -29,7 +29,7 @@
  *                                                //   phase is read on the Monday of this calendar week (a Sunday 7 days out is still the taper week);
  *                                                //   completed? (additive) = { km, durationMin | null } once a race-length run is logged
  *   longRun: { lastKm, peakKm, targetPeakKm | null, nextKm? } | null,       // endurance; km; lastKm = longest run of the last 14 days, peakKm of the last 28;
- *                                                //   nextKm? (additive) = this week's long run from the plan; capNoteDue? / oversized? (additive, only when
+ *                                                //   nextKm? (additive) = this week's long run from the plan (wave 25e: on the last day, once it is run, next week's); capNoteDue? / oversized? (additive, only when
  *                                                //   true) = the long-run cap note is due this week (wave 22e: never in a light / restart / comeback / rebuild week, nor when the
  *                                                //   raised goal is out of reach) / the peak was over 55% of its week; overPlan? + peakPlanKm? (wave 22e, only when true) = the
  *                                                //   peak run broke the plan (over its week's planned long run or the peak target + 0.5 km, or over half of its week), so it

@@ -31,7 +31,7 @@ test('a restart whose first run back is on Thursday is scaled to the days left: 
   const runs = [...BEFORE, run(8, 3, 3)];
   const thu = planOf(runs, 8, 3);
   assert.equal(thu.kind, 'restart');
-  assert.deepEqual(thu.restart?.midWeek, { fullKm: 17, daysLeft: 4, km: 10, longCapKm: 4, pending: false });
+  assert.deepEqual(thu.restart?.midWeek, { fullKm: 17, daysLeft: 4, km: 10, longCapKm: 4, pending: false, runs: 3 });
   assert.equal(thu.targetKm, 10);
   assert.equal(thu.longRunKm, 4);
   assert.equal(nbsp(thu.purpose), 'Restart mid-week: ~10 km this week in 2–3 easy runs, nothing over ~4 km; the restart week (~17 km) starts Monday');
@@ -55,7 +55,7 @@ test('on the break the card knows what to take if the runner starts today: pendi
   // Thursday morning of week 8, nothing run yet this week: on a break (11 days since the last run).
   const thuMorning = planOf(BEFORE, 8, 3);
   assert.equal(thuMorning.onBreak, true);
-  assert.deepEqual(thuMorning.restart?.midWeek, { fullKm: 17, daysLeft: 4, km: 10, longCapKm: 4, pending: true });
+  assert.deepEqual(thuMorning.restart?.midWeek, { fullKm: 17, daysLeft: 4, km: 10, longCapKm: 4, pending: true, runs: 3 });
   assert.equal(thuMorning.targetKm, 17, 'the break card keeps the restart number');
   // Tuesday: six days left, the restart week as it is (no stub).
   assert.equal(planOf(BEFORE, 8, 1).restart?.midWeek, undefined);

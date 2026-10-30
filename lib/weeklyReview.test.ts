@@ -1862,11 +1862,11 @@ test('a textbook deload (85% loads, 64% of the volume) is recognised: Win names 
   // Not "as planned": nothing asked for a lighter week (and the loads were flat, not climbing).
   assert.equal(r.win, 'Deload week done — lighter loads.');
   assert.equal(r.slip, null);
-  assert.equal(r.nextWeek, 'Back to full loads: Squat 107.5 → 110 kg.');
+  assert.equal(r.nextWeek, 'Back to full loads: Squat 107.5 kg.'); // the loads she lifted, no step (wave 25s: one rule for her own deload and a prescribed one)
   assert.doesNotMatch(r.nextWeek, /Repeat this week/);
-  // Pounds: 107.5 kg = 237 lb, 2 lb off the 5 lb grid: the step starts from the grid ("~235") and adds exactly 5 lb (240).
+  // Pounds: 107.5 kg = 237 lb as logged - the load she lifted, not a grid value and not a step (wave 25s).
   const lb = computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: { squat: [...steadySquat, lwk(WEEK_START, 114.1, 92.5, 2, 1920)] } }));
-  assert.equal(lb.nextWeek, 'Back to full loads: Squat ~235 → 240 lb.');
+  assert.equal(lb.nextWeek, 'Back to full loads: Squat 237 lb.');
 });
 
 test('a deload win says "as planned" only when last week asked for a lighter week, else it names the timing (wave 22s)', () => {
@@ -1874,10 +1874,11 @@ test('a deload win says "as planned" only when last week asked for a lighter wee
   // Last week's Next week asked for a lighter week: as planned.
   const planned = computeWeeklyReview(liftReview({ progression: { squat: [...steadySquat, deload] }, previousNextWeek: 'Go lighter next week and put sleep first — poor sleep and a high resting heart rate.' }));
   assert.equal(planned.win, 'Deload week done — lighter loads, as planned.');
-  // The previous review said "Squat 110 → 112.5 kg" after 4 weeks of heavier loads (102.5, 105, 107.5, 110 kg): the lifter's own call, and good timing.
+  // The previous review said "Squat 110 → 112.5 kg" after 4 weeks of heavier loads (102.5, 105, 107.5, 110 kg): the lifter's own call. 4 is under the 5 that cue a deload, so
+  // the win states the count and does not call it good timing (wave 25s).
   const climbing = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].map((w, i) => lwk(w, 128 + i * 2.5, [100, 102.5, 105, 107.5, 110][i]));
   const timing = computeWeeklyReview(liftReview({ progression: { squat: [...climbing, deload] }, previousNextWeek: 'Squat 110 → 112.5 kg.' }));
-  assert.equal(timing.win, 'Deload week done — lighter loads, good timing after 4 straight weeks of heavier loads.');
+  assert.equal(timing.win, 'Deload week done — lighter loads, after 4 straight weeks of heavier loads.');
   // Two weeks of climbing is not a run.
   const short = ['2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21'].map((w, i) => lwk(w, 128 + i, [100, 100, 100, 102.5, 105][i]));
   assert.equal(computeWeeklyReview(liftReview({ progression: { squat: [...short, deload] } })).win, 'Deload week done — lighter loads.');
@@ -1919,27 +1920,27 @@ test('a review read on a Monday she has already lifted does not tell her to star
   const first = computeWeeklyReview(liftReview({
     trainingDays: [], strengthDays: [monday], progression: { squat: squat([lwk(monday, 128.3, 110, 1, 1650)]) }, signupDay: '2026-06-01',
   }));
-  assert.equal(first.nextWeek, "You're already back — today's 110 kg squat was your first session; keep these loads this week: make it 4 sessions, adding load only when every set feels solid.");
+  assert.equal(first.nextWeek, "You're already back — today's 110 kg squat was your first session; keep these loads this week and make it 4 sessions.");
   // Second week off (nothing in the week before either): she did the easy session the review asked for; build back from it.
   const second = computeWeeklyReview(liftReview({
     trainingDays: [], strengthDays: [monday], signupDay: '2026-06-01',
     progression: { squat: [...weeks.slice(0, 4).map(w => lwk(w, 141.8, 115)), lwk(monday, 128.3, 110, 1, 1650)] },
   }));
   assert.equal(second.headline, 'No sessions last week (2nd week off)');
-  assert.equal(second.nextWeek, "You're already back — today's 110 kg squat was your first session; keep these loads this week: build back toward 4 a week, adding load only when every set feels solid.");
+  assert.equal(second.nextWeek, "You're already back — today's 110 kg squat was your first session; keep these loads this week and build back toward 4 sessions.");
   // The main lift not yet done gets its load, ~95% of its last working load on the plate grid (130 kg x 0.95 = 123.5 -> ~122.5 kg), and the same for bench.
   const deadlift = [...weeks.map(w => lwk(w, 160, 130))];
   const todo = computeWeeklyReview(liftReview({
     trainingDays: [], strengthDays: [monday], signupDay: '2026-06-01',
     progression: { squat: squat([lwk(monday, 128.3, 110, 1, 1650)]), deadlift, 'bench press': weeks.map(w => lwk(w, 100, 90)) },
   }));
-  assert.equal(todo.nextWeek, "You're already back — today's 110 kg squat was your first session; bench ~85 kg and deadlift ~122.5 kg next. Keep these loads this week: make it 4 sessions, adding load only when every set feels solid.");
+  assert.equal(todo.nextWeek, "You're already back — today's 110 kg squat was your first session; bench ~85 kg and deadlift ~122.5 kg next. Keep these loads this week and make it 4 sessions.");
   // Pounds: ONE figure for a lift (the same grid start the next review's cue quotes - 110 kg is 243 lb logged, "~245" - not "243" here and "~240" there).
   const todoLb = computeWeeklyReview(liftReview({
     unitSystem: 'imperial', trainingDays: [], strengthDays: [monday], signupDay: '2026-06-01',
     progression: { squat: squat([lwk(monday, 128.3, 110, 1, 1650)]), deadlift },
   }));
-  assert.equal(todoLb.nextWeek, "You're already back — today's ~245 lb squat was your first session; deadlift ~270 lb next. Keep these loads this week: make it 4 sessions, adding load only when every set feels solid.");
+  assert.equal(todoLb.nextWeek, "You're already back — today's ~245 lb squat was your first session; deadlift ~270 lb next. Keep these loads this week and make it 4 sessions.");
   // Two main lifts, in the lift ranking's order; pounds are the grid start of the top set (110 kg = 243 lb logged -> ~245, 85 kg = 187 lb -> ~185).
   const two = computeWeeklyReview(liftReview({
     unitSystem: 'imperial', trainingDays: [], strengthDays: [monday], signupDay: '2026-06-01',
@@ -2792,7 +2793,7 @@ test('after a deload every main lift goes back to full loads; a week off eases e
   };
   const deload = computeWeeklyReview(liftReview({ progression }));
   assert.equal(deload.weekRating, 'light');
-  assert.equal(deload.nextWeek, 'Back to full loads: Squat 107.5 → 110 kg, bench 80 → 82.5 kg.');
+  assert.equal(deload.nextWeek, 'Back to full loads: Squat 107.5 kg and bench 80 kg.');
   const off = computeWeeklyReview(liftReview({ trainingDays: [], strengthDays: [], progression: { squat: weeks.map(w => lwk(w, 141.8, 115)), 'bench press': weeks.map(w => lwk(w, 110, 90)) }, signupDay: '2026-06-01' }));
   assert.equal(off.nextWeek, 'Ease back in: 4 sessions at ~90% of your last working weights (squat ~102.5 kg, bench ~80 kg), starting today.');
 });
@@ -2807,12 +2808,12 @@ test('after 5 straight weeks of heavier loads the next-week cue is a deload, wit
   const squat = climbing([100, 102.5, 105, 107.5, 110, 112.5]);
   const one = computeWeeklyReview(liftReview({ progression: { squat } }));
   assert.equal(one.weekRating, 'good');
-  assert.equal(one.nextWeek, "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 112.5 kg.");
+  assert.equal(one.nextWeek, 'Deload week: squat ~97.5 kg, 2 working sets — then back to squat 112.5 kg.'); // 87.5% of 112.5 on the 2.5 kg grid (wave 25s: the loads, not a percentage)
   // Every main lift trained that week is named, the lead lift first.
   const three = computeWeeklyReview(liftReview({ progression: { squat, 'bench press': climbing([80, 82.5, 85, 87.5, 90, 92.5]), deadlift: climbing([120, 122.5, 125, 127.5, 130, 132.5]) } }));
-  assert.equal(three.nextWeek, "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg.");
-  // Pounds: the loads as logged (112.5 kg = 248 lb).
-  assert.equal(computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: { squat } })).nextWeek, "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 248 lb.");
+  assert.equal(three.nextWeek, 'Deload week: squat ~97.5 kg, bench ~80 kg, deadlift ~115 kg, 2 working sets — then back to squat 112.5 kg, bench 92.5 kg and deadlift 132.5 kg.');
+  // Pounds: the loads as logged (112.5 kg = 248 lb), the deload load on the 5 lb grid (87.5% of 248 lb = 217 -> ~215 lb).
+  assert.equal(computeWeeklyReview(liftReview({ unitSystem: 'imperial', progression: { squat } })).nextWeek, 'Deload week: squat ~215 lb, 2 working sets — then back to squat 248 lb.');
   // Four step-ups are not enough: the normal cue.
   const four = computeWeeklyReview(liftReview({ progression: { squat: squat.slice(1) } }));
   assert.equal(four.nextWeek, 'Squat 112.5 → 115 kg; progress the others as they hit their reps.');
@@ -2826,14 +2827,14 @@ test('after 5 straight weeks of heavier loads the next-week cue is a deload, wit
 test('the week after a prescribed deload: the win praises the timing, the next week goes back to the pre-deload loads the cue named (wave 24s)', () => {
   // Six climbing weeks (08-17 .. 09-21), then the deload week (09-28): 97.5 kg x 2 sets.
   const progression: ProgressionSummary = { squat: [...climbing([100, 102.5, 105, 107.5, 110, 112.5], '2026-08-17'), lwk(WEEK_START, 117, 97.5, 2, 1920)] };
-  const cue = "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 112.5 kg.";
+  const cue = 'Deload week: squat ~97.5 kg, 2 working sets — then back to squat 112.5 kg.';
   const r = computeWeeklyReview(liftReview({ progression, previousNextWeek: cue }));
   assert.equal(r.weekRating, 'light');
   assert.equal(r.win, 'Deload week done — lighter loads, good timing after 5 straight weeks of heavier loads.');
   assert.equal(r.nextWeek, 'Back to full loads: Squat 112.5 kg.');
-  // A deload she took on her own keeps the step: the old rule is unchanged.
+  // A deload she took on her own resumes the same way: ONE rule (wave 25s) - the loads she lifted, no step; it used to add "107.5 → 110 kg".
   const own = computeWeeklyReview(liftReview({ progression: { squat: [...steadySquat, lwk(WEEK_START, 114.1, 92.5, 2, 1920)] } }));
-  assert.equal(own.nextWeek, 'Back to full loads: Squat 107.5 → 110 kg.');
+  assert.equal(own.nextWeek, 'Back to full loads: Squat 107.5 kg.');
 });
 
 test('before the first 4-week comparison the review and the goal card quote the same week over week, rounded from the change itself', () => {
