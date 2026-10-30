@@ -105,3 +105,44 @@ test('item 3: the same break one day earlier (Friday, usual days Saturday and Su
   const fri = planOf('runner_no_race', '2026-04-20', '2026-04-24');
   assert.deepEqual(fri.restart?.midWeek, { fullKm: 17, daysLeft: 3, km: 7, longCapKm: 4, pending: true, runs: 2 });
 });
+
+// ── group 2 ──────────────────────────────────────────────────────────────────
+
+const opener = (name: ScenarioName, idx: number): string => nbsp(snap(name, idx).opener?.required ?? '');
+const review = (name: ScenarioName, idx: number) => snap(name, idx).review?.review;
+
+test('item 4: "Welcome back" is the opener on the first day back only; the next days count the restart week', () => {
+  assert.equal(opener('runner_comeback_spike', 70), 'Goal check-in: Building back — restart at ~18 km this week.');
+  assert.equal(opener('runner_comeback_spike', 71), 'Welcome back — restart at ~18 km this week.');
+  assert.equal(opener('runner_comeback_spike', 72), 'Restart week — ~18 km, 4 km so far.');
+  assert.equal(opener('runner_comeback_spike', 76), 'Restart week — ~18 km, 15 km so far.');
+});
+
+test('item 5 and 6: "Back out there" is the first week back only; a restart week that ran last week\'s km is "same as last week"', () => {
+  assert.equal(nbsp(review('runner_comeback_spike', 70)?.win ?? ''), 'Back out there: 15 km after the break.');
+  assert.equal(review('runner_comeback_spike', 77)?.win, null);
+  assert.equal(nbsp(review('runner_comeback_spike', 77)?.stats.find(s => s.label === 'Volume')?.comparison ?? ''), 'same as last week');
+  assert.equal(nbsp(review('runner_comeback_spike', 70)?.stats.find(s => s.label === 'Volume')?.comparison ?? ''), 'back after 6 km last week');
+});
+
+test('item 7: a restart is not a step - "more than the restart called for", and the 7 km run over the ~4 km cap is named once, in the slip', () => {
+  const r = review('runner_comeback_spike', 70);
+  assert.equal(nbsp(r?.headline ?? ''), '3 sessions, 15 of ~10 km — more than the restart called for · goal 30 km');
+  assert.equal(nbsp(r?.slip ?? ''), 'Longest run 7 km, over the ~4 km the restart week called for');
+});
+
+test('item 8: no peak date during the scaled restart (the restart week\'s long run is capped at 40% of it)', () => {
+  for (const idx of [66, 68, 69]) assert.match(nbsp(snap('runner_messy', idx).card?.reasons.find(r => r.kind === 'long_run')?.text ?? ''), /· peak target 15 km$/);
+});
+
+test('item 9: a Sunday that is not one of the runner\'s run days has no "~2 km left" to offer', () => {
+  const d139 = snap('runner_messy', 139).card;
+  assert.doesNotMatch(nbsp([d139?.headline, ...(d139?.reasons ?? []).map(r => r.text)].join(' | ')), /left|one short easy run/);
+  assert.match(nbsp(d139?.reasons.find(r => r.kind === 'plan')?.text ?? ''), /~17 km this week, done$/);
+});
+
+test('item 10: the peak date is the plan\'s real one, and the hold-week card has no "— fine."', () => {
+  assert.match(nbsp(snap('runner_on_plan_obedient', 36).card?.reasons.find(r => r.kind === 'long_run')?.text ?? ''), /build to 15 km by early May/);
+  const hold = runTimeline('runner_on_plan').map(s => nbsp(s.card?.reasons.find(r => r.kind === 'plan')?.text ?? '')).find(t => /became a normal week/.test(t));
+  assert.match(hold ?? '', /^Your cutback became a normal week\. Hold ~25 km this week/);
+});

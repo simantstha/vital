@@ -102,7 +102,7 @@ test('a cutback that became a normal week at the GOAL week (30 km) is followed b
   assert.equal(hold.kind, 'hold');
   assert.equal(hold.hold?.skippedCutback, true);
   // Its plan line says why there is no step - and "an easier week" only when it is easier (25 after 25 is not).
-  assert.equal(nbsp(hold.purpose), 'Your cutback became a normal week — fine. Hold ~25 km this week, long run 11 km — no 10% step on top of it');
+  assert.equal(nbsp(hold.purpose), 'Your cutback became a normal week. Hold ~25 km this week, long run 11 km — no 10% step on top of it');
 });
 
 test('a hold is graded by km first: a long run past the held one breaks it only when oversized (over 55% of the week); "km" and "long" are told apart', () => {

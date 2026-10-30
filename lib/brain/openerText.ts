@@ -11,6 +11,7 @@
 
 import type { GoalKind, GoalProgress } from '../goalProgress';
 import { liftLapseMinDays } from '../liftChange';
+import { withUnit } from '../displayText';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
 import { PACE_SETTLE_DAYS, relationForDays, weeksForDays } from '../weightPace';
 import { REACHED_ASK_DAYS, stepVerb } from '../weightWeekPlan';
@@ -297,7 +298,7 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
   // A week or more without a session: the check-in is the lapse, and it asks about getting back in.
   if (lapseAsks(gp)) return `Goal check-in: ${headline}. ${LAPSE_ASK}`;
   // A runner on a break: say "On a break" once and where to restart — the card counts the days, the opener does not.
-  const breakLine = onBreakOpener(gp, headline);
+  const breakLine = onBreakOpener(gp, headline, units);
   if (breakLine) return breakLine;
   // A headline that ends in its own "!" ("... Congratulations!") keeps it; no "!." after it.
   const endsLoud = gp.headline.trim().endsWith('!');
@@ -309,15 +310,21 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
  * break up day by day ("On a break — 8 days since your last run. Restart at ~13 km."); the opener says it once, with
  * no count, and welcomes the runner back only after the first run back ("Building back — restart at ~13 km this week").
  */
-function onBreakOpener(gp: GoalProgress, headline: string): string | null {
+function onBreakOpener(gp: GoalProgress, headline: string, units: UnitSystem): string | null {
   if (gp.goal !== 'endurance') return null;
   const onBreak = /^On a break — \d+ days? since your last run\.\s*(Restart at .+)$/.exec(headline);
   if (onBreak) return `Goal check-in: On a break — ${lowerFirst(onBreak[1])}.`;
   const back = /^Building back — (restart at .+)$/.exec(headline);
   if (back) {
     // Welcome back means a run is back; before the week's first run it is still the plain restart line.
-    const ran = (gp.distance?.thisWeekKm ?? 0) > 0;
-    return ran ? `Welcome back — ${back[1]}.` : `Goal check-in: Building back — ${back[1]}.`;
+    const done = gp.distance?.thisWeekKm ?? 0;
+    if (done <= 0) return `Goal check-in: Building back — ${back[1]}.`;
+    // Wave 25e: said once - on the day of the week's first run. From the next day the opener counts the week ("Restart week — ~18 km, 4.8 km so far.").
+    const runDays = gp.distance?.thisWeekRunDays;
+    const target = /^restart at (~\d+(?:\.\d+)?\s?(?:km|mi)) this week$/.exec(back[1]);
+    const firstDay = runDays == null || (runDays <= 1 && gp.lastSessionDaysAgo === 0);
+    if (firstDay || target == null) return `Welcome back — ${back[1]}.`;
+    return `Restart week — ${target[1]}, ${withUnit(distanceAmount(done, units), units === 'imperial' ? 'mi' : 'km')} so far.`;
   }
   return null;
 }

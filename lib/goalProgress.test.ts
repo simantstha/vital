@@ -1545,13 +1545,13 @@ test('long run: runs older than 28 days are ignored; null without running distan
   assert.equal(computeGoalProgress(base({ goal: 'muscle' })).longRun, null);
 });
 
-test('long run: below target reads "Long run 14 km · build to 18 km by mid-Dec", right after the week plan line', () => {
-  // Race Dec 30 → peak long run planned 2 weeks out for a half (Dec 16) → "mid-Dec".
+test('long run: below target reads "Long run 14 km · build to 18 km by early Dec", right after the week plan line', () => {
+  // Race Dec 30 → the peak is due 2 weeks out (Dec 16), but wave 25e names the Sunday the plan really gets there (Dec 6 or earlier) → "early Dec".
   const p = computeGoalProgress(longRunInput([14, 12, 16, 10], { race: { date: '2026-12-30', distanceKm: 21.1 } }));
   // Race first, what the week is for, then the long run (this week's distance is the card's stat, not a reason).
   assert.deepEqual(p.reasons.map(r => r.kind), ['race', 'plan', 'long_run']);
   const lr = p.reasons[2];
-  assert.equal(lr.text, 'Long run 14 km · build to 18 km by mid-Dec');
+  assert.equal(lr.text, 'Long run 14 km · build to 18 km by early Dec');
   assert.equal(lr.tone, 'neutral');
   assertWellFormed(p);
 });

@@ -1181,7 +1181,8 @@ function planVolumeCandidate(input: WeeklyReviewInput, rp: ReviewPlans): Candida
   else if (km <= 0) comparison = `none logged · ${distanceText(input, prevKm)} last week`;
   // After a hold week or a restart the % against the jump / the sick week is not growth: say what it follows.
   else if (plan.kind === 'hold' && prevKm > 0 && !rp.holdBroken && grade.gap !== 'spike') comparison = `held after ${distanceText(input, prevKm)} last week`;
-  else if (plan.kind === 'restart' && prevKm > 0) comparison = `back after ${distanceText(input, prevKm)} last week`;
+  // (Wave 25e: a restart week that ran the km of the week before it is "same as last week", not "15 km - back after 15 km last week".)
+  else if (plan.kind === 'restart' && prevKm > 0) comparison = distanceText(input, prevKm) === distanceText(input, km) ? 'same as last week' : `back after ${distanceText(input, prevKm)} last week`;
   else if (prevKm >= compareMin) {
     const { baseKm, afterCutback } = changeBase(rp);
     const pct = Math.round(((km - baseKm) / baseKm) * 100);
@@ -1689,7 +1690,7 @@ function loggedWord(stat: WeeklyReviewStat, word = 'logged '): string {
  */
 function distanceHeadline(
   input: WeeklyReviewInput, km: number, targetKm: number, stepKm: number,
-  opts: { spike: boolean; cutback?: boolean; upTo?: boolean; overCap?: boolean; holdOver?: boolean; holdLong?: { longKm: number; heldKm: number } },
+  opts: { spike: boolean; cutback?: boolean; upTo?: boolean; overCap?: boolean; holdOver?: boolean; holdLong?: { longKm: number; heldKm: number }; restart?: boolean },
 ): string {
   // A comeback week far past its "up to" ceiling: a spike, said in the ceiling's words (the card says the same).
   if (opts.spike && opts.upTo) {
@@ -1715,7 +1716,8 @@ function distanceHeadline(
   // Wave 24e: "on plan" from 90% of the step - the band in which the card says "this week's km are done" (one number, `WEEK_ON_PLAN_FRACTION`).
   const onPlan = distanceNumber(input, km) >= distanceNumber(input, stepKm) || km >= stepKm * WEEK_ON_PLAN_FRACTION - 1e-9;
   // Over the step but under the spike line is above the step, not "on plan" (a +33% week is not on a 10% plan).
-  const note = onPlan ? (km > stepKm * ABOVE_STEP_FRACTION ? (opts.cutback ? ' — a normal week' : ' — above the step') : ' — on plan') : '';
+  // (Wave 25e: a restart week's number is what the restart called for, not a step: "15 of ~10 km — more than the restart called for".)
+  const note = onPlan ? (km > stepKm * ABOVE_STEP_FRACTION ? (opts.cutback ? ' — a normal week' : opts.restart ? ' — more than the restart called for' : ' — above the step') : ' — on plan') : '';
   return `${distanceNumber(input, km)} of ${target}${note} · goal ${distanceText(input, targetKm)}`;
 }
 
@@ -1860,7 +1862,9 @@ function enduranceWin(input: WeeklyReviewInput, assessment: WeekAssessment): str
       return "Held back after last week's jump — exactly right.";
     }
     case 'baseline': return `Baseline set: ${km} in ${rp.week.days} ${plural(rp.week.days, 'run')} — next week's step builds from it.`;
-    case 'restart': return `Back out there: ${km} after the break.`;
+    case 'restart':
+      // Wave 25e: said once, in the review of the first week back; the full restart week that follows a scaled mid-week one has no win of its own.
+      return plan.last != null && plan.last.kind === 'restart' && plan.last.km > 0 ? null : `Back out there: ${km} after the break.`;
     case 'maintain': {
       // "Held" only when the goal was run; a week short of it at its rounded reading is close, not held.
       const ran = distanceNumber(input, rp.week.km);
@@ -2017,7 +2021,7 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
           ? gradeEnduranceWeek(reviewed, km, { runDays, unitsPerKm: unitsPerKmOf(input) }).gap === 'spike'
           : isSpikeWeek(km, stepKm, target, unitsPerKmOf(input)));
         const value = hasDistanceTarget(input) && kmBased && km != null
-          ? distanceHeadline(input, km, target, stepKm, { spike, cutback: reviewed?.cutback != null, upTo: reviewed?.upTo === true, overCap, holdOver: reviewPlans(input).holdRead?.kind === 'km', holdLong: reviewPlans(input).holdRead?.kind === 'long' ? reviewPlans(input).holdRead as { kind: 'long'; longKm: number; heldKm: number } : undefined })
+          ? distanceHeadline(input, km, target, stepKm, { spike, cutback: reviewed?.cutback != null, upTo: reviewed?.upTo === true, overCap, holdOver: reviewPlans(input).holdRead?.kind === 'km', holdLong: reviewPlans(input).holdRead?.kind === 'long' ? reviewPlans(input).holdRead as { kind: 'long'; longKm: number; heldKm: number } : undefined, restart: reviewed?.kind === 'restart' })
           : volume.value;
         // A spike's (or an over-the-cap week's) headline already says it is a jump: no "+186% vs last week" on top (and it would overrun the headline limit).
         // (A planned cutback drop is short: "-13%, as planned (cutback)".)
@@ -2144,6 +2148,12 @@ function buildSlip(input: WeeklyReviewInput, cands: Candidate[], week: Week, pre
     if (rp.plan?.cutback?.owed === true && rp.plan.targetKm != null
       && gradeEnduranceWeek(rp.plan, rp.week.km, { runDays: rp.week.days, unitsPerKm: unitsPerKmOf(input) }).gap === 'over') {
       return gapSlip(input, { kind: 'cutback', doneKm: round1(rp.week.km), targetKm: rp.plan.targetKm, normalKm: rp.plan.cutback.normalKm }, week, prevWeek);
+    }
+    // Wave 25e: a scaled (mid-week) restart whose longest run passed the cap it was given ("nothing over ~4 km") says so once, factually - the headline only says the
+    // week ran more than the restart called for.
+    const mid = rp.plan?.restart?.midWeek;
+    if (mid != null && !mid.pending && rp.longestKm != null && rp.longestKm > mid.longCapKm + 0.5 + 1e-9) {
+      return `Longest run ${distanceText(input, rp.longestKm)}, over the ~${distanceText(input, mid.longCapKm)} the restart week called for`;
     }
     const jump = rp.next?.longRunJump;
     if (jump != null && rp.next != null && !isWindDownKind(rp.next.kind)) {

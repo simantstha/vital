@@ -11,7 +11,7 @@
  * {
  *   goal: 'weight_loss' | 'muscle' | 'endurance' | 'general',
  *   target:  { weightKg, date, weeklySessions, weeklyDistanceKm },
- *   distance: { targetKm, thisWeekKm, avg4wKm, weekStart, stepTargetKm, text, plan? } | null,   // endurance + distance target only; stepTargetKm = THIS WEEK's target from the one week plan
+ *   distance: { targetKm, thisWeekKm, avg4wKm, weekStart, thisWeekRunDays? (additive, wave 25e), stepTargetKm, text, plan? } | null,   // endurance + distance target only; stepTargetKm = THIS WEEK's target from the one week plan
  *                                                //   (lib/enduranceProgression.ts): the safe step, a hold / restart number, or a taper / race-week / recovery
  *                                                //   target (== targetKm when no step applies, and in a baseline week); avg4wKm = mean of the last 4 FINISHED
  *                                                //   training weeks (race and recovery weeks left out); plan? (additive) = { kind: baseline | build | hold |

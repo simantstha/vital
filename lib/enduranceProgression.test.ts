@@ -876,7 +876,7 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   assert.equal(skipped.kind, 'hold');
   assert.equal(skipped.targetKm, 25);
   assert.deepEqual(skipped.hold, { spikeKm: 25, spikeStepKm: 20, skippedCutback: true });
-  assert.equal(nbsp(skipped.purpose), 'Your cutback became a normal week — fine. Hold ~25~km this week, long run 10~km — no 10% step on top of it');
+  assert.equal(nbsp(skipped.purpose), 'Your cutback became a normal week. Hold ~25~km this week, long run 10~km — no 10% step on top of it');
   assert.equal(skipped.last?.cutback, true);
   assert.equal(skipped.last?.grade?.gap, 'over'); // (wave 23e: a good week - no failure - that still owes the cutback)
   assert.equal(skipped.last?.grade?.level, 'good');

@@ -3596,7 +3596,7 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-6: a 
       const planLine = day.card?.reasons.find(r => r.kind === 'plan')?.text ?? '';
       // (A light week / easing-off day keeps its own plan line: the hold's wording is for the weeks that are held.)
       if (day.card?.distance?.plan?.lightWeek || day.card?.distance?.plan?.easingOff) continue;
-      if (!/^Your cutback became a normal week — fine\. Hold ~[\d.]+ (?:km|mi) this week/.test(plain(planLine))) out.push({ snap: day, detail: `plan line "${visible(planLine)}"` });
+      if (!/^Your cutback became a normal week\. Hold ~[\d.]+ (?:km|mi) this week/.test(plain(planLine))) out.push({ snap: day, detail: `plan line "${visible(planLine)}"` });
       // "an easier week" only when the hold really is lighter than the week just run (25 after 25 is not).
       const lastKm = day.card?.distance?.plan?.lastKm;
       const holdKm = day.card?.distance?.plan?.targetKm;
@@ -5270,5 +5270,195 @@ invariant(RUNNERS, 'item 3: "~5 km over the rest of this week in 2–3 easy runs
     }
   }
   if (name === 'runner_no_race') assert.ok(seen > 0, `${name}: no mid-week restart line was shown, so this invariant checked nothing`);
+  return out;
+});
+
+// ── group 2 (repetition and wording) ─────────────────────────────────────────────────────────────────────────────
+
+/** The run days (and their km) of a scenario's own rows, the race run left out. */
+const w25eRunDaysThrough = (runKm: Map<string, number>, monday: string, through: string): number => {
+  let n = 0;
+  for (let d = monday; d <= through; d = addDays(d, 1)) if ((runKm.get(d) ?? 0) > 0) n++;
+  return n;
+};
+
+// item 4: "Welcome back — restart at ~18 km this week" is said once, on the first day back; after it the opener counts the week.
+invariant(RUNNERS, 'item 4: "Welcome back — restart at ~18 km this week" is the opener on the first day back only (the day of the week\'s first run); from the next day it is "Restart week — ~18 km, 4.8 km so far."', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  let welcomes = 0;
+  let counted = 0;
+  for (const snap of snaps) {
+    const required = plain(snap.opener?.required ?? '');
+    const headline = plain(snap.card?.headline ?? '');
+    if (!/^Building back — restart at /.test(headline) || (snap.card?.distance?.thisWeekKm ?? 0) <= 0) continue;
+    const monday = mondayOfDate(snap.date);
+    const firstDayBack = (runKm.get(snap.date) ?? 0) > 0 && w25eRunDaysThrough(runKm, monday, snap.date) === 1;
+    if (firstDayBack) {
+      welcomes++;
+      if (!/^Welcome back — restart at ~[\d.]+ (?:km|mi) this week\.$/.test(required)) out.push({ snap, detail: `first day back, opener "${visible(snap.opener?.required ?? '')}"` });
+    } else {
+      counted++;
+      const m = /^Restart week — ~([\d.]+) (km|mi), ([\d.]+) (km|mi) so far\.$/.exec(required);
+      const done = snap.card?.distance?.thisWeekKm ?? 0;
+      if (!m) out.push({ snap, detail: `not the first day back, opener "${visible(snap.opener?.required ?? '')}"` });
+      else if (Math.abs(Number(m[3]) - inDisplayUnit(done, m[4])) > 0.05 + 1e-9) out.push({ snap, detail: `"${visible(required)}" but the week has ${inDisplayUnit(done, m[4])} ${m[4]}` });
+    }
+  }
+  if (name === 'runner_comeback_obedient' || name === 'runner_comeback_spike' || name === 'runner_messy') assert.ok(welcomes > 0 && counted > 0, `${name}: ${welcomes} first days and ${counted} later days were checked, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// item 5: "Back out there: N km after the break." is the review of the FIRST week back only.
+invariant(RUNNERS, 'item 5: the "Back out there: 15 km after the break." win is said once - the review of the first week back - never in two weeks running', (snaps, name) => {
+  const out: Violation[] = [];
+  let wins = 0;
+  let previous: DaySnapshot | null = null;
+  for (const snap of snaps) {
+    const rv = snap.review?.review;
+    if (!rv) continue;
+    const said = /^Back out there/.test(plain(rv.win ?? ''));
+    if (said) wins++;
+    if (said && previous != null && previous.review?.weekStart === addDays(snap.review?.weekStart ?? '', -7) && /^Back out there/.test(plain(previous.review?.review.win ?? ''))) {
+      out.push({ snap, detail: `win "${visible(rv.win ?? '')}" for a second week in a row (the week before said it too)` });
+    }
+    previous = snap;
+  }
+  if (name === 'runner_comeback_obedient' || name === 'runner_comeback_spike' || name === 'runner_messy') assert.ok(wins > 0, `${name}: no first-week-back win was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// item 6: a Volume comparison never says "back after 15 km last week" next to a value of 15 km.
+invariant(RUNNERS, 'item 6: the Volume stat of a restart week that ran the km of the week before says "same as last week", not "15 km — back after 15 km last week"', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const volume = snap.review?.review.stats.find(s => s.label === 'Volume');
+    if (!volume) continue;
+    const m = /^back after (\d+(?:\.\d+)?)\s?(km|mi) last week$/.exec(plain(volume.comparison ?? ''));
+    if (!m) continue;
+    seen++;
+    const value = /^(\d+(?:\.\d+)?)\s?(km|mi)$/.exec(plain(volume.value));
+    if (value && value[2] === m[2] && Math.abs(Number(value[1]) - Number(m[1])) < 0.05) out.push({ snap, detail: `Volume "${visible(volume.value)} — ${visible(volume.comparison ?? '')}"` });
+  }
+  void seen;
+  return out;
+});
+
+// item 7: a restart is not a step.
+invariant(RUNNERS, 'item 7: the review of a restart week that ran more than it called for says "15 of ~10 km — more than the restart called for", never "above the step", and names a longest run over the restart week\'s cap once (the slip), factually', (snaps, name) => {
+  const out: Violation[] = [];
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const runKm = scenarioRunKm(name);
+  let restartReviews = 0;
+  for (const snap of snaps) {
+    const rv = snap.review?.review;
+    if (!rv || snap.review == null) continue;
+    const sunday = byDate.get(addDays(snap.review.weekStart, 6));
+    const plan = sunday?.card?.distance?.plan;
+    if (plan?.kind !== 'restart') continue;
+    restartReviews++;
+    const headline = plain(rv.headline);
+    if (/above the step/.test(headline)) out.push({ snap, detail: `restart week headline "${visible(rv.headline)}"` });
+    const m = /(\d+(?:\.\d+)?) of ~(\d+(?:\.\d+)?) (?:km|mi)/.exec(headline);
+    if (m && Number(m[1]) > Number(m[2]) * 1.15 && !/more than the restart called for/.test(headline) && !/well above/.test(headline)) out.push({ snap, detail: `restart week headline "${visible(rv.headline)}" (over its number by more than 15%)` });
+    // The longest run over the scaled restart's cap: one factual mention (the slip), nowhere else.
+    const mid = plan.midWeekRestart;
+    if (mid != null && !mid.pending) {
+      let longest = 0;
+      for (let i = 0; i < 7; i++) longest = Math.max(longest, runKm.get(addDays(snap.review.weekStart, i)) ?? 0);
+      const mentions = reviewTexts(snap).filter(t => /longest run/i.test(plain(t.text)));
+      if (longest > mid.longCapKm + 0.5 + 1e-9) {
+        if (mentions.length !== 1 || mentions[0].where !== 'review.slip' || !/^Longest run [\d.]+ (?:km|mi), over the ~[\d.]+ (?:km|mi) the restart week called for$/.test(plain(mentions[0].text))) {
+          out.push({ snap, detail: `longest run ${Math.round(longest * 10) / 10} km against a ~${mid.longCapKm} cap: the review mentions it ${mentions.length} time(s): ${mentions.map(t => `${t.where} "${visible(t.text)}"`).join(' | ') || '-'}` });
+        }
+      } else if (mentions.length > 0) out.push({ snap, detail: `longest run ${Math.round(longest * 10) / 10} km is inside the ~${mid.longCapKm} cap, yet the review says "${visible(mentions[0].text)}"` });
+    }
+  }
+  if (name === 'runner_comeback_spike' || name === 'runner_messy') assert.ok(restartReviews > 0, `${name}: no restart week was reviewed, so this invariant checked nothing`);
+  return out;
+});
+
+// item 8: no peak date during a scaled restart that the plan cannot keep.
+invariant(RUNNERS, 'item 8: during a mid-week (scaled) restart "build to 15 km by early Jun" is promised only if the restart\'s own climb (the full restart week\'s long run is capped at 40% of it, then +2 km a Sunday) gets there by then', (snaps, name) => {
+  const out: Violation[] = [];
+  let stubs = 0;
+  for (const snap of snaps) {
+    const mid = snap.card?.distance?.plan?.midWeekRestart;
+    const lr = snap.card?.longRun;
+    const line = snap.card?.reasons.find(r => r.kind === 'long_run');
+    if (!mid || !lr || !line || lr.targetPeakKm == null) continue;
+    stubs++;
+    const m = /build to (\d+(?:\.\d+)?)\s?(km|mi) by (early |mid-|late )?([A-Z][a-z]{2})\b/.exec(plain(line.text));
+    if (!m) continue;
+    const month = MONTHS_SHORT.indexOf(m[4]);
+    const [yy] = snap.date.split('-').map(Number);
+    const monthIdx = month + 1;
+    const year = monthIdx < Number(snap.date.slice(5, 7)) ? yy + 1 : yy;
+    const lastDay = new Date(Date.UTC(year, monthIdx, 0)).getUTCDate();
+    const day = m[3] === 'early ' ? 7 : m[3] === 'mid-' ? 22 : lastDay;
+    const promisedBy = `${year}-${String(monthIdx).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    // Next Sunday: the full restart week's long run, at most 40% of it; then +2 km a Sunday.
+    let km = Math.floor(mid.fullKm * 0.4 * 2) / 2;
+    let sunday = addDays(mondayOfDate(snap.date), 13);
+    let reached: string | null = null;
+    for (let i = 0; i < 12 && reached == null; i++) {
+      if (km >= lr.targetPeakKm - 1e-9) reached = sunday;
+      else { km = longRunStepKm(km, lr.targetPeakKm); sunday = addDays(sunday, 7); }
+    }
+    if (reached == null || reached > promisedBy) out.push({ snap, detail: `"${visible(line.text)}" during a ${mid.fullKm} km restart (long run ${Math.floor(mid.fullKm * 0.4 * 2) / 2} km next Sunday, +2 a Sunday) reaches ${lr.targetPeakKm} km on ${reached ?? 'never'}, after ${promisedBy}` });
+  }
+  if (name === 'runner_messy') assert.ok(stubs > 0, `${name}: no scaled restart day was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// item 9: nothing left to offer on a Sunday that is not one of the runner's run days.
+invariant(RUNNERS, 'item 9: on a Sunday (the last day) with no run logged, for a runner who ran on fewer than 2 of the last 4 Sundays, the card, the coach and the opener offer no "~2 km left: one short easy run" (the week is over)', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  const OFFER = /\bkm left\b|\bmi left\b|one short easy run|one easy run of/i;
+  for (const snap of snaps) {
+    if (weekdayOf(snap.date) !== 'Sun' || (runKm.get(snap.date) ?? 0) > 0) continue;
+    const sundaysRun = [7, 14, 21, 28].filter(back => (runKm.get(addDays(snap.date, -back)) ?? 0) > 0.05).length;
+    if (sundaysRun >= 2 || snap.card?.distance?.plan == null) continue;
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) if (OFFER.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" (ran on ${sundaysRun} of the last 4 Sundays)` });
+  }
+  return out;
+});
+
+// item 10: the peak date is the plan's real one; the hold-week card does not say "— fine."
+invariant(['runner_on_plan_obedient', 'runner_skip_then_obedient'], 'item 10: "build to 15 km by <date>" is the Sunday the plan\'s long run really reaches the target (an obedient runner who reaches 15 km on May 3 is told "by early May", never "by early Jun")', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const out: Violation[] = [];
+  let promises = 0;
+  for (const snap of snaps) {
+    const line = snap.card?.reasons.find(r => r.kind === 'long_run');
+    const lr = snap.card?.longRun;
+    const m = line ? /build to (\d+(?:\.\d+)?)\s?(km|mi) by (early |mid-|late )?([A-Z][a-z]{2})\b/.exec(plain(line.text)) : null;
+    // (Only where the climb can be told week by week - a plain build / maintain / hold week; a baseline or restart week names the deadline.)
+    if (!m || !lr || lr.targetPeakKm == null || !['build', 'maintain', 'hold'].includes(snap.card?.distance?.plan?.kind ?? '')) continue;
+    promises++;
+    const month = MONTHS_SHORT.indexOf(m[4]);
+    const [yy] = snap.date.split('-').map(Number);
+    const monthIdx = month + 1;
+    const year = monthIdx < Number(snap.date.slice(5, 7)) ? yy + 1 : yy;
+    const lastDay = new Date(Date.UTC(year, monthIdx, 0)).getUTCDate();
+    const day = m[3] === 'early ' ? 7 : m[3] === 'mid-' ? 22 : lastDay;
+    const promisedBy = `${year}-${String(monthIdx).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    // The Sunday the rows first hold a run of the target (after the day of the card).
+    let actual: string | null = null;
+    for (const d of [...runKm.keys()].sort()) if (d > snap.date && (runKm.get(d) ?? 0) >= lr.targetPeakKm - 1e-9 && weekdayOf(d) === 'Sun') { actual = d; break; }
+    if (actual == null) { out.push({ snap, detail: `"${visible(line?.text ?? '')}" but the rows never reach ${lr.targetPeakKm} km after it` }); continue; }
+    // (The loose position is "early" up to the 7th, "mid" up to the 22nd, "late" after it: a promise is at most two weeks past the day itself. A plan whose climb is
+    // slower than the rows' is the long-run growth rule, not the date: only a date LOOSER than the day the runner really gets there is judged here.)
+    if (dayDiff(promisedBy, actual) > 14) out.push({ snap, detail: `"${visible(line?.text ?? '')}" (promised by ${promisedBy}) but the obedient runner reaches ${lr.targetPeakKm} km on ${actual}` });
+  }
+  assert.ok(promises > 0, `${name}: no peak date was promised, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(RUNNERS, 'item 10: the hold-week card says "Your cutback became a normal week. Hold ~25 km this week, ..." - no "— fine." (card, coach lines, opener)', (snaps, name) => {
+  const out = textMatches(snaps, s => [...cardTexts(s), ...coachTexts(s)], /became a normal week — fine/);
+  void name;
   return out;
 });

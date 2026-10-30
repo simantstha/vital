@@ -1628,7 +1628,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       // Wave 23e: no guilt - the cutback became a normal week, which is fine; this week is the easier one.
       if (plan.hold?.skippedCutback) {
         const why = skippedCutbackHoldReason(plan.last?.km, t ?? plan.goalKm, u);
-        return `Your cutback became a normal week — fine. Hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `, ${lrPart}` : ''} — ${why.text}${why.easier ? ' before building again' : ''}${strides}`;
+        return `Your cutback became a normal week. Hold ~${formatKm(t ?? plan.goalKm, u)} this week${lrPart ? `, ${lrPart}` : ''} — ${why.text}${why.easier ? ' before building again' : ''}${strides}`;
       }
       return `Hold ~${formatKm(t ?? plan.goalKm, u)} this week, no step up after last week's jump${lrPart ? `; keep the ${lrPart}` : ''}${strides}`;
     case 'restart':
@@ -1825,6 +1825,24 @@ function usualRunDaysLeft(ctx: PlanCtx, w: string, dowToday: number, ranToday: b
     if (profiles.filter(p => p[d] > 0.05).length >= need) out.push(d);
   }
   return out;
+}
+
+/**
+ * Wave 25e: the weekday `dow` (Monday = 0) is NOT one of the runner's run days: they ran on it in fewer than half of the last 4 calendar weeks since their first run
+ * (the race left out; at least 2 such weeks to judge by). The recent weeks, race weeks and recovery included: the rhythm they run NOW, which `usualRunDaysLeft`'s
+ * pre-race training weeks do not show after a race.
+ */
+function notUsualRunDay(ctx: PlanCtx, w: string, dow: number): boolean {
+  let weeks = 0;
+  let ran = 0;
+  for (let k = 1; k <= MEDIAN_WEEKS; k++) {
+    const wk = addDayKey(w, -7 * k);
+    if (ctx.firstRunWeek == null || wk < ctx.firstRunWeek) break;
+    weeks++;
+    const day = addDayKey(wk, dow);
+    if (ctx.runs.some(r => r.day === day && r.day !== ctx.raceDate)) ran++;
+  }
+  return weeks >= 2 && ran < Math.ceil(weeks / 2);
 }
 
 function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekPlan {
@@ -2221,6 +2239,11 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         let small = !weekDone && left < stub - 1e-9;
         const dow = dayIndex(ctx.today) - dayIndex(w);
         const usual = lastDay || kind === 'taper' ? [6] : usualRunDaysLeft(ctx, w, dow, ctx.runs.some(r => r.day === ctx.today && r.day !== ctx.raceDate));
+        // Wave 25e: the last day of a runner who does not usually run on it (and has not run today): a small remainder (under 3 km) is not offered as "one short easy run"
+        // - the week is over, there is nothing left to offer. It reads as done, like any week whose km are all but run.
+        const noRunDayLeft = lastDay && !ranOnLastDay && kind !== 'taper' && notUsualRunDay(ctx, w, 6);
+        const restDone = noRunDayLeft && small;
+        if (restDone) { weekDone = true; small = false; }
         // Wave 24e (round 7): the last day KEEPS Saturday's long-run figure ("keep Sunday's long run to ~6 km"), but a "N km left" clause is only true as of the
         // card: once today's run is in it is recomputed from the week's total ("15 of ~10 km" next to "~2 km left" was Sunday's card after a 7 km run).
         let remaining = left;
@@ -2241,7 +2264,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
           day: usual.length === 1 ? WEEKDAY_NAMES[usual[0]] : null,
           small,
           easyOk: small && band.goodFromKm > 0 && doneShown >= band.goodFromKm - 1e-9,
-          afterRun: ranOnLastDay,
+          afterRun: ranOnLastDay || restDone,
           limitKm: round1(limit),
         };
       }
@@ -2385,6 +2408,16 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 }
 
 /**
+ * Wave 25e: the plan's coming long runs can be told week by week (`longRunPeakReachedOn` then names the date the plan REALLY gets to the peak): a plain build / maintain /
+ * hold week with a number. A baseline week has no number to step from, a restart / comeback / rebuild its own ladder and a wind-down week the taper - there the date is
+ * only the deadline.
+ */
+export function longRunClimbKnown(plan: Pick<EnduranceWeekPlan, 'kind'> & Partial<Pick<EnduranceWeekPlan, 'targetKm' | 'goalKm' | 'restart' | 'comeback' | 'upTo'>>): boolean {
+  return (plan.kind === 'build' || plan.kind === 'maintain' || plan.kind === 'hold')
+    && plan.targetKm != null && plan.goalKm != null && plan.restart == null && plan.comeback == null && plan.upTo !== true;
+}
+
+/**
  * Wave 24e: the Sunday on which the plan's own long run first reaches `targetPeakKm` - the plan's ACTUAL next long runs, held weeks included, not a flat "+2 km a Sunday":
  * this week's long run as the plan has it (held after a jump, a cutback or a restart cap, trimmed to what is left), then +2 km on each coming Sunday except the cutback
  * weeks the calendar brings (they hold the long run: every 4th week after 3 build weeks, 2 when a cutback is owed, never the last build week before a taper). Null when it
@@ -2392,14 +2425,20 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
  * long run is still to come.
  */
 export function longRunPeakReachedOn(
-  plan: Pick<EnduranceWeekPlan, 'weekStart' | 'longRunKm' | 'longRunAhead' | 'buildWeeks' | 'cutbackOwed' | 'kind'>,
+  plan: Pick<EnduranceWeekPlan, 'weekStart' | 'longRunKm' | 'longRunAhead' | 'buildWeeks' | 'cutbackOwed' | 'kind'> & Partial<Pick<EnduranceWeekPlan, 'restart' | 'unitsPerKm' | 'targetKm' | 'goalKm' | 'cutback' | 'comeback' | 'upTo'>>,
   lastKm: number,
   targetPeakKm: number,
   byDay: string,
   race: { date: string | null; distanceKm: number | null } | null,
   maxWeeks = 14,
+  opts: { realClimb?: boolean } = {},
 ): string | null {
   const windDownAt = (monday: string): boolean => race?.date != null && isWindDownPhase(racePhase(race.date, monday, race.distanceKm));
+  const units = plan.unitsPerKm ?? 1;
+  // Wave 25e (`opts.realClimb`, the DATE shown; whether a date is promised at all stays the plain +2 km rule): in a plain build / maintain / hold week the climb is also held to half of each coming week's target (`nextLongRun`'s cap), the weeks' numbers stepping ~10% a
+  // week toward the goal (`weekStepOrGoalKm`; a cutback week is lower and the week after it steps from the full one) - the date the plan REALLY gets there, which an
+  // obedient runner meets ("early May", not "mid-Apr" and not the "early Jun" deadline).
+  let normalKm: number | null = opts.realClimb === true && longRunClimbKnown(plan) ? (plan.cutback?.normalKm ?? (plan.targetKm as number)) : null;
   let monday = plan.weekStart;
   let km = lastKm;
   let builds = plan.buildWeeks;
@@ -2417,7 +2456,16 @@ export function longRunPeakReachedOn(
       const held = cutbackWeek && builds >= (plan.cutbackOwed && k === 1 ? OWED_CUTBACK_AFTER_BUILD_WEEKS : CUTBACK_EVERY_WEEKS - 1) && !windDownAt(addDayKey(monday, 7));
       if (held) builds = 0;
       else {
+        const before = km;
         km = longRunStepKm(km, targetPeakKm);
+        if (normalKm != null) {
+          normalKm = weekStepOrGoalKm(normalKm, plan.goalKm as number, units);
+          const cap = Math.max(weekShareKm(normalKm, LONG_RUN_MAX_WEEK_SHARE, units), before);
+          if (km > cap + 1e-9) km = floorLongRunKm(cap, units);
+        }
+        // Wave 25e: the Monday after a mid-week (scaled) restart is the full restart week, whose long run is at most 40% of it whatever the runner ran before the break
+        // (the stub's 13 km three weeks ago is not the base the climb steps from): "build to 15 km by early Jun" was promised from it.
+        if (k === 1 && plan.restart?.midWeek != null) km = Math.min(km, floorLongRunKm(plan.restart.midWeek.fullKm * LONG_RUN_RESTART_WEEK_SHARE, plan.unitsPerKm ?? 1));
         builds++;
         if (km >= targetPeakKm - 1e-9) return sunday;
       }

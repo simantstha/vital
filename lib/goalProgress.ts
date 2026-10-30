@@ -154,6 +154,7 @@ import {
   PEAK_PLAN_SLACK_KM,
   PHASE_CEILING_TOLERANCE,
   holdOverrunRead,
+  longRunClimbKnown,
   longRunPeakReachedOn,
   midWeekRestartText,
   restOfWeekPhrase,
@@ -288,6 +289,8 @@ export interface GoalDistanceProgress {
   avg4wKm: number | null;
   /** Local Monday of the week thisWeekKm covers. */
   weekStart: string;
+  /** Additive (wave 25e): the days of this week with a run (the race left out) - "Welcome back" is said on the first of them only. */
+  thisWeekRunDays?: number;
   /**
    * This week's safe step toward `targetKm`, from LAST week's running km (the
    * shared rule in lib/enduranceProgression.ts — the same ~27 km the weekly
@@ -2906,6 +2909,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
     thisWeekKm: hasData && !eve && !raceDay ? round1(doneKm) : null,
     avg4wKm: plan?.avg4wKm ?? null,
     weekStart: ec.weekStart,
+    ...(hasData && !eve && !raceDay ? { thisWeekRunDays: ec.thisWeek.days } : {}),
     stepTargetKm: stepKm,
     text,
     ...(plan
@@ -3247,8 +3251,15 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
       if (km >= lr.targetPeakKm - 1e-9) reachedOn = sunday;
     }
   }
+  // The date shown: where the climb can be told week by week, the Sunday the plan really gets there (never past the deadline); else the deadline.
+  const realOn = ec.plan != null && longRunClimbKnown(ec.plan) && reachedOn != null
+    ? longRunPeakReachedOn(ec.plan, lr.lastKm, lr.targetPeakKm, peakBy, input.race ?? null, 14, { realClimb: true })
+    : null;
+  const shownOn = realOn != null && realOn < peakBy ? realOn : peakBy;
   const goal = peakBy >= input.todayKey && reachedOn != null && reachedOn <= peakBy
-    ? `build to ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))} by ${looseMonthPosition(peakBy)}`
+    // (Wave 25e: in a plain build week the date is the one the plan really gets there - "by early May" for a runner who reaches 15 km on May 3 - not the deadline,
+    // "early Jun"; where the climb cannot be told week by week - baseline, restart, comeback - it stays the deadline.)
+    ? `build to ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))} by ${looseMonthPosition(shownOn)}`
     : `peak target ${formatTargetLongRun(lr.targetPeakKm, unitsPerKm(input))}`;
   return { kind: 'long_run', text: `${lead} · ${goal}${note}`, tone: 'neutral' };
 }
