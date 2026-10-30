@@ -2254,7 +2254,7 @@ test('after 5 straight weeks of heavier loads the goal card (and so the coach li
     const p = computeGoalProgress(deloadCardInput(today, { squat }));
     const line = p.reasons.find(r => r.kind === 'deload');
     assert.ok(line, `${today}: ${JSON.stringify(p.reasons)}`);
-    assert.equal(line.text, "Deload week: ~85–90% of last week's loads, 2 working sets");
+    assert.equal(line.text, 'Deload week: squat ~97.5 kg, 2 working sets'); // 87.5% of the reviewed week's 112.5 kg on the 2.5 kg grid (wave 25s: the loads, as the review prints them)
     assert.equal(line.tone, 'neutral');
     assert.ok(p.reasons.length <= 3);
   }
