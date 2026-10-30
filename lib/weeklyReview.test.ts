@@ -2827,6 +2827,23 @@ test('before the first 4-week comparison the review and the goal card quote the 
   assert.equal(plainSpaces(card.reasons.find(r => r.kind === 'lift')!.text), 'Last week: Squat est. 1RM +2 kg vs the week before');
 });
 
+test('rebuilding: a long lift name shortens at a word boundary, the headline keeps its cap and the numbers after the name', () => {
+  // A lift name is whatever the user typed (no length limit on the write path): "4 of 4 sessions, Single Arm Dumbbell Romanian Deadlift est. 1RM 136 of 142 kg pre-break" is 87 characters.
+  const key = 'single arm dumbbell romanian deadlift';
+  const r = computeWeeklyReview(liftReview({
+    verdict: 'building', liftReturn: { ...RETURN, exercise: key, name: 'Single Arm Dumbbell Romanian Deadlift' }, progression: { [key]: squatReturn },
+  }));
+  assert.equal(r.headline, '4 of 4 sessions, Single Arm Dumbbell Romanian… est. 1RM 136 of 142 kg pre-break');
+  assert.ok(r.headline.length <= REVIEW_HEADLINE_MAX_CHARS, r.headline);
+  // A name with no word boundary to cut at is left out rather than cut mid-word; the numbers stay.
+  const word = 'supercalifragilisticexpialidocious-pulldowns-with-bands';
+  const oneWord = computeWeeklyReview(liftReview({
+    verdict: 'building', liftReturn: { ...RETURN, exercise: word, name: word }, progression: { [word]: squatReturn }, exerciseDisplay: { [word]: word },
+  }));
+  assert.equal(oneWord.headline, '4 of 4 sessions, est. 1RM 136 of 142 kg pre-break');
+  assert.ok(oneWord.headline.length <= REVIEW_HEADLINE_MAX_CHARS, oneWord.headline);
+});
+
 test('rebuilding: the headline carries the rebuild with the shown numbers, and the percentage is computed from them', () => {
   // 136.5 -> 137 shown, 142.4 -> 142 shown: 96%, not the 95% the unrounded numbers give.
   const r = computeWeeklyReview(liftReview({

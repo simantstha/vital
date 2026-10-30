@@ -19,7 +19,7 @@
  */
 
 import type { GoalKind, GoalLiftReturn, GoalLongRunProgress, GoalProgressBudget, GoalProgressIntakeDay, GoalVerdict, DayValue } from './goalProgress';
-import { KG_TO_LB, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, raceLabel, rebuildLineWithFurthest } from './goalProgress';
+import { KG_TO_LB, fitLiftLine, furthestBehindNote, isRunningWorkoutType, mixedReturnLead, raceLabel, rebuildLineWithFurthest } from './goalProgress';
 import { PARTIAL_LOG_KCAL_THRESHOLD } from './brain/weightSignals';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 import { WEIGH_IN_GAP_DAYS, dayNumber, meanOver, rawPlateau } from './weightPace';
@@ -1888,7 +1888,12 @@ function returnHeadlinePart(input: WeeklyReviewInput, prefix = ''): string {
   const { pre, recent, unit } = liftReturnDisplay(ret, isImperial(input));
   const name = liftDisplayName(ret.exercise, input.exerciseDisplay);
   // Every lift still rebuilding: say which one is furthest behind when it is not the headline lift ("deadlift furthest at 94%") if it fits.
-  if (furthestBehindReturn(rets) != null) return rebuildLineWithFurthest(`${name} est. 1RM ${recent} of ${withUnit(pre, unit)}`, furthestBehindNote(rets, input.exerciseDisplay), prefix, REVIEW_HEADLINE_MAX_CHARS);
+  if (furthestBehindReturn(rets) != null) {
+    const tail = ` est. 1RM ${recent} of ${withUnit(pre, unit)}`;
+    const line = rebuildLineWithFurthest(`${name}${tail}`, furthestBehindNote(rets, input.exerciseDisplay), prefix, REVIEW_HEADLINE_MAX_CHARS);
+    // A lift name too long even for the plain line gives way (cut at a word boundary), never the numbers after it.
+    return prefix.length + line.length <= REVIEW_HEADLINE_MAX_CHARS ? line : fitLiftLine('', name, `${tail} pre-break`, REVIEW_HEADLINE_MAX_CHARS - prefix.length);
+  }
   const above = rets.every(r => { const n = liftReturnDisplay(r, isImperial(input)); return n.recent > n.pre; });
   return above ? `${name} est. 1RM back above pre-break ${withUnit(pre, unit)}` : `${name} est. 1RM back at pre-break best`;
 }

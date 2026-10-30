@@ -3318,6 +3318,51 @@ test('the return as shown: the headline says est. 1RM with the shown numbers; th
   assert.ok(computeGoalProgress(breakInput({ squat: squatBack(136, 136) })).reasons.some(r => r.kind === 'return'));
 });
 
+// A lift's display name is whatever the user typed or said ("Single-arm dumbbell Romanian deadlift"): nothing on the write path limits its length. The building-back
+// and back-above headlines carry it, so they must still respect their cap, shortening the NAME (at a word boundary, with "…") and never the numbers after it.
+test('return from a break: a long lift name shortens at a word boundary; the headline keeps its cap and its numbers', () => {
+  const key = 'single arm dumbbell romanian deadlift';
+  const long = 'Single Arm Dumbbell Romanian Deadlift'; // 37 characters
+  const squat = [lw('2026-08-17', 130), lw('2026-08-24', 133), lw('2026-08-31', 136), lw('2026-09-07', 142.4), lw('2026-09-28', 136.5), lw('2026-10-05', 136.5)];
+  const names = { [key]: long };
+
+  // Rebuilding: the 80-character rebuild cap. Seen as "Building back — Incline dumbbell bench press with pause reps est. 1RM 14 of 15 kg pre-break" (91 characters).
+  const building = computeGoalProgress(breakInput({ [key]: squat }, { exerciseDisplay: names }));
+  assert.equal(building.verdict, 'building');
+  assert.equal(building.headline, 'Building back — Single Arm Dumbbell Romanian… est. 1RM 137 of 142 kg pre-break');
+  assert.ok(building.headline.length <= REBUILD_HEADLINE_MAX_CHARS, building.headline);
+  assert.equal(building.liftReturn!.name, long, 'the payload keeps the whole name (iOS reads it)');
+  assert.match(building.reasons[0].text, /^Single Arm Dumbbell Romanian Deadlift est\. 1RM 137 kg/);
+  // Pounds: the numbers are wider ("301 of 314 lb"), the name gives way, the numbers do not.
+  const lb = computeGoalProgress(breakInput({ [key]: squat }, { exerciseDisplay: names, unitSystem: 'imperial' }));
+  assert.equal(lb.headline, 'Building back — Single Arm Dumbbell Romanian… est. 1RM 301 of 314 lb pre-break');
+  // A name that fits is left alone, and so is a name with no word boundary to cut at: it is dropped instead of cut mid-word.
+  assert.equal(computeGoalProgress(breakInput({ [key]: squat }, { exerciseDisplay: { [key]: 'Romanian Deadlift' } })).headline, 'Building back — Romanian Deadlift est. 1RM 137 of 142 kg pre-break');
+  const oneWord = computeGoalProgress(breakInput({ [key]: squat }, { exerciseDisplay: { [key]: 'Supercalifragilisticexpialidocious-pulldowns' } }));
+  assert.equal(oneWord.headline, 'Building back — est. 1RM 137 of 142 kg pre-break');
+
+  // Back at / above the pre-break best: the 70-character headline cap; "(was 142 kg)" goes first, then the name is shortened.
+  const LONG_BREAK = [lw('2026-08-03', 128), lw('2026-08-10', 132), lw('2026-08-17', 136), lw('2026-08-24', 142), lw('2026-09-21', 138), lw('2026-09-28', 141), lw('2026-10-05', 145)];
+  const above = computeGoalProgress(longBreakInput({ [key]: LONG_BREAK }, { exerciseDisplay: names }));
+  assert.equal(above.verdict, 'progressing');
+  assert.equal(above.headline, 'Back above your pre-break best — Single Arm Dumbbell… est. 1RM 145 kg');
+  assert.ok(above.headline.length <= HEADLINE_MAX_CHARS, above.headline);
+  const at = computeGoalProgress(longBreakInput({ [key]: [...LONG_BREAK.slice(0, 6), lw('2026-10-05', 142)] }, { exerciseDisplay: names }));
+  assert.equal(at.headline, 'Back at your pre-break best — Single Arm Dumbbell… est. 1RM 142 kg');
+  assert.ok(at.headline.length <= HEADLINE_MAX_CHARS, at.headline);
+  // The existing wording is untouched when the name is short enough: the "(was …)" part still comes first.
+  assert.equal(computeGoalProgress(longBreakInput({ squat: LONG_BREAK })).headline, 'Back above your pre-break best — Squat est. 1RM 145 kg (was 142 kg)');
+
+  // Some lifts back, the lift furthest behind has the long name: the mixed sentence is too long for the card, so the lift's own line takes over, name shortened.
+  const mixed = computeGoalProgress(longBreakInput(
+    { squat: LONG_BREAK_SQUAT, deadlift: longBreakDeadlift(150, 155) },
+    { exerciseDisplay: { deadlift: long } },
+  ));
+  assert.equal(mixed.verdict, 'building');
+  assert.equal(mixed.headline, 'Building back — Single Arm Dumbbell… est. 1RM 155 of 158 kg pre-break');
+  assert.ok(mixed.headline.length <= HEADLINE_MAX_CHARS, mixed.headline);
+});
+
 test('the second lift\'s reason outranks the in-band weight-rate line', () => {
   const p = computeGoalProgress(base({
     goal: 'muscle',

@@ -2267,6 +2267,36 @@ export function rebuildLineWithFurthest(lead: string, note: { short: string; pct
   return `${lead} pre-break`;
 }
 
+/** The fewest characters a shortened lift name keeps (before its "…"); below that the name is dropped, not cut. */
+const MIN_SHORT_LIFT_NAME_CHARS = 5;
+
+/**
+ * A lift's display name cut to at most `room` characters, "…" included: whole words only, so "Single Arm Dumbbell Romanian Deadlift" in 29
+ * characters is "Single Arm Dumbbell Romanian…". The name unchanged when it fits; null when no word boundary leaves at least
+ * MIN_SHORT_LIFT_NAME_CHARS (one long word, or no room at all): the caller then leaves the name out.
+ */
+export function shortenLiftName(name: string, room: number): string | null {
+  if (name.length <= room) return name;
+  for (let end = room - 1; end >= MIN_SHORT_LIFT_NAME_CHARS; end--) {
+    if (!/\s/.test(name.charAt(end))) continue; // `end` must be the space after a whole word
+    const kept = name.slice(0, end).trimEnd();
+    if (kept.length >= MIN_SHORT_LIFT_NAME_CHARS) return `${kept}…`;
+  }
+  return null;
+}
+
+/**
+ * `head + name + tail` within `max` characters whatever the name's length (a lift's display name is whatever the user typed; nothing limits it).
+ * It is the name that gives way, never the numbers in `tail`: first as it is, then cut at a word boundary with "…" (shortenLiftName), and when
+ * not even a few words fit, without it ("Building back — est. 1RM 137 of 142 kg pre-break"). A line that already fits is returned unchanged.
+ */
+export function fitLiftLine(head: string, name: string, tail: string, max: number): string {
+  const full = `${head}${name}${tail}`;
+  if (full.length <= max) return full;
+  const short = shortenLiftName(name, max - head.length - tail.length);
+  return short != null ? `${head}${short}${tail}` : `${head}${tail.trimStart()}`;
+}
+
 /**
  * Verdict + headline for a return from a break, across every lift that has a
  * return (the headline lift first):
@@ -2293,20 +2323,24 @@ function liftReturnOutcome(rets: GoalLiftReturn[], input: GoalProgressInput): { 
     for (const text of [`${mixed.text}${numbers}`, `${first.text}${numbers}`, mixed.text]) {
       if (text.length <= HEADLINE_MAX_CHARS) return { verdict: 'building', headline: text };
     }
-    return { verdict: 'building', headline: clip(`Building back — ${mixed.behind.name} est. 1RM ${b.recent} of ${withUnit(b.pre, b.unit)} pre-break`) };
+    // The lift's own line instead; a long name gives way (fitLiftLine), never the numbers after it.
+    return { verdict: 'building', headline: fitLiftLine('Building back — ', mixed.behind.name, ` est. 1RM ${b.recent} of ${withUnit(b.pre, b.unit)} pre-break`, HEADLINE_MAX_CHARS) };
   }
   if (furthestBehindReturn(rets) != null) {
     // The 142 is an estimated 1RM, not a bodyweight or a load: say so ("Squat est. 1RM 136 of 142 kg pre-break").
-    const lead = `Building back — ${r.name} est. 1RM ${recent} of ${withUnit(pre, unit)}`;
-    return { verdict: 'building', headline: rebuildLineWithFurthest(lead, furthestBehindNote(rets, input.exerciseDisplay), '', REBUILD_HEADLINE_MAX_CHARS) };
+    const tail = ` est. 1RM ${recent} of ${withUnit(pre, unit)}`;
+    const line = rebuildLineWithFurthest(`Building back — ${r.name}${tail}`, furthestBehindNote(rets, input.exerciseDisplay), '', REBUILD_HEADLINE_MAX_CHARS);
+    // The furthest-behind clause is already dropped when it does not fit; a name too long even for the plain line is shortened (fitLiftLine).
+    return { verdict: 'building', headline: line.length <= REBUILD_HEADLINE_MAX_CHARS ? line : fitLiftLine('Building back — ', r.name, `${tail} pre-break`, REBUILD_HEADLINE_MAX_CHARS) };
   }
   const above = rets.every(x => { const n = returnNumbers(x, input); return n.recent > n.pre; });
   if (!above) {
-    return { verdict: 'progressing', headline: clip(`Back at your pre-break best — ${r.name} est. 1RM ${withUnit(recent, unit)}`) };
+    return { verdict: 'progressing', headline: fitLiftLine('Back at your pre-break best — ', r.name, ` est. 1RM ${withUnit(recent, unit)}`, HEADLINE_MAX_CHARS) };
   }
-  const full = `Back above your pre-break best — ${r.name} est. 1RM ${withUnit(recent, unit)} (was ${withUnit(pre, unit)})`;
-  const short = `Back above your pre-break best — ${r.name} est. 1RM ${withUnit(recent, unit)}`;
-  return { verdict: 'progressing', headline: clip(full.length <= HEADLINE_MAX_CHARS ? full : short) };
+  const head = 'Back above your pre-break best — ';
+  const full = `${head}${r.name} est. 1RM ${withUnit(recent, unit)} (was ${withUnit(pre, unit)})`;
+  // "(was …)" is dropped first when the line is too long; then a long name gives way, never the numbers.
+  return { verdict: 'progressing', headline: full.length <= HEADLINE_MAX_CHARS ? full : fitLiftLine(head, r.name, ` est. 1RM ${withUnit(recent, unit)}`, HEADLINE_MAX_CHARS) };
 }
 
 /**
