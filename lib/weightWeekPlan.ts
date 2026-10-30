@@ -398,6 +398,25 @@ export function planWeightText(input: Pick<WeightPlanInput, 'unitSystem'>, kg: n
   return withUnit(digits === 2 ? round2(v) : round1(v), isImperial(input) ? 'lb' : 'kg');
 }
 
+/**
+ * Wave 25w: ONE rule for a SINGLE weekly rate in text, on every surface: one decimal, "about 0.9 kg" ("Down about 0.9 kg/wk"), never "0.85 kg/wk" in one week and
+ * "0.9" the next. The figure is the payload's two-decimal `ratePerWeek.kg` rounded to one place - exactly what the app's own hero prints for it
+ * (`UnitFormat.weightDelta`) - so the card and the hero never disagree. A rate that would print as 0.0 keeps its second decimal, unhedged ("0.04 kg").
+ * A RANGE of two paces is NOT rounded this way: the app recomposes the range itself from `plan.pace` / `plan.earlierPace` at two decimals
+ * (`UnitFormat.weightRateRange`), so the card's range keeps them until the app moves with it.
+ */
+export function weeklyRateText(input: Pick<WeightPlanInput, 'unitSystem'>, kgPerWeek: number): string {
+  const { value, digits } = weeklyRateFigure(isImperial(input) ? 'imperial' : 'metric', kgPerWeek);
+  return `${digits === 1 ? 'about ' : ''}${withUnit(value, isImperial(input) ? 'lb' : 'kg')}`;
+}
+
+/** The figure behind `weeklyRateText`: the magnitude in the display unit and how many decimals it is shown with (1; 2 only when one would print 0.0). */
+export function weeklyRateFigure(units: 'metric' | 'imperial', kgPerWeek: number): { value: number; digits: 1 | 2 } {
+  const v = round2(Math.abs(kgPerWeek)) * (units === 'imperial' ? KG_TO_LB : 1);
+  const one = round1(v);
+  return one === 0 ? { value: round2(v), digits: 2 } : { value: one, digits: 1 };
+}
+
 function fmtKcal(n: number): string {
   return Math.round(n).toLocaleString('en-US');
 }
@@ -903,7 +922,8 @@ function behindAction(
   if (daysLeft <= 0 || toGoKg <= 0 || neededKgPerWeek == null) {
     return { kind: 'move_date', text: `Your ${date} date has passed — move it to a date this pace can keep` };
   }
-  const needed = `~${planWeightText(input, neededKgPerWeek, 2)}/wk`;
+  // (Wave 25w: the weekly rate in one decimal, like every other - "~0.5 kg/wk" - not "~0.52".)
+  const needed = `${weeklyRateText(input, neededKgPerWeek).replace(/^about /, '~')}/wk`;
   const ceilingKgPerWeek = (bodyKg * FAT_LOSS_MAX_PCT) / 100;
   if (neededKgPerWeek > ceilingKgPerWeek) {
     return { kind: 'move_date', text: `To make ${date} you'd need ${needed} — faster than is comfortable to keep; move the date` };

@@ -31,7 +31,8 @@ test('formatGoalProgressLines quotes verdict, headline, rate, ETA and reasons in
   assert.ok(lines.length <= 12, `got ${lines.length} lines`);
   assert.match(text, /Goal: fat loss; target 76\.0 kg, by 2026-12-25, 4 sessions\/week/);
   assert.match(text, /trend 82\.1 kg/);
-  assert.match(text, /rate -0\.45 kg\/wk \(-0\.55% bw\)/);
+  // (Wave 25w: a single weight-loss rate is one decimal, the card's figure: -0.45 -> -0.5.)
+  assert.match(text, /rate -0\.5 kg\/wk \(-0\.55% bw\)/);
   assert.match(text, /ETA 2026-12-10/);
   assert.match(text, /Verdict: on_track — "On track — about 6\.1 kg to go, around Dec 10"/);
   assert.match(text, /Two days well under your floor \(watch\)/);
@@ -41,7 +42,7 @@ test('formatGoalProgressLines converts weights to lb for imperial users', () => 
   const text = formatGoalProgressLines(gp(), 'imperial').join('\n');
   assert.match(text, /target 167\.6 lb/); // 76 kg
   assert.match(text, /trend 181\.0 lb/); // 82.1 kg
-  assert.match(text, /rate -0\.99 lb\/wk/); // -0.45 kg
+  assert.match(text, /rate -1 lb\/wk/); // -0.45 kg = -0.99 lb, one decimal
   assert.doesNotMatch(text, /82\.1 kg/);
 });
 
@@ -375,7 +376,7 @@ test('coach lines label the trend as smoothed, add the scale and weekly average,
   const text = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'metric').join('\n');
   assert.match(text, /trend 82\.1 kg \(smoothed\)/);
   assert.match(text, /scale 81\.6 kg, weekly average 81\.9 kg/);
-  assert.match(text, /rate -0\.45 kg\/wk \(-0\.55% bw\) over the last 3 weeks of weigh-ins/);
+  assert.match(text, /rate -0\.5 kg\/wk \(-0\.55% bw\) over the last 3 weeks of weigh-ins/);
   const imperial = formatGoalProgressLines(gp({ weightRead: WEIGHT_READ }), 'imperial').join('\n');
   assert.match(imperial, /scale 179\.9 lb, weekly average 180\.6 lb/);
 });

@@ -107,6 +107,7 @@ import {
   stepHeadlineClause,
   stepRateTail,
   fmtWeekday,
+  weeklyRateText,
   weightWeekPlan,
   type WeightPlanPace,
   type WeightPlanStep,
@@ -368,8 +369,10 @@ export interface GoalWeekPlan {
   /**
    * Additive (wave 24e): a restart that begins mid-week is scaled to the days left (`km` = round(fullKm x daysLeft / 7), a long run of at most `longCapKm`);
    * `pending` = still on the break (what to take if the runner starts today), else the week as it is. The next Monday is the full `fullKm` restart week.
+   * Wave 25e: `runs` (additive, at most 3) = the runner's usual run days from the start day to Sunday - the km are spread over that many runs and `longCapKm` is
+   * the most one of them carries, ceil(km / runs); absent when there are no earlier weeks to read the rhythm from (then 40% of the scaled week).
    */
-  midWeekRestart?: { fullKm: number; km: number; longCapKm: number; pending: boolean };
+  midWeekRestart?: { fullKm: number; km: number; longCapKm: number; pending: boolean; runs?: number };
   /** Additive (wave 24e): last week's km (the compact plan's coach lines compare a hold with it: "an easier week" only when the hold really is easier). */
   lastKm?: number;
   /** Additive (wave 24e): last week was a cutback week (the coach's hold line says "over the cutback", not "over the safe step"). */
@@ -435,7 +438,10 @@ export interface GoalLongRunProgress {
   peakKm: number;
   /** Peak long-run distance to build to before the taper (by race distance); null without a race distance. */
   targetPeakKm: number | null;
-  /** The next long run from the week plan: min(lastKm + 2 km, the peak target); additive, absent when there is none to plan. */
+  /**
+   * The next long run from the week plan: min(lastKm + 2 km, the peak target); additive, absent when there is none to plan. Wave 25e: on the week's last day, once
+   * its long run is run, NEXT week's long run (the number Monday's plan shows; absent when next week plans none).
+   */
   nextKm?: number | null;
   /**
    * Additive: the race-distance peak (e.g. 18 km for a half) when the weekly goal cannot carry it — a long run is at
@@ -1679,7 +1685,7 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepTail?: string; about?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepTail?: string; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
   if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
@@ -1687,9 +1693,9 @@ function paceReason(
   const abs = round2(Math.abs(pace.pctPerWeek));
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
-  // The headline of an unconfirmed pace says "losing about 0.6 kg a week" (one decimal): the rate line is that very figure, "about 0.6 kg/wk", not a
-  // second rounding of it ("0.58") on the same card (wave 24w).
-  const perWeek = opts.about ? `about ${fmtWeight(input, Math.abs(pace.kgPerWeek))}` : fmtWeight(input, Math.abs(pace.kgPerWeek), 2);
+  // A single rate is one decimal, "about 0.9 kg/wk" (wave 25w, `weeklyRateText`): the same rule as the headline of an unconfirmed pace ("losing about 0.6 kg a week",
+  // wave 24w) and the figure the app's hero prints, never "0.85" one week and "0.9" the next. A range (below) keeps the two decimals the app recomposes.
+  const perWeek = weeklyRateText(input, pace.kgPerWeek);
   let text = `${dir} ${perWeek}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pace.kgPerWeek < 0) {
@@ -2019,12 +2025,10 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  // The headline quotes the rate ("losing about 0.6 kg a week") only for a pace nothing has confirmed yet: the rate line then says the same figure.
-  const quotesRate = !plan.confirmed && !plan.tooFast && !plan.nearlyThere && p.kgPerWeek < 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
   // While the easing step is the week's instruction (given or standing) a ceiling warning says where it is (wave 25w), never stands alone beside "Aim for ~2,150 kcal".
   const stepOn = plan.step != null && (plan.step.phase === 'given' || plan.step.phase === 'standing');
   const rate = paceReason(input, p, {
-    tooFast: plan.tooFast, about: quotesRate, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null,
+    tooFast: plan.tooFast, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null,
     stepTail: stepOn && plan.step != null ? stepRateTail(plan.step) : undefined,
   });
   const action = planActionReason(plan);
@@ -2056,7 +2060,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     if (plan.verdict === 'behind') {
       return {
         verdict: 'behind',
-        headline: clip(`Weight is up ${fmtWeight(input, p.kgPerWeek, 2)} a week, away from your target`),
+        headline: clip(`Weight is up ${weeklyRateText(input, p.kgPerWeek)} a week, away from your target`),
         reasons: build(rate),
       };
     }
@@ -2068,7 +2072,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     return {
       verdict: 'progressing',
       // "About" and one decimal (wave 23w): the 2-decimal rate stays on the rate line below, where it is the measurement.
-      headline: clip(`Progressing — losing about ${fmtWeight(input, Math.abs(p.kgPerWeek))} a week`),
+      headline: clip(`Progressing — losing ${weeklyRateText(input, p.kgPerWeek)} a week`),
       reasons: build(rate, action),
     };
   }
@@ -2941,7 +2945,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.last != null ? { lastKm: plan.last.km } : {}),
             ...(plan.last?.cutback === true ? { lastCutback: true } : {}),
-            ...(plan.restart?.midWeek != null ? { midWeekRestart: { fullKm: plan.restart.midWeek.fullKm, km: plan.restart.midWeek.km, longCapKm: plan.restart.midWeek.longCapKm, pending: plan.restart.midWeek.pending } } : {}),
+            ...(plan.restart?.midWeek != null ? { midWeekRestart: { fullKm: plan.restart.midWeek.fullKm, km: plan.restart.midWeek.km, longCapKm: plan.restart.midWeek.longCapKm, pending: plan.restart.midWeek.pending, ...(plan.restart.midWeek.runs != null ? { runs: plan.restart.midWeek.runs } : {}) } } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
             ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
             ...(plan.preTaper != null ? { preTaper: plan.preTaper.nextPhase } : {}),
@@ -3146,16 +3150,38 @@ function longRunProgress(input: GoalProgressInput, race: GoalRaceProgress | null
     peakKm,
     targetPeakKm: peak?.peakKm ?? null,
     ...(peak?.raceTargetKm != null ? { raceTargetKm: peak.raceTargetKm } : {}),
-    // Wave 23e P3-j: on the last day of the last build week, once its long run is run, the NEXT long run is the taper's (Monday's plan), not this week's again.
-    nextKm: ec.plan?.preTaper?.nextPhase === 'taper' && ec.plan.preTaper.taperLongRunKm != null && weekdayOf(input.todayKey) === 0 && ec.plan.longRunAhead === false
-      ? ec.plan.preTaper.taperLongRunKm
-      : ec.plan?.longRunKm ?? null,
+    nextKm: nextLongRunKm(input, ec),
     ...(ec.plan?.longRun.capNoteDue ? { capNoteDue: true } : {}),
     ...(ec.plan?.longRun.peakOversized ? { oversized: true } : {}),
     ...(ec.plan?.longRun.peakPlan != null && !ec.plan.longRun.peakPlan.within
       ? { overPlan: true, peakPlanKm: ec.plan.longRun.peakPlan.brokenKm }
       : {}),
   };
+}
+
+/**
+ * The long run the coach calls "next". All week it is this week's (trimmed to what is left when the week's km are short). On the week's LAST day, once the long run is run
+ * (a run is in that day - the morning card before it still has the week's own figure, or none), it is NEXT week's - the number Monday's plan shows (wave 25e: it was the
+ * week that was over, "next long run ~6 km" after a 15 km Sunday; wave 23e P3-j did this for the taper's long run only). Null when next week plans none (race week, a
+ * recovery week): then the clause is left out.
+ */
+function nextLongRunKm(input: GoalProgressInput, ec: EnduranceCtx): number | null {
+  const plan = ec.plan;
+  if (plan == null) return null;
+  const goalKm = input.target.weeklyDistanceKm;
+  const ranToday = ec.runs.some(r => r.day === input.todayKey && r.day !== input.race?.date);
+  if (weekdayOf(input.todayKey) !== 0 || plan.longRunAhead !== false || !ranToday || goalKm == null || goalKm <= 0) return plan.longRunKm ?? null;
+  const monday = addDays(ec.weekStart, 7);
+  return enduranceWeekPlan({
+    runs: ec.runs,
+    weekStart: monday,
+    goalKm,
+    race: input.race ?? null,
+    today: monday,
+    racePeakWeekKm: input.racePeakWeekKm ?? null,
+    unitsPerKm: unitsPerKm(input),
+    goalStartDay: goalStartDay(input),
+  }).longRunKm;
 }
 
 /** A long-run distance for the peak lines: imperial to the nearest half mile (as the peak target is), km to one decimal. */
