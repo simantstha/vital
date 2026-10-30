@@ -120,7 +120,7 @@ import {
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
 import {
-  DELOAD_CUE_HEAD,
+  deloadCueHead,
   EST_1RM_EXPLAINER,
   isDeloadWeek,
   isLiftProgressing,
@@ -2506,8 +2506,20 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // The first 28 days' sessions line already says "This week 2 of 4": no second week count beside it.
   const young = isYoungGoal(input);
   const weekSessions = young ? null : muscleWeekSessionsReason(input);
+  // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach lines (they print the card).
+  // The same pure rule as the review, read for the last completed week - the lead lift first, as the review lists them, so the two print the same loads word for word;
+  // never while rebuilding after a break. Read up front (wave 25s): a short week inside it is the plan, not a miss.
+  const deloadCue = proactiveDeload(input.progression, addDays(weekStart(input.todayKey), -7), {
+    imperial: input.unitSystem === 'imperial',
+    leadKey: headlineLiftKey(input.progression, input.todayKey),
+    rebuilding: ret != null && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null,
+  });
   // The week can no longer reach its target: a watch line, and no "Progressing" headline over it.
   const weekShort = weekSessions?.tone === 'watch';
+  // In a deload week that line is neutral (wave 25s): rest is the plan. The same count without the "(last: ...)" that sounds like a warning; the headline says the rest.
+  const weekSessionsShown: GoalProgressReason | null = deloadCue != null && weekSessions?.tone === 'watch'
+    ? { kind: weekSessions.kind, text: weekSessionsReason(input)?.text ?? weekSessions.text, tone: 'neutral' }
+    : weekSessions;
   // ... and when it holds at most half the planned sessions (1 of 4, 2 of 4) it is a SLACK week: the card leads with the week, and colours
   // no lift or weight line green that the week did not produce (wave 23s).
   const sessionsThisWeek = sessionsDoneThisWeek(input);
@@ -2536,13 +2548,11 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   const explainer: GoalProgressReason | null = firstComparisonWeek(input) && leadLifts.some(r => r != null && r.text.includes('est. 1RM'))
     ? { kind: 'explainer', text: EST_1RM_EXPLAINER, tone: 'neutral' }
     : null;
-  // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach
-  // lines (they print the card). The same pure rule as the review, read for the last completed week; never while rebuilding after a break.
-  // It stays on a lapsed day too: the week's plan is still the deload.
-  const deloadLine: GoalProgressReason | null =
-    proactiveDeload(input.progression, addDays(weekStart(input.todayKey), -7), { imperial: input.unitSystem === 'imperial', leadKey: null, rebuilding: returnBreak != null }) != null
-      ? { kind: 'deload', text: DELOAD_CUE_HEAD, tone: 'neutral' }
-      : null;
+  // The deload cue (`deloadCue`, read above) rides the card all week, loads and all - "Deload week: squat ~97.5 kg, bench ~80 kg, deadlift ~115 kg, 2 working sets" - exactly
+  // the lead-in the review printed (wave 25s; it named only a percentage). It stays on a lapsed day too: the week's plan is still the deload.
+  const deloadLine: GoalProgressReason | null = deloadCue != null
+    ? { kind: 'deload', text: deloadCueHead(deloadCue, withUnit, input.exerciseDisplay), tone: 'neutral' }
+    : null;
   // A lapse is not a time to praise the scale either: the weight line is neutral and says so.
   const rateLapse = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
   // ... nor a green weight line in a slack week (the scale moved; the sessions did not).
@@ -2557,7 +2567,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         ...leadLifts,
         explainer,
         deloadLine,
-        weekSessions ?? sessions,
+        weekSessionsShown ?? sessions,
         ret ? returnBreak : young ? null : adherenceDemoted,
         reachLead,
         rateTop ? rateShown : null,
@@ -2568,7 +2578,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
       ])
     : capReasons([
         adherenceLow ? adherence : null,
-        weekShort ? weekSessions : null,
+        weekShort ? weekSessionsShown : null,
         ...leadLifts,
         explainer,
         deloadLine,
@@ -2632,6 +2642,10 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // and "sessions behind" keep their own headline.
   if (slackWeek && liftState && (liftState.verdict === 'holding' || liftState.verdict === 'progressing') && !lapse && !ret) {
     liftState = { verdict: 'holding', headline: `Week short — ${sessionsThisWeek} of ${weeklyTarget} so far` };
+  }
+  // ... and inside a deload week the same short week reads as the plan it is, not a miss (wave 25s; lifter_obedient days 45-48: an amber "Week short" beside "Deload week").
+  if (deloadCue != null && weekShort && weeklyTarget != null && liftState && (liftState.verdict === 'holding' || liftState.verdict === 'progressing') && !lapse && !ret) {
+    liftState = { verdict: 'holding', headline: `Deload week — ${sessionsThisWeek} of ${weeklyTarget} so far; rest is fine this week` };
   }
 
   // Reaching the weight target never hides training feedback: sessions behind
