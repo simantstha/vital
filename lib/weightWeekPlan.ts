@@ -30,7 +30,10 @@
  *
  * The standing level reads the FOOD LOG (wave 24w), over the logged days on or after the day the step began (never the days before it): "the step
  * you started Jun 5" only when 3+ logged days average at least the step's low end minus 50 kcal; "Your logs are still ~2,050 kcal, so the step is
- * about one extra snack a day" when they do not; "Aim for ~2,150-2,200 kcal a day" (no claim either way) under 3 logged days. A weight that held
+ * about one extra snack a day" when they do not; "Aim for ~2,150-2,200 kcal a day" (no claim either way) under 3 logged days. Wave 25w: that check is ONE
+ * exported helper (`stepLogsShow`, stored as `step.logsShow`) and every step sentence reads it - the card headline ("Nearly there - stay at / aim for"), the
+ * rate warning's tail ("your easing step covers this" / "the easing step (...) addresses this"), the opener - and a user who logs no food, whose snack the app
+ * cannot see, is told "Keep the daily snack (from Jun 5)", never "the step you started". A weight that held
  * on logs that never reached the step reads "You held about 84 kg on ~2,050 kcal without the step - that's your maintenance", never "it replaces
  * the step"; and a weekly average still falling on such logs adds no second notch.
  *
@@ -239,6 +242,13 @@ export interface WeightPlanStep {
   hiKcal: number | null;
   /** The step is a food (a ~150-200 kcal snack): the user logs no food. */
   food: boolean;
+  /**
+   * Additive (wave 25w). The food log since the step began SHOWS it was taken (`stepLogsShow`: 3+ logged days averaging at least the step's low end minus
+   * 50 kcal, read as of the Sunday before the week). The one answer every step sentence reads - the headline's "stay at" / "aim for", the action line,
+   * the rate warning's "covers this" / "addresses this" - so two lines of one card can never disagree about whether the step is being taken. False for
+   * a step just given, a user who logs no food, and under 3 logged days. Absent only on a plan built by hand.
+   */
+  logsShow?: boolean;
 }
 
 export type PlateauCauseKind = 'water' | 'intake' | 'weekends';
@@ -986,7 +996,7 @@ function nextStepLevel(input: WeightPlanInput, level: StepLevel, outcome: 'falli
 }
 
 /** What the logged days since a step began say of it: taken (null when it cannot be told: no level, or under 3 logged days) and what they average (nearest 50 kcal). */
-interface StepLogs { taken: boolean | null; avgKcal: number | null }
+export interface StepLogs { taken: boolean | null; avgKcal: number | null }
 
 /** The step's level read against the logged days from `from` (the day it began) to `to`. Days before `from` are never counted. */
 function readStepLogs(input: WeightPlanInput, level: StepLevel, from: string, to: string): StepLogs {
@@ -997,12 +1007,49 @@ function readStepLogs(input: WeightPlanInput, level: StepLevel, from: string, to
   return { taken: mean >= level.lo - STEP_TAKEN_MARGIN_KCAL, avgKcal: roundTo(mean, TRIM_ROUND_KCAL) };
 }
 
+/**
+ * Wave 25w: THE one check "do the logs show the step?". Every sentence about the step reads this and nothing else - the plan's action ("Stay at" / "Aim for"
+ * / "the step you started"), the card headline ("Nearly there - stay at / aim for"), the rate warning's tail ("covers this" / "addresses this"), the opener.
+ * True only when 3+ logged days since the step began average at least its low end minus `STEP_TAKEN_MARGIN_KCAL`; "the logs name a level below it" (taken false)
+ * and "too few days to tell" (taken null) are both "not shown yet". The plan stores it as `step.logsShow`.
+ */
+export function stepLogsShow(logs: Pick<StepLogs, 'taken'>): boolean {
+  return logs.taken === true;
+}
+
+/** The step's level as a clause for a sentence ("~2,150–2,200 kcal"), or null for a user who logs no food (the step is a snack, not a number). */
+function stepLevelClause(step: Pick<WeightPlanStep, 'loKcal' | 'hiKcal'>): string | null {
+  return step.loKcal != null && step.hiKcal != null ? `~${levelText(step.loKcal, step.hiKcal)}` : null;
+}
+
+/** The verb that goes with the logs: "stay at" a level the logs show, "aim for" it until they do. */
+export function stepVerb(logsShow: boolean): 'stay at' | 'aim for' {
+  return logsShow ? 'stay at' : 'aim for';
+}
+
+/** The card headline's step clause (after "Nearly there - "): "stay at ~2,150–2,200 kcal" / "aim for ~2,150–2,200 kcal" / "keep your daily snack". */
+export function stepHeadlineClause(step: Pick<WeightPlanStep, 'loKcal' | 'hiKcal' | 'logsShow'>): string {
+  const level = stepLevelClause(step);
+  return level != null ? `${stepVerb(step.logsShow === true)} ${level}` : 'keep your daily snack';
+}
+
+/**
+ * The tail a rate warning carries while the step is the week's instruction (given or standing): the warning adds no second instruction, it says
+ * where the first one is. "your easing step covers this" only to a logger the logs show taking it; everyone else - a logger who is not (yet), a user
+ * who logs no food and whose snack the app cannot see - gets "the easing step (~2,150–2,200 kcal) addresses this" ("a daily snack" for the snack).
+ */
+export function stepRateTail(step: Pick<WeightPlanStep, 'loKcal' | 'hiKcal' | 'logsShow'>): string {
+  if (step.logsShow === true) return ' — your easing step covers this';
+  return ` — the easing step (${stepLevelClause(step) ?? 'a daily snack'}) addresses this`;
+}
+
 type StepEvent =
   | { kind: 'held_named'; was: StepLevel; replacesNamed: boolean; logs: StepLogs }
   | { kind: 'read_held'; logs: StepLogs }
   | { kind: 'more' | 'back_off'; deltaKg: number; was: StepLevel; levelMoved: boolean; logs: StepLogs };
 
 const lowerFirst = (t: string): string => t.charAt(0).toLowerCase() + t.slice(1);
+const capitalize = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
 
 /**
  * The maintenance step is given ONCE (wave 23w). The raw weekly plan says "add ~150-200 kcal a day ..." in every week it applies; this
@@ -1036,7 +1083,8 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
   const mondayPlan = weeks[0].weekStart === plan.weekStart && plan.updated == null ? plan : rawPlanOfWeek(input, weeks[0].weekStart, weeks[0].weekStart);
   const since = mondayPlan?.step != null ? weeks[0].weekStart : weeks[0].plan.updated?.day ?? weeks[0].weekStart;
 
-  if (weeks.length === 1) return { ...plan, step: { ...marker, since, readOn: mondayOnOrAfter(addDays(since, MAINTENANCE_READ_DAYS)), phase: 'given' } };
+  // (The week the step is given: no logged day can show it yet.)
+  if (weeks.length === 1) return { ...plan, step: { ...marker, since, readOn: mondayOnOrAfter(addDays(since, MAINTENANCE_READ_DAYS)), phase: 'given', logsShow: false } };
 
   // Walk the weeks forward: a held weight on logged intake names the target; the first Monday 14+ days after the step reads it.
   const days = [...input.days].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
@@ -1096,7 +1144,10 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
   const when = fmtWeekday(readOn, input.todayKey);
   const cue = `${planWeightText(input, HOLDING_NEAR_TARGET_KG)} above or below your target`;
   const held = planWeightText(input, MAINTENANCE_HELD_KG);
-  const stepBase = { since: given, readOn, outcome: lastOutcome, loKcal: level.lo, hiKcal: level.hi, food };
+  // Wave 25w: the ONE answer to "do the logs show the step?" for this week, read once and stored on the step; every sentence below and on the card reads it.
+  const logs = readStepLogs(input, level, given, addDays(plan.weekStart, -1));
+  const logsShow = stepLogsShow(logs);
+  const stepBase = { since: given, readOn, outcome: lastOutcome, loKcal: level.lo, hiKcal: level.hi, food, logsShow };
   const withKcal = numeric ? { kcalTarget: level.lo as number } : {};
   const result = (action: WeightPlanAction, phase: WeightPlanStep['phase']): WeightWeekPlan => ({ ...plan, action, step: { ...stepBase, phase } });
 
@@ -1145,19 +1196,20 @@ function withStandingStep(input: WeightPlanInput, plan: WeightWeekPlan): WeightW
     return result({ kind, text: said(text), ...withKcal }, 'given');
   }
   if (settled) {
+    // A snack is not a maintenance (wave 25w): the non-logger keeps eating as they are, which the snack is part of.
     const text = numeric
       ? `Stay at ${levelStr} — your maintenance; if your average drifts ${cue}, that is your cue to act`
-      : `Keep the daily snack — it's your maintenance; if your average drifts ${cue}, that is your cue to act`;
+      : `Keep eating as you are, snack included — that's your maintenance; if your average drifts ${cue}, that is your cue to act`;
     return result({ kind: ask ? 'next_target' : 'hold', text: said(text), ...withKcal }, 'settled');
   }
   // The standing level reads the food log (wave 24w): "the step you started" only when the logged days since it began show it, the logs named
   // when they do not, and no claim at all under 3 logged days. Days before the step began are never counted.
-  const logs = readStepLogs(input, level, given, addDays(plan.weekStart, -1));
   let text: string;
-  if (!numeric) text = `Keep the daily snack (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
-  else if (logs.taken === true) text = `Stay at ${levelStr} (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
+  // The app cannot see a snack (wave 25w): a non-logger is told when the snack began, never that it is "the step you started".
+  if (!numeric) text = `Keep the daily snack (from ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
+  else if (logsShow) text = `${capitalize(stepVerb(true))} ${levelStr} (the step you started ${fmtDate(given, input.todayKey)}); we'll read it on ${when}`;
   else if (logs.taken === false && logs.avgKcal != null) text = `Your logs are still ~${kcalText(logs.avgKcal)}, so the step is about one extra snack a day (to ${levelStr}); we'll read it on ${when}`;
-  else text = `Aim for ${levelStr} a day; we'll read it on ${when}`;
+  else text = `${capitalize(stepVerb(false))} ${levelStr} a day; we'll read it on ${when}`;
   return result({ kind, text: said(text), ...withKcal }, 'standing');
 }
 

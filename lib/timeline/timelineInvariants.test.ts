@@ -4459,7 +4459,8 @@ invariant(WEIGHT, 'P3-1: never two different calorie instructions on one card: a
     const warn = reasons.find(r => r.kind === 'rate' && /ease calories toward maintenance/.test(plain(r.text)));
     const step = reasons.find(r => (r.kind === 'next_step' || r.kind === 'action') && /\d,\d{3}\s?kcal|snack/.test(plain(r.text)));
     if (warn != null && step != null) out.push({ snap, detail: `"${visible(warn.text)}" next to [${step.kind}] "${visible(step.text)}"` });
-    if (reasons.some(r => r.kind === 'rate' && /your easing step covers this$/.test(plain(r.text)))) covered++;
+    // (Wave 25w: "covers this" is for a logger the logs show taking the step; everyone else is told the easing step "addresses this" - either way the step is named, not a second instruction.)
+    if (reasons.some(r => r.kind === 'rate' && /(?:your easing step covers|the easing step \(.*\) addresses) this$/.test(plain(r.text)))) covered++;
   }
   if (out.length === 0) assert.ok(covered > 0, `${name}: no rate warning said the easing step covers it, so this invariant checked nothing`);
   return out;
@@ -5196,5 +5197,102 @@ invariant(['lifter_obedient'], '25s G2-6: in a deload-cue week a short week is n
     if (n && Number(n[1]) < Number(n[2])) shortDays++;
   }
   if (out.length === 0) assert.ok(short > 0 && shortDays > 0, `${name}: no short deload week was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ═══ wave 25w: weight round 7. One block, at the END of the file. Every invariant was written BEFORE the rule it locks in. ═══════════
+//   G1  ONE "do the logs show the step?" check (lib/weightWeekPlan.ts `stepLogsShow`, stored on the plan as `step.logsShow`) drives every step sentence:
+//       the headline's verb, the action line, the rate warning's tail. "Aim for" until the logs show the step, "stay at" after; "covers this" is
+//       said to the logger who is taking it, "the easing step (...) addresses this" to everyone else; a non-logger is never told what the app cannot see.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+import { STEP_LOGS_MIN_DAYS, STEP_TAKEN_MARGIN_KCAL } from '../weightWeekPlan';
+
+/**
+ * The oracle for "the logs show the step": 3+ logged days from the day the step began to the Sunday before the card's week, their mean at least the step's low end
+ * minus the margin. Worked out here from the scenario's own rows, never by calling the helper under test. Null for a step with no calorie level (a user who logs no food).
+ */
+function w25LogsShow(name: ScenarioName, snap: DaySnapshot): boolean | null {
+  const step = snap.card?.weightRead?.plan?.step;
+  if (step?.loKcal == null) return null;
+  const logged = w24Logged(name, step.since, addDays(mondayOfDate(snap.date), -1));
+  return logged.length >= STEP_LOGS_MIN_DAYS && w24Mean(logged) >= step.loKcal - STEP_TAKEN_MARGIN_KCAL;
+}
+
+invariant(['weight_loss_logged', 'weight_loss_obedient'], 'item 1: "Nearly there — stay at ~X" is said only once the logs since the step began show it; until then the headline says "aim for ~X", the verb the plan\'s own action uses', (snaps, name) => {
+  const out: Violation[] = [];
+  const verbs = new Set<string>();
+  for (const snap of snaps) {
+    const m = /^Nearly there — (stay at|aim for) ~/.exec(plain(snap.card?.headline ?? ''));
+    if (m == null) continue;
+    verbs.add(m[1]);
+    const shown = w25LogsShow(name, snap);
+    const want = shown ? 'stay at' : 'aim for';
+    if (m[1] !== want) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" says "${m[1]}" but the logs since ${snap.card?.weightRead?.plan?.step?.since} ${shown ? 'show' : 'do not show'} the step` });
+    // The action line below it uses the same verb (the "Your logs are still ~2,000 kcal ..." line names the logs instead and has none).
+    const action = snap.card?.reasons.find(r => r.kind === 'action' || r.kind === 'next_step');
+    const a = action == null ? null : /^(?:Set a new target or switch to maintenance — )?(stay at|aim for) ~/i.exec(plain(action.text));
+    if (a != null && a[1].toLowerCase() !== m[1]) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" but the action says "${visible(action?.text ?? '')}"` });
+  }
+  assert.ok(verbs.size > 0, `${name}: no "Nearly there — stay at / aim for" headline appeared, so this invariant checked nothing`);
+  if (out.length === 0) assert.ok(verbs.has(name === 'weight_loss_obedient' ? 'stay at' : 'aim for'), `${name}: the expected verb never appeared (${[...verbs].join(', ')})`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 2/5: "your easing step covers this" is said only to a logger the logs show taking the step; everyone else gets "the easing step (~2,150–2,200 kcal) addresses this" (a non-logger: "(a daily snack)")', (snaps, name) => {
+  const out: Violation[] = [];
+  const seen = { covers: 0, addresses: 0 };
+  for (const snap of snaps) {
+    const step = snap.card?.weightRead?.plan?.step;
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'rate') continue;
+      const text = plain(r.text);
+      if (/ — your easing step covers this$/.test(text)) {
+        seen.covers++;
+        if (w25LogsShow(name, snap) !== true) out.push({ snap, detail: `"${visible(r.text)}" but the logs do not show the step (${step?.loKcal == null ? 'no calorie level: the user logs no food' : `since ${step.since}`})` });
+      } else if (/ — the easing step \(.*\) addresses this$/.test(text)) {
+        seen.addresses++;
+        if (step == null) { out.push({ snap, detail: `"${visible(r.text)}" with no step on the plan` }); continue; }
+        const shown = w25LogsShow(name, snap);
+        const level = step.loKcal == null || step.hiKcal == null ? 'a daily snack' : `~${w24Kcal(step.loKcal)}${step.hiKcal === step.loKcal ? '' : `–${w24Kcal(step.hiKcal)}`} kcal`;
+        if (shown === true) out.push({ snap, detail: `"${visible(r.text)}" but the logs show the step, which "covers this"` });
+        if (!text.endsWith(` — the easing step (${level}) addresses this`)) out.push({ snap, detail: `"${visible(r.text)}" does not name the step's level "${level}"` });
+      }
+    }
+  }
+  assert.ok(seen.covers + seen.addresses > 0, `${name}: no rate warning carried the step tail, so this invariant checked nothing`);
+  if (name === 'weight_loss_obedient') assert.ok(seen.covers > 0, `${name}: the logger taking the step never heard "covers this"`);
+  else assert.ok(seen.addresses > 0, `${name}: "addresses this" never appeared`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 5: while the easing step is given or standing, a rate warning about the 1% ceiling ("above" or "close to") never stands alone: it ends with the step tail', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const step = snap.card?.weightRead?.plan?.step;
+    if (step == null || (step.phase !== 'given' && step.phase !== 'standing')) continue;
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'rate' || r.tone !== 'watch' || !/(?:above|close to) the 1% a week ceiling/.test(plain(r.text))) continue;
+      seen++;
+      if (!/ — (?:your easing step covers this|the easing step \(.*\) addresses this)$/.test(plain(r.text))) out.push({ snap, detail: `[${r.kind} / ${r.tone}] "${visible(r.text)}" with the ${step.phase} step "${visible(snap.card?.weightRead?.plan?.action.text ?? '')}" on the card` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no ceiling warning stood next to an active step, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss'], 'item 3: a user who logs no food is never told "the step you started" (the app cannot see a snack): it is "Keep the daily snack (from Jun 5)"', (snaps, name) => {
+  const out = textMatches(snaps, allTexts, /the step you started/);
+  const from = snaps.filter(s => allTexts(s).some(t => /Keep the daily snack \(from [A-Z][a-z]{2} \d{1,2}\)/.test(plain(t.text)))).length;
+  assert.ok(from > 0, `${name}: "Keep the daily snack (from <date>)" never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss'], 'item 4: a user who logs no food is never told "Keep the daily snack — it\'s your maintenance" (a snack is not a maintenance): it is "Keep eating as you are, snack included — that\'s your maintenance; ..."', (snaps, name) => {
+  const out = textMatches(snaps, allTexts, /daily snack — it['’]s your maintenance/);
+  const said = snaps.filter(s => allTexts(s).some(t => /^Keep eating as you are, snack included — that['’]s your maintenance; if your average drifts/.test(plain(t.text)))).length;
+  assert.ok(said > 0, `${name}: the settled non-logger wording never appeared, so this invariant checked nothing`);
   return out;
 });

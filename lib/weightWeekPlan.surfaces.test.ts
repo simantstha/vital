@@ -233,13 +233,13 @@ test('after the first week a reached goal is told to hold, not to "switch to mai
   // Wave 23w: the step (a snack - no food is logged here) was given the week of the reach; Monday 70 carries it as a level, Monday 77 (14+ days on)
   // reads the weekly average and keeps it.
   const standing = reviewOn(reached, [], 70).review;
-  assert.match(plainSpaces(standing.nextWeek), /^Keep the daily snack \(the step you started \w{3} \d{1,2}\); we'll read it on Mon, May 18$/);
+  assert.match(plainSpaces(standing.nextWeek), /^Keep the daily snack \(from \w{3} \d{1,2}\); we'll read it on Mon, May 18$/);
   const { review } = reviewOn(reached, [], 77);
   assert.equal(plainSpaces(review.nextWeek), "Your weight held — keep eating as you are, snack included; that's your maintenance");
   assert.doesNotMatch(review.nextWeek, /switch to maintenance/i);
   // Later it is the kept level, with the two-sided watch.
   const later = reviewOn(reached, [], 98).review;
-  assert.equal(plainSpaces(later.nextWeek), "Keep the daily snack — it's your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act");
+  assert.equal(plainSpaces(later.nextWeek), "Keep eating as you are, snack included — that's your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act");
 });
 
 test('the coach signals follow the plan: "plateau" only in a plateau week, "too fast" only while the call is on', () => {

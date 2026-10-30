@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { plainSpaces } from './displayText';
 import {
-  calorieFloorKcal, isInstruction, stepDayReached, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weightWeekPlan, type WeightPlanInput, type WeightWeekPlan,
+  calorieFloorKcal, isInstruction, stepDayReached, stepHeadlineClause, stepLogsShow, stepRateTail, stepVerb, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weightWeekPlan,
+  type WeightPlanInput, type WeightWeekPlan,
 } from './weightWeekPlan';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
 
@@ -282,7 +283,7 @@ test('within a kilo of the target a too-fast loss is "nearly there": ease toward
   assert.equal(plainSpaces(p.action.text), 'Start easing calories toward maintenance as you close in on 82.5 kg — add ~150–200 kcal a day (to ~2,150–2,200 kcal) and watch the weekly average for 2 weeks');
   assert.equal(p.action.kcalTarget, 2150);
   assert.notEqual(p.verdict, 'too_fast');
-  assert.deepEqual(p.step, { since: D(48), readOn: D(63), phase: 'given', outcome: null, loKcal: 2150, hiKcal: 2200, food: false });
+  assert.deepEqual(p.step, { since: D(48), readOn: D(63), phase: 'given', outcome: null, loKcal: 2150, hiKcal: 2200, food: false, logsShow: false });
   // From the next day it is a standing level, not the same sentence again (wave 23w) - and it is read on the first Monday 14+ days on.
   for (const n of [49, 52, 56, 62]) {
     const standing = planAt(fast, n, { ...over, intakeDays: logs });
@@ -292,6 +293,8 @@ test('within a kilo of the target a too-fast loss is "nearly there": ease toward
     assert.equal(standing.action.kind, 'ease_to_maintenance');
     assert.equal(standing.action.kcalTarget, 2150);
     assert.equal(standing.step?.phase, 'standing');
+    // (Wave 25w: the one check the headline, the action and the rate warning all read - "aim for" until the logs show the step, "stay at" after.)
+    assert.equal(standing.step?.logsShow, n >= 56, `day ${n}`);
     assert.equal(isInstruction(standing.action), true);
   }
   // Someone who logs no food is given a food, never a calorie number (wave 23w).
@@ -301,7 +304,9 @@ test('within a kilo of the target a too-fast loss is "nearly there": ease toward
   assert.equal(food.action.kcalTarget, undefined);
   assert.equal(food.step?.food, true);
   assert.equal(food.step?.loKcal, null);
-  assert.equal(plainSpaces(planAt(fast, 50, over).action.text), 'Keep the daily snack (the step you started Apr 19); we\'ll read it on Mon, May 4');
+  // (Wave 25w: the app cannot see a snack, so it is "from Apr 19", never "the step you started".)
+  assert.equal(plainSpaces(planAt(fast, 50, over).action.text), 'Keep the daily snack (from Apr 19); we\'ll read it on Mon, May 4');
+  assert.equal(planAt(fast, 50, over).step?.logsShow, false);
 });
 
 test('reached: "set a new target or switch to maintenance" for the first 7 days, then maintenance — not asked daily; the step is said once', () => {
@@ -384,10 +389,11 @@ test('P2-A: the step is read on the first Monday 14+ days after it was given: he
   // Someone who logs no food keeps "that snack", with no calorie number anywhere.
   const food = (n: number) => planAt(calm, n, { reached: true, reachedAt: D(62) });
   assert.equal(plainSpaces(food(62).action.text), 'Set a new target or switch to maintenance — you no longer need a deficit, so add a ~150–200 kcal snack a day (e.g. yogurt and fruit) and watch the weekly average for 2 weeks');
-  assert.equal(plainSpaces(food(70).action.text), 'Keep the daily snack (the step you started May 3); we\'ll read it on Mon, May 18');
+  assert.equal(plainSpaces(food(70).action.text), 'Keep the daily snack (from May 3); we\'ll read it on Mon, May 18');
   // (Wave 24w, P3-5: plain words - no "weekly average held within", no "keep that snack, it's".)
   assert.equal(plainSpaces(food(77).action.text), 'Your weight held — keep eating as you are, snack included; that\'s your maintenance');
-  assert.equal(plainSpaces(food(84).action.text), 'Keep the daily snack — it\'s your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act');
+  // (Wave 25w: a snack is not a maintenance - the non-logger keeps eating as they are, which the snack is part of.)
+  assert.equal(plainSpaces(food(84).action.text), 'Keep eating as you are, snack included — that\'s your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act');
   for (const n of [62, 70, 77, 84, 98]) {
     const p = food(n);
     assert.equal(p.action.kcalTarget, undefined, `day ${n}`);
@@ -711,7 +717,7 @@ test('P2-3: "nearly there" is called on the Monday from closeness - within a kil
   assert.equal(monday.nearlyThere, true);
   assert.equal(monday.action.kind, 'ease_to_maintenance');
   // (Within a kilo already on Saturday 61: the step was given then, so the Monday carries it as the standing level - wave 23w.)
-  assert.match(plainSpaces(monday.action.text), /^Keep the daily snack \(the step you started May 2\); we'll read it on Mon, May 18$/);
+  assert.match(plainSpaces(monday.action.text), /^Keep the daily snack \(from May 2\); we'll read it on Mon, May 18$/);
   assert.equal(monday.asOf, D(62), 'decided from Sunday, not from a mid-week event');
   assert.equal(monday.updated, null);
   // The same call all week.
@@ -837,4 +843,46 @@ test('P3-3 (24w group 6): a logged day "reached" a step within its range +/-5% -
   // A single figure: 2,150 -> 2,042.5 .. 2,257.5
   assert.equal(stepDayReached(2257, 2150, 2150), true);
   assert.equal(stepDayReached(2258, 2150, 2150), false);
+});
+
+// ═══ wave 25w, G1: ONE "do the logs show the step?" check drives every step sentence ═══════════════════════════════════════════════════
+
+test('25w G1: stepLogsShow is true only for a step the logs show taken (taken false and "cannot tell" are both "not shown")', () => {
+  assert.equal(stepLogsShow({ taken: true }), true);
+  assert.equal(stepLogsShow({ taken: false }), false);
+  assert.equal(stepLogsShow({ taken: null }), false);
+});
+
+test('25w G1: the verb, the headline clause and the rate tail all follow the one answer', () => {
+  const level = { loKcal: 2150, hiKcal: 2200 };
+  assert.equal(stepVerb(true), 'stay at');
+  assert.equal(stepVerb(false), 'aim for');
+  assert.equal(plainSpaces(stepHeadlineClause({ ...level, logsShow: true })), 'stay at ~2,150–2,200 kcal');
+  assert.equal(plainSpaces(stepHeadlineClause({ ...level, logsShow: false })), 'aim for ~2,150–2,200 kcal');
+  assert.equal(plainSpaces(stepHeadlineClause({ loKcal: 2150, hiKcal: 2150, logsShow: false })), 'aim for ~2,150 kcal');
+  // A user who logs no food has no level to stay at or aim for: the snack, whatever the logs say.
+  assert.equal(stepHeadlineClause({ loKcal: null, hiKcal: null, logsShow: false }), 'keep your daily snack');
+  assert.equal(plainSpaces(stepRateTail({ ...level, logsShow: true })), ' — your easing step covers this');
+  assert.equal(plainSpaces(stepRateTail({ ...level, logsShow: false })), ' — the easing step (~2,150–2,200 kcal) addresses this');
+  assert.equal(plainSpaces(stepRateTail({ loKcal: null, hiKcal: null, logsShow: false })), ' — the easing step (a daily snack) addresses this');
+  // A plan built without the field reads as "not shown": nothing is claimed that the logs have not said.
+  assert.equal(plainSpaces(stepRateTail(level)), ' — the easing step (~2,150–2,200 kcal) addresses this');
+});
+
+test('25w G1: the plan stores the one answer on its step, and the action line and the step agree on it', () => {
+  const fast = readings(range(0, 70), n => 92 - 0.19 * n);
+  const over = { targetKg: 82.5, targetDate: D(80) };
+  const before = steady(28, 47, 2000);
+  const planWith = (after: ReturnType<typeof steady>) => planAt(fast, 56, { ...over, intakeDays: [...before, ...after] });
+  const taken = planWith(steady(48, 70, 2150));
+  assert.equal(taken.step?.logsShow, true);
+  assert.match(plainSpaces(taken.action.text), /^Stay at ~2,150–2,200 kcal \(the step you started Apr 19\)/);
+  for (const notTaken of [planWith(steady(48, 70, 2000)), planWith([...steady(48, 49, 2150), ...steady(60, 70, 2150)]), planWith([])]) {
+    assert.equal(notTaken.step?.logsShow, false);
+    assert.doesNotMatch(plainSpaces(notTaken.action.text), /^Stay at/);
+  }
+  // A user who logs no food: never claimed, never "the step you started".
+  const snack = planAt(fast, 56, over);
+  assert.equal(snack.step?.logsShow, false);
+  assert.equal(plainSpaces(snack.action.text), "Keep the daily snack (from Apr 19); we'll read it on Mon, May 4");
 });

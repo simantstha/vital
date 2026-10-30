@@ -1885,7 +1885,7 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   // (The reach was in the week before this Monday: the step was given then, so the question carries it as the standing level.)
   assert.equal(p.reasons[2].kind, 'next_step');
   assert.equal(p.reasons[2].tone, 'neutral');
-  assert.match(p.reasons[2].text, /^Set a new target or switch to maintenance — keep the daily snack \(the step you started \w{3} \d{1,2}\); we'll read it on \w{3}, \w{3} \d{1,2}$/);
+  assert.match(p.reasons[2].text, /^Set a new target or switch to maintenance — keep the daily snack \(from \w{3} \d{1,2}\); we'll read it on \w{3}, \w{3} \d{1,2}$/);
   // Continued loss is not "inside the safe band" any more.
   assert.ok(!p.reasons.some(r => r.kind === 'rate' || /safe band/.test(r.text)));
   // Weekly average ~85.5 kg vs 86 kg: within 1 kg.
@@ -1902,7 +1902,7 @@ test('reached (weight loss): reasons lead with the reach, drop the green safe-ba
   const muchLater = computeGoalProgress(reachedLossInput({ weightReadings: ramp(60, 88, -0.07) }));
   assert.equal(muchLater.verdict, 'reached');
   assert.ok(!muchLater.reasons.some(r => /Set a new target/.test(r.text)), JSON.stringify(muchLater.reasons));
-  assert.match(muchLater.reasons.find(r => r.kind === 'next_step')?.text ?? '', /^Keep the daily snack — it's your maintenance/);
+  assert.match(muchLater.reasons.find(r => r.kind === 'next_step')?.text ?? '', /^Keep eating as you are, snack included — that's your maintenance/);
 });
 
 test('reached (weight loss): well past the target reads "Below target by X kg"; imperial reads lb', () => {
@@ -2911,7 +2911,7 @@ test('F. reached: the weekly average reaches the target before the lagging trend
   assert.deepEqual(p.reasons.map(r => r.kind), ['reached', 'position', 'next_step']);
   assert.doesNotMatch(p.reasons[2].text, /Set a new target/);
   // Wave 23w: the step was given once, in the week of the reach; twelve days on it is a standing level to read on a Monday (a snack: no food is logged).
-  assert.match(p.reasons[2].text, /^Keep the daily snack \(the step you started \w{3} \d{1,2}\); we'll read it on \w{3}, \w{3} \d{1,2}$/);
+  assert.match(p.reasons[2].text, /^Keep the daily snack \(from \w{3} \d{1,2}\); we'll read it on \w{3}, \w{3} \d{1,2}$/);
 });
 
 test('F. reached copy is unit-aware: lb for imperial users', () => {
@@ -3509,12 +3509,15 @@ test('P2-1 (24w): an eat-more step is graded "Reached ~2,150 kcal on N of M logg
   assert.equal(taken.reasons.find(r => r.kind === 'action')?.text, "Stay at ~2,150–2,200 kcal (the step you started Oct 2); we'll read it on Mon, Oct 19");
   assert.equal(taken.reasons.find(r => r.kind === 'calorie_adherence')?.text, 'Reached ~2,150 kcal on 4 of 5 logged days since Oct 2');
   assert.equal(taken.headline, 'Nearly there — stay at ~2,150–2,200 kcal');
+  assert.equal(taken.weightRead?.plan?.step?.logsShow, true);
   // Still eating the budget: the logs are named, the step is not claimed, and nothing says "keep to your easing step".
   const notTaken = computeGoalProgress(easingStepInput([2000, 2040, 1990, 2000, 2030]));
   assert.equal(notTaken.reasons.find(r => r.kind === 'action')?.text, "Your logs are still ~2,000 kcal, so the step is about one extra snack a day (to ~2,150–2,200 kcal); we'll read it on Mon, Oct 19");
   assert.equal(notTaken.reasons.find(r => r.kind === 'calorie_adherence')?.text, 'Reached ~2,150 kcal on 0 of 5 logged days since Oct 2');
   assert.doesNotMatch(notTaken.headline, /easing step/);
-  assert.equal(notTaken.headline, 'Nearly there — stay at ~2,150–2,200 kcal');
+  // Wave 25w: the logs do not show the step, so the headline says "aim for" (it said "stay at" next to the plan's own "Your logs are still ~2,000 kcal ...").
+  assert.equal(notTaken.headline, 'Nearly there — aim for ~2,150–2,200 kcal');
+  assert.equal(notTaken.weightRead?.plan?.step?.logsShow, false);
   // The days before the step (Sep 30 - Oct 1, at the budget) are never in the count: with 2 logged days since it began there is no line at all.
   const input = easingStepInput([2150, 2150, 2150, 2150, 2150]);
   const fewDays = computeGoalProgress({ ...input, intakeDays: input.intakeDays.filter(d => d.day >= addDays(TODAY, -1) || d.day < addDays(TODAY, -6)) });
@@ -3650,9 +3653,9 @@ test('B8. reached: "within 1 kg of 84 kg", and a loss still past the ceiling say
   const warn = p.reasons.find(r => r.kind === 'rate');
   assert.ok(warn, JSON.stringify(p.reasons));
   // Wave 24w (P3-1): the reach step ("switch to maintenance - keep the daily snack...") IS the instruction, so the rate warning does not add a second
-  // one: it says the step covers it.
+  // one: it says the step addresses it. (Wave 25w: "covers this" is for a logger the logs show taking the step; the app cannot see this user's snack.)
   assert.ok(p.weightRead?.plan?.step != null, 'the reach carries the maintenance step');
-  assert.match(warn!.text, /above the 1% a week ceiling — your easing step covers this$/);
+  assert.match(warn!.text, /above the 1% a week ceiling — the easing step \(a daily snack\) addresses this$/);
   assert.doesNotMatch(warn!.text, /ease calories/);
   assert.equal(warn!.tone, 'watch');
   // A budget that already is maintenance has no step, so the warning is the one instruction.
