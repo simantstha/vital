@@ -4148,10 +4148,10 @@ interface LiftDelta24s { text: string; lift: string; delta: number; label: strin
 function liftDeltas24s(text: string): LiftDelta24s[] {
   const out: LiftDelta24s[] = [];
   const t = plain(text);
-  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM ([+−-])(\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|over 4 wks|vs wk of [A-Z][a-z]{2} \d+)/g)) {
+  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM ([+−-])(\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|over 4 wks|(?:last wk )?vs wk of [A-Z][a-z]{2} \d+)/g)) {
     out.push({ text: m[0], lift: m[1], delta: (m[2] === '+' ? 1 : -1) * Number(m[3]), label: m[4] === 'over 4 wks' ? 'vs 4 weeks before' : m[4] });
   }
-  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) estimated 1RM is (up|down) (\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|vs wk of [A-Z][a-z]{2} \d+)/g)) {
+  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) estimated 1RM is (up|down) (\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|(?:last wk )?vs wk of [A-Z][a-z]{2} \d+)/g)) {
     out.push({ text: m[0], lift: m[1], delta: (m[2] === 'up' ? 1 : -1) * Number(m[3]), label: m[4] });
   }
   return out;
@@ -4181,8 +4181,11 @@ invariant(LIFTERS, 'P3-6: a "vs 4 weeks ago" delta has its baseline in the week 
       const candidates = [addDays(end, -28), addDays(end, -35)].flatMap(w => { const e = e1rm(w); return e == null ? [] : [{ week: w, e }]; });
       if (candidates.length === 0) continue;
       const best = candidates.reduce((a, c) => (c.e > a.e ? c : a));
-      const want = best.week === addDays(end, -28) ? (reviewed != null ? 'vs 4 weeks before' : 'vs 4 weeks ago') : `vs wk of ${monthDay24s(best.week)}`;
-      if (d.label !== want) out.push({ snap, detail: `${where}: "${visible(d.text)}" — ${d.lift}'s baseline is the week of ${monthDay24s(best.week)} (${best.e} kg; the comparison ends ${monthDay24s(end)}), so the label should be "${want}"` });
+      // (Wave 25s: the card says "vs 4 weeks ago" only when the baseline IS that week; the review always names the baseline week - "vs wk of Mar 16" - so its number never
+      // sits under the card's near-identical "vs 4 weeks ago" label. The week named must still be the real baseline week, so this is no weaker than before.)
+      const want = reviewed == null && best.week === addDays(end, -28) ? 'vs 4 weeks ago' : `vs wk of ${monthDay24s(best.week)}`;
+      // (A review that shares the card's baseline week with a different number says "last wk vs wk of Apr 6": the 25s block below pins exactly when.)
+      if (d.label !== want && !(reviewed != null && d.label === `last wk ${want}`)) out.push({ snap, detail: `${where}: "${visible(d.text)}" — ${d.lift}'s baseline is the week of ${monthDay24s(best.week)} (${best.e} kg; the comparison ends ${monthDay24s(end)}), so the label should be "${want}"` });
     }
   };
   for (const snap of snaps) {
@@ -4999,5 +5002,66 @@ invariant(RUNNERS, 'no card, coach line or opener says "N km left" for more than
     }
   }
   if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(checked > 3, `${name}: only ${checked} "N km left" figures were checked, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// wave 25s: strength round 7. One block, at the END of the file. Every invariant here was written BEFORE the rule it locks in.
+//   G1-2  the weekly review names its baseline WEEK on every lift delta (stat, headline, win, slip), so its number never sits under the card's "vs 4 weeks ago"
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+const NAMED_WEEK_25S = /^(?:Lighter week · )?(?:last wk )?vs wk of [A-Z][a-z]{2} \d{1,2}$/;
+
+invariant(LIFTERS, '25s G1-2: every lift delta in the weekly review (stat, headline, win, slip) names its baseline week ("vs wk of Mar 16"), never "vs 4 weeks before" / "over 4 wks"', (snaps, name) => {
+  const out: Violation[] = [];
+  let deltas = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const texts: Text[] = [{ where: 'review.headline', text: r.headline }];
+    if (r.win) texts.push({ where: 'review.win', text: r.win });
+    if (r.slip) texts.push({ where: 'review.slip', text: r.slip });
+    for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) texts.push({ where: `review.stat ${st.label}`, text: `${st.label} ${st.value} ${st.comparison}` });
+    for (const t of texts) {
+      for (const d of liftDeltas24s(t.text)) {
+        deltas++;
+        if (!/^(?:last wk )?vs wk of [A-Z][a-z]{2} \d{1,2}$/.test(d.label) || /over 4 wks/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" labels ${d.lift}'s delta "${d.label}", which names no week` });
+      }
+    }
+    // A stat whose value is a signed 4-week delta carries the named week in its comparison (a week-over-week "vs the week before" is a different number and says so).
+    for (const st of r.stats) {
+      if (!/est\. 1RM$/.test(st.label) || !/^[+−-]\d/.test(plain(st.value)) || !st.comparison) continue;
+      const c = plain(st.comparison);
+      if (!NAMED_WEEK_25S.test(c) && !/^(?:Lighter week · )?vs (?:the|last) week(?: before)?$|^vs last trained week$/.test(c)) out.push({ snap, detail: `review.stat ${st.label} ${st.value}: comparison "${visible(st.comparison)}" names no baseline week` });
+    }
+  }
+  if (name === 'lifter' || name === 'lifter_obedient') assert.ok(deltas > 3, `${name}: only ${deltas} review lift deltas were checked, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// The one way the card and the review can name the SAME baseline week: she lifted that lift on the review's own Monday, so the card's window ends a week later than the review's
+// (which is cut at the reviewed week) - lifter_obedient day 70, card "+9 kg vs wk of Apr 6", review "+6 kg vs wk of Apr 6". The review then says whose recent end its number is:
+// "last wk vs wk of Apr 6". It says so exactly then: never when nothing on the card shares its week, never missing when something does.
+invariant(LIFTERS, '25s G1-2: a review lift delta reads "last wk vs wk of X" exactly when that day\'s card names the same lift against the same week X with a different number', (snaps, name) => {
+  const out: Violation[] = [];
+  let shared = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const cardDeltas = [...cardTexts(snap), ...coachTexts(snap)].flatMap(t => liftDeltas24s(t.text));
+    const texts: string[] = [r.headline, ...(r.win ? [r.win] : []), ...(r.slip ? [r.slip] : [])];
+    for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) texts.push(`${st.label} ${st.value} ${st.comparison}`);
+    for (const text of texts) {
+      for (const d of liftDeltas24s(text)) {
+        const week = d.label.replace(/^last wk /, '');
+        const collides = cardDeltas.some(c => c.lift === d.lift && c.label === week && c.delta !== d.delta);
+        if (collides) shared++;
+        if (collides !== d.label.startsWith('last wk ')) {
+          out.push({ snap, detail: `"${visible(text)}": ${collides ? 'the card names the same week with a different number, so the review must say "last wk"' : '"last wk" without a card number under the same label'}` });
+        }
+      }
+    }
+  }
+  if (name === 'lifter_obedient') assert.ok(shared > 0, `${name}: no review shared a baseline week with a different card number, so this invariant checked nothing`);
   return out;
 });

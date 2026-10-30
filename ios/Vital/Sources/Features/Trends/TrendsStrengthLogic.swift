@@ -215,7 +215,7 @@ enum TrendsStrengthLogic {
                 name: displayName(for: candidate.key),
                 currentText: wholeWeightText(kg: latest, system: system),
                 sparkline: e1rm,
-                status: building ?? status(e1rm: e1rm, system: system),
+                status: building ?? status(e1rm: e1rm, system: system, keys: keys),
                 changeKg: liftChange?.changeKg,
                 baselineKg: liftChange?.baselineKg
             )
@@ -416,12 +416,65 @@ enum TrendsStrengthLogic {
         return LiftChange(baselineKg: baseline, recentKg: recent, changeKg: (rounded + 0.5).rounded(.down) / 10)
     }
 
+    /// The week `change(e1rm:)` took its baseline NUMBER from, for the chip's LABEL
+    /// only (the maths above is untouched). Mirrors `liftBaselineWeek` in
+    /// `lib/liftChange.ts`: the better of the weeks 4 and 5 back from `end`, the
+    /// newer on a tie. `fourWeeksAgo` is false when the number came from the week
+    /// before the 4-weeks-ago week (an ill or missed week left that one empty, or
+    /// lighter): "vs 4 wk ago" would then be the wrong label for it. `index` is the
+    /// week's position in `e1rm`. `nil` when there is no baseline.
+    static func baselineWeek(e1rm: [Double?]) -> (index: Int, fourWeeksAgo: Bool)? {
+        guard let endIndex = endSearchOffsets
+            .map({ e1rm.count - 1 - $0 })
+            .first(where: { $0 >= 0 && e1rm[$0] != nil })
+        else { return nil }
+        var pickedIndex: Int?
+        var pickedValue = 0.0
+        for offset in baselineWeekOffsets {
+            let index = endIndex - offset
+            guard index >= 0, let value = e1rm[index] else { continue }
+            if pickedIndex == nil || value > pickedValue {
+                pickedIndex = index
+                pickedValue = value
+            }
+        }
+        guard let chosenIndex = pickedIndex else { return nil }
+        return (index: chosenIndex, fourWeeksAgo: chosenIndex == endIndex - baselineWeekOffsets[0])
+    }
+
+    private static let monthAbbreviations = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    /// "Aug 31" for the week start `YYYY-MM-DD` (month and day, no year; the
+    /// day joined to the month by `nbsp`). Mirrors `formatLiftWeek` in
+    /// `lib/liftChange.ts`. `nil` for a malformed key.
+    static func monthDayText(weekStart: String) -> String? {
+        let parts = weekStart.split(separator: "-")
+        guard parts.count == 3, let month = Int(parts[1]), let day = Int(parts[2]), (1...12).contains(month) else { return nil }
+        return "\(monthAbbreviations[month - 1])\(nbsp)\(day)"
+    }
+
+    /// "vs 4 wk ago", or "vs wk of Aug 31" when the baseline number came from the
+    /// week before the 4-weeks-ago week. Mirrors `liftBaselineLabel` in
+    /// `lib/liftChange.ts`, which the goal card quotes: the chip must not say
+    /// "4 wk ago" under a number the card dates to "wk of Aug 31". `keys` is the
+    /// dense week-start grid `e1rm` lies on (oldest first); without it, or when it
+    /// does not line up with `e1rm`, the generic wording stays.
+    static func baselineLabel(e1rm: [Double?], keys: [String]?) -> String {
+        guard let keys, keys.count == e1rm.count,
+              let baseline = baselineWeek(e1rm: e1rm), !baseline.fourWeeksAgo,
+              let named = monthDayText(weekStart: keys[baseline.index])
+        else { return "vs 4\(nbsp)wk ago" }
+        return "vs wk\(nbsp)of\(nbsp)\(named)"
+    }
+
     /// "+2.5 kg vs 4 wk ago" (good) / "No change vs 4 wk ago" (watch) / "New"
     /// (neutral, fewer than two weeks with data or nothing 4 weeks back to
     /// compare with) / "Not logged in 3 wk" (watch, nothing in the current week or the
     /// two weeks before it). The window is always named — it is the same
-    /// "last 2 weeks vs 4 weeks ago" number the goal card shows.
-    static func status(e1rm: [Double?], system: UnitSystem) -> Status {
+    /// "last 2 weeks vs 4 weeks ago" number the goal card shows, and with `keys`
+    /// the same "vs wk of Aug 31" the card says when the baseline came from the
+    /// week before the 4-weeks-ago week (`baselineLabel`).
+    static func status(e1rm: [Double?], system: UnitSystem, keys: [String]? = nil) -> Status {
         var lastIndex: Int?
         var pointCount = 0
         for (index, value) in e1rm.enumerated() where value != nil {
@@ -446,13 +499,14 @@ enum TrendsStrengthLogic {
         // the "102 -> 108" the goal card shows. A change too small to survive
         // rounding reads as "No change" rather than "+0 kg".
         let shown = displayChange(change, system: system)
+        let window = baselineLabel(e1rm: e1rm, keys: keys)
         if isProgressing(changeKg: delta, baselineKg: change.baselineKg), shown.change > 0 {
-            return Status(text: "+\(shown.change)\(nbsp)\(system.weightUnit) vs 4\(nbsp)wk ago", tone: .good)
+            return Status(text: "+\(shown.change)\(nbsp)\(system.weightUnit) \(window)", tone: .good)
         }
         if isDeclining(changeKg: delta, baselineKg: change.baselineKg), shown.change < 0 {
-            return Status(text: "\u{2212}\(-shown.change)\(nbsp)\(system.weightUnit) vs 4\(nbsp)wk ago", tone: .watch)
+            return Status(text: "\u{2212}\(-shown.change)\(nbsp)\(system.weightUnit) \(window)", tone: .watch)
         }
-        return Status(text: "No change vs 4\(nbsp)wk ago", tone: .watch)
+        return Status(text: "No change \(window)", tone: .watch)
     }
 
     /// Whole-unit endpoints and the change between the ROUNDED endpoints —
