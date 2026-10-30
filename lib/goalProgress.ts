@@ -366,8 +366,10 @@ export interface GoalWeekPlan {
   /**
    * Additive (wave 24e): a restart that begins mid-week is scaled to the days left (`km` = round(fullKm x daysLeft / 7), a long run of at most `longCapKm`);
    * `pending` = still on the break (what to take if the runner starts today), else the week as it is. The next Monday is the full `fullKm` restart week.
+   * Wave 25e: `runs` (additive, at most 3) = the runner's usual run days from the start day to Sunday - the km are spread over that many runs and `longCapKm` is
+   * the most one of them carries, ceil(km / runs); absent when there are no earlier weeks to read the rhythm from (then 40% of the scaled week).
    */
-  midWeekRestart?: { fullKm: number; km: number; longCapKm: number; pending: boolean };
+  midWeekRestart?: { fullKm: number; km: number; longCapKm: number; pending: boolean; runs?: number };
   /** Additive (wave 24e): last week's km (the compact plan's coach lines compare a hold with it: "an easier week" only when the hold really is easier). */
   lastKm?: number;
   /** Additive (wave 24e): last week was a cutback week (the coach's hold line says "over the cutback", not "over the safe step"). */
@@ -433,7 +435,10 @@ export interface GoalLongRunProgress {
   peakKm: number;
   /** Peak long-run distance to build to before the taper (by race distance); null without a race distance. */
   targetPeakKm: number | null;
-  /** The next long run from the week plan: min(lastKm + 2 km, the peak target); additive, absent when there is none to plan. */
+  /**
+   * The next long run from the week plan: min(lastKm + 2 km, the peak target); additive, absent when there is none to plan. Wave 25e: on the week's last day, once
+   * its long run is run, NEXT week's long run (the number Monday's plan shows; absent when next week plans none).
+   */
   nextKm?: number | null;
   /**
    * Additive: the race-distance peak (e.g. 18 km for a half) when the weekly goal cannot carry it — a long run is at
@@ -2911,7 +2916,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.last != null ? { lastKm: plan.last.km } : {}),
             ...(plan.last?.cutback === true ? { lastCutback: true } : {}),
-            ...(plan.restart?.midWeek != null ? { midWeekRestart: { fullKm: plan.restart.midWeek.fullKm, km: plan.restart.midWeek.km, longCapKm: plan.restart.midWeek.longCapKm, pending: plan.restart.midWeek.pending } } : {}),
+            ...(plan.restart?.midWeek != null ? { midWeekRestart: { fullKm: plan.restart.midWeek.fullKm, km: plan.restart.midWeek.km, longCapKm: plan.restart.midWeek.longCapKm, pending: plan.restart.midWeek.pending, ...(plan.restart.midWeek.runs != null ? { runs: plan.restart.midWeek.runs } : {}) } } : {}),
             ...(plan.lightWeek != null ? { lightWeek: true } : {}),
             ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
             ...(plan.preTaper != null ? { preTaper: plan.preTaper.nextPhase } : {}),
@@ -3116,16 +3121,38 @@ function longRunProgress(input: GoalProgressInput, race: GoalRaceProgress | null
     peakKm,
     targetPeakKm: peak?.peakKm ?? null,
     ...(peak?.raceTargetKm != null ? { raceTargetKm: peak.raceTargetKm } : {}),
-    // Wave 23e P3-j: on the last day of the last build week, once its long run is run, the NEXT long run is the taper's (Monday's plan), not this week's again.
-    nextKm: ec.plan?.preTaper?.nextPhase === 'taper' && ec.plan.preTaper.taperLongRunKm != null && weekdayOf(input.todayKey) === 0 && ec.plan.longRunAhead === false
-      ? ec.plan.preTaper.taperLongRunKm
-      : ec.plan?.longRunKm ?? null,
+    nextKm: nextLongRunKm(input, ec),
     ...(ec.plan?.longRun.capNoteDue ? { capNoteDue: true } : {}),
     ...(ec.plan?.longRun.peakOversized ? { oversized: true } : {}),
     ...(ec.plan?.longRun.peakPlan != null && !ec.plan.longRun.peakPlan.within
       ? { overPlan: true, peakPlanKm: ec.plan.longRun.peakPlan.brokenKm }
       : {}),
   };
+}
+
+/**
+ * The long run the coach calls "next". All week it is this week's (trimmed to what is left when the week's km are short). On the week's LAST day, once the long run is run
+ * (a run is in that day - the morning card before it still has the week's own figure, or none), it is NEXT week's - the number Monday's plan shows (wave 25e: it was the
+ * week that was over, "next long run ~6 km" after a 15 km Sunday; wave 23e P3-j did this for the taper's long run only). Null when next week plans none (race week, a
+ * recovery week): then the clause is left out.
+ */
+function nextLongRunKm(input: GoalProgressInput, ec: EnduranceCtx): number | null {
+  const plan = ec.plan;
+  if (plan == null) return null;
+  const goalKm = input.target.weeklyDistanceKm;
+  const ranToday = ec.runs.some(r => r.day === input.todayKey && r.day !== input.race?.date);
+  if (weekdayOf(input.todayKey) !== 0 || plan.longRunAhead !== false || !ranToday || goalKm == null || goalKm <= 0) return plan.longRunKm ?? null;
+  const monday = addDays(ec.weekStart, 7);
+  return enduranceWeekPlan({
+    runs: ec.runs,
+    weekStart: monday,
+    goalKm,
+    race: input.race ?? null,
+    today: monday,
+    racePeakWeekKm: input.racePeakWeekKm ?? null,
+    unitsPerKm: unitsPerKm(input),
+    goalStartDay: goalStartDay(input),
+  }).longRunKm;
 }
 
 /** A long-run distance for the peak lines: imperial to the nearest half mile (as the peak target is), km to one decimal. */

@@ -745,6 +745,12 @@ export interface PlanLongRun {
   /** The week's long run: min(lastKm + 2 km, the peak target); rounded to 0.5 of the display unit. */
   nextKm: number | null;
   /**
+   * Wave 25e: the long run the week's cards QUOTE as its plan - the figure Saturday's trim gave ("keep Sunday's long run to ~9 km") when a trim named one, else the
+   * planned long run (`nextKm` before any trim). `nextKm` is null on a done / total / short week; this is not. A peak that broke the plan is judged, and the plan is
+   * quoted, against this figure ("longer than the 9 km plan"), on the week itself and on every later day.
+   */
+  planKm: number | null;
+  /**
    * The cap note ("Your 30 km weeks fit a 15 km long run; for an 18 km peak, raise the goal...") is due this week:
    * only in a build-phase week, the first one of the goal and then every 4th (`CAP_NOTE_EVERY_WEEKS`); never in a
    * taper, race, recovery or rebuild week. Every surface that words the cap note asks this, so none of them nags.
@@ -829,7 +835,7 @@ export interface EnduranceWeekPlan {
    * Restart (or rebuild-from-rest) weeks: why, the median weekly km (before the break) the restart target is a share
    * of, the share the restart used (the gap length decides it) and the gap in days when it was a gap.
    */
-  restart: { reason: 'break' | 'low_week' | 'no_runs'; medianKm: number; fraction: number; gapDays: number | null; midWeek?: { fullKm: number; daysLeft: number; km: number; longCapKm: number; pending: boolean } } | null;
+  restart: { reason: 'break' | 'low_week' | 'no_runs'; medianKm: number; fraction: number; gapDays: number | null; midWeek?: { fullKm: number; daysLeft: number; km: number; longCapKm: number; pending: boolean; runs?: number } } | null;
   /**
    * The weeks right after a restart climb back to the pre-break median in rungs (restart, then 80%, then 100%):
    * the median, the rung this week uses (share of the median) and how many weeks after the restart it is (1-3).
@@ -1095,6 +1101,12 @@ interface PlanCtx {
   kmCache: Map<string, { km: number; days: number }>;
   /** Plans of the weeks BEFORE the requested one (they never depend on today or on the explicit long-run reading). */
   planCache: Map<string, EnduranceWeekPlan>;
+  /** Wave 25e: a past week's quoted long run as its LAST card read it (`lastCardPlanKm`), by the week's Monday. */
+  lastCardCache: Map<string, number | null>;
+  /** Wave 25e: this context only re-reads a past week as its last card did - the peak / share quotes of that read are not needed (and must not recurse). */
+  probe?: boolean;
+  /** How many weeks back the plan chain walks from the requested week (`MAX_PLAN_DEPTH` unless a re-read has fewer left, see `lastCardPlanKm`). */
+  maxDepth: number;
 }
 
 /** The race run: the longest run of at least 90% of the race distance on race day or the day before / after. Null when none. */
@@ -1147,6 +1159,8 @@ function buildCtx(input: EnduranceWeekPlanInput): PlanCtx {
     capNoteAnchor: anchorDay != null && DAY_RE.test(anchorDay) ? mondayOfDay(anchorDay) : first == null ? null : mondayOfDay(first),
     kmCache: new Map(),
     planCache: new Map(),
+    lastCardCache: new Map(),
+    maxDepth: MAX_PLAN_DEPTH,
   };
 }
 
@@ -1469,13 +1483,16 @@ export interface RestOfWeekWording {
 
 /** Wave 24e: the wording of a restart that begins mid-week. `pending`: still on a break, what to take if the runner starts today; else the week as it is. */
 export function midWeekRestartText(
-  mw: { fullKm: number; km: number; longCapKm: number },
+  mw: { fullKm: number; km: number; longCapKm: number; runs?: number },
   unitsPerKm: number,
   form: 'stub' | 'pending',
 ): string {
   const cap = mw.longCapKm > 0 ? mw.longCapKm : mw.km;
-  const n = Math.max(1, Math.ceil(mw.km / cap - 1e-9));
-  const runs = n <= 1 ? 'one or two easy runs' : `${n - 1}–${n} easy runs`;
+  // Wave 25e: with the runner's usual run days known (`runs`: at most 3) the count is that - "two easy runs" with two days left; else it is read off the cap, as before.
+  const n = mw.runs != null ? Math.max(1, Math.min(3, mw.runs)) : Math.max(1, Math.ceil(mw.km / cap - 1e-9));
+  const runs = mw.runs != null
+    ? (n === 1 ? 'one easy run' : n === 2 ? 'two easy runs' : '2–3 easy runs')
+    : n <= 1 ? 'one or two easy runs' : `${n - 1}–${n} easy runs`;
   const tail = `in ${runs}, nothing over ~${formatKm(cap, unitsPerKm)}; the restart week (~${formatKm(mw.fullKm, unitsPerKm)}) starts Monday`;
   return form === 'pending'
     ? `Starting today? ~${formatKm(mw.km, unitsPerKm)} over the rest of this week ${tail}`
@@ -1695,6 +1712,35 @@ function planWeek(ctx: PlanCtx, w: string, depth: number): EnduranceWeekPlan {
   return plan;
 }
 
+/**
+ * Wave 25e: the long run a PAST week's last card quoted as its plan (`longRun.planKm`): the week's Sunday read the way the weekly review reads it - the
+ * week planned at depth 0 as of its last day, over the runs through that day (so Saturday's trim, a light week's reading and every other same-week rule
+ * are in it). A runner who was told "keep Sunday's long run to ~9 km" is held to 9 km on Monday, not to the 12 km the week started with. Null for the
+ * current week (its own card says it) and for a week with no long run planned (race week, recovery). `weeksBack`: how many weeks before the requested week `pw` is.
+ */
+function lastCardPlanKm(ctx: PlanCtx, pw: string, weeksBack: number): number | null {
+  const end = addDayKey(pw, 6);
+  if (!(ctx.today > end)) return null;
+  const hit = ctx.lastCardCache.get(pw);
+  if (hit !== undefined) return hit;
+  const probe: PlanCtx = {
+    ...ctx,
+    today: end,
+    runs: ctx.runs.filter(r => r.day <= end),
+    longRunOverride: null,
+    kmCache: new Map(),
+    planCache: new Map(),
+    lastCardCache: new Map(),
+    probe: true,
+    // The chain walks back no further than the requested week's own does (this week's reads `MAX_PLAN_DEPTH` weeks; `pw` is `weeksBack` of them): the history
+    // behind it is as complete as the card's, never the weeks before a loader's window that the card never looked at.
+    maxDepth: Math.max(0, ctx.maxDepth - weeksBack),
+  };
+  const km = computeWeekPlan(probe, pw, 0).longRun.planKm;
+  ctx.lastCardCache.set(pw, km);
+  return km;
+}
+
 /** Whole weeks since Monday 1970-01-05: the calendar the cutback cycle follows. */
 function absoluteWeek(monday: string): number {
   return Math.round((dayIndex(monday) - dayIndex('1970-01-05')) / 7);
@@ -1818,7 +1864,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 
   // Last finished week, graded by its own plan.
   const hasPrior = ctx.runs.some(r => r.day < w);
-  const prevPlan = depth < MAX_PLAN_DEPTH && hasPrior ? planWeek(ctx, prevStart, depth + 1) : null;
+  const prevPlan = depth < ctx.maxDepth && hasPrior ? planWeek(ctx, prevStart, depth + 1) : null;
   const prevGrade = prevPlan != null && hasPrior ? gradeEnduranceWeek(prevPlan, prev.km, { runDays: prev.days, unitsPerKm: ctx.units }) : null;
   // Wave 23e: last week's change is measured against the base ITS step was taken from: after a cutback that is the last full week before it.
   const lastChangeBase = prevPlan != null ? prevPlan.stepBaseKm : prevPrev.km;
@@ -1965,7 +2011,17 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         if (startDow != null && startDow >= MID_WEEK_RESTART_FROM_DOW && startDow <= 5 && dayIndex(firstRun ?? asOf) - dayIndex(lastBefore) >= breakAt) {
           const daysLeft = 7 - startDow;
           const km = Math.min(restartKm, roundWeekTargetKm((restartKm * daysLeft) / 7, ctx.units));
-          restart.midWeek = { fullKm: restartKm, daysLeft, km, longCapKm: floorLongRunKm(km * LONG_RUN_RESTART_WEEK_SHARE, ctx.units), pending: firstRun == null };
+          // Wave 25e: the runs the scaled km are spread over are the runner's USUAL run days from the start day to Sunday (at most 3, at least the start day): "~5 km in 2 easy
+          // runs, nothing over ~3 km" on a Saturday, not "2-3 runs of at most 2 km" with two days left. With no weeks to read a rhythm from: 40% of the scaled week, as before.
+          const usual = priorWeekProfiles(ctx, w).length > 0 ? Math.min(3, Math.max(1, usualRunDaysLeft(ctx, w, startDow, false).length)) : null;
+          restart.midWeek = {
+            fullKm: restartKm,
+            daysLeft,
+            km,
+            longCapKm: usual != null ? ceilWeekTargetKm(km / usual, ctx.units) : floorLongRunKm(km * LONG_RUN_RESTART_WEEK_SHARE, ctx.units),
+            pending: firstRun == null,
+            ...(usual != null ? { runs: usual } : {}),
+          };
           if (firstRun != null) targetKm = km;
         }
       }
@@ -2218,7 +2274,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   let share: LongRunShare | null = null;
   let peakOversized = false;
   let peakPlan: PlanLongRun['peakPlan'] = null;
-  if (depth === 0) {
+  if (depth === 0 && ctx.probe !== true) {
     const inProgress = asOf < weekEnd;
     const floorFor = (wk: string): number => (wk === w && inProgress && wind == null && targetKm != null ? targetKm : 0);
     if (wind == null && rebuild == null) {
@@ -2237,9 +2293,10 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       peakOversized = s != null && Math.abs(s.longKm - round1(peakRun.km)) < 1e-6;
       // Wave 22e: was the peak the long run the plan asked for? At most that week's planned long run (and the peak target) + 0.5 km, and at
       // most half of its week. "Peak reached" is praise only for a run that kept to the plan.
-      const peakWeekPlan = pw === w || depth >= MAX_PLAN_DEPTH ? null : planWeek(ctx, pw, depth + 1);
-      // (This week's own long run is the one Saturday's trim named, when it named one: "longer than the 9 km plan", not the 12 km the week started with.)
-      const plannedKm = peakWeekPlan?.longRunKm ?? (pw === w ? trimmedKm ?? plannedNextKm : null);
+      // (The long run a week QUOTES as its plan is the one Saturday's trim named, when it named one: "longer than the 9 km plan", not the 12 km the week started
+      // with - on that week's own Sunday AND on every later day. Wave 25e: a PAST week's figure is read the way its last card read it, `lastCardPlanKm`; the
+      // history plan the chain keeps (`planWeek` at depth > 0) has no trim, and its `longRunKm` stays what the long-run jump detection reads.)
+      const plannedKm = pw === w ? trimmedKm ?? plannedNextKm : lastCardPlanKm(ctx, pw, Math.round((dayIndex(w) - dayIndex(pw)) / 7));
       const weekKm = Math.max(weekRuns(ctx, pw).km, floorFor(pw));
       const sharePct = weekKm > 0 ? Math.round((peakRun.km / weekKm) * 100) : 0;
       // (A week with under 3 run days has no rhythm to hold a plan or a share against: the long run is most of it by nature, as for the watch note.)
@@ -2257,6 +2314,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     ...lr0,
     raceTargetKm,
     nextKm,
+    planKm: trimmedKm ?? plannedNextKm,
     capNoteDue,
     held: buildLike && (cutback != null || longRunJump != null || (untrimmedNextKm != null && lr0.lastKm != null && untrimmedNextKm <= lr0.lastKm + 1e-9)),
     share,

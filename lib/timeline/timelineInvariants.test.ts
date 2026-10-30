@@ -5001,3 +5001,112 @@ invariant(RUNNERS, 'no card, coach line or opener says "N km left" for more than
   if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(checked > 3, `${name}: only ${checked} "N km left" figures were checked, so this invariant checked (almost) nothing`);
   return out;
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// ═══ wave 25e (ENDURANCE): what is left so a runner is never confused. Every invariant here was written BEFORE the rule it locks in. ═══
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ── group 1 / item 1: a number the runner was given is kept ─────────────────────────────────────────────
+
+/** "Long run peak 15 km — longer than the 9 km plan": the peak, then the plan figure it broke (the long-run reason of the build phase). */
+const W25E_PEAK_QUOTE = /^Long run peak (\d+(?:\.\d+)?)\s?(km|mi) — longer than the (\d+(?:\.\d+)?)\s?(km|mi) plan/;
+
+invariant(RUNNERS, 'item 1: the long-run "plan" a later day quotes for a past week ("Long run peak 15 km — longer than the 9 km plan") is the LAST long-run figure that week\'s cards gave (its plan line / "keep Sunday\'s long run to ~9 km"), not the 12 km the week started with', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const out: Violation[] = [];
+  let compared = 0;
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'long_run') continue;
+      const m = W25E_PEAK_QUOTE.exec(plain(r.text));
+      if (!m) continue;
+      // The week of the 28-day peak run (the longest, the later one on a tie): the plan the quote names is that week's.
+      let peakDay: string | null = null;
+      for (const [d, km] of runKm) {
+        const age = dayDiff(snap.date, d);
+        if (age < 0 || age >= 28) continue;
+        if (peakDay == null || km > (runKm.get(peakDay) ?? 0) + 1e-9 || (Math.abs(km - (runKm.get(peakDay) ?? 0)) <= 1e-9 && d > peakDay)) peakDay = d;
+      }
+      if (peakDay == null || mondayOfDate(peakDay) === mondayOfDate(snap.date)) continue; // (the peak's own week: the card of that very week)
+      const monday = mondayOfDate(peakDay);
+      let last: number | null = null;
+      for (let i = 0; i < 7; i++) {
+        const figure = byDate.get(addDays(monday, i))?.card?.distance?.plan?.longRunKm;
+        if (figure != null) last = figure;
+      }
+      if (last == null) continue;
+      compared++;
+      const said = m[4] === 'mi' ? Number(m[3]) * KM_PER_MILE : Number(m[3]);
+      // (Miles are quoted to the half mile, km to 0.1.)
+      const tolerance = m[4] === 'mi' ? 0.5 * KM_PER_MILE / 2 + 1e-6 : 0.05 + 1e-6;
+      if (Math.abs(said - last) > tolerance) out.push({ snap, detail: `"${visible(r.text)}" but the cards of the week of ${monday} last gave a ${Math.round(last * 10) / 10} km long run` });
+    }
+  }
+  if (name === 'runner_on_plan' || name === 'runner_on_plan_half') assert.ok(compared > 5, `${name}: only ${compared} past-week plan quotes were compared, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// ── group 1 / item 2: after the week's long run is done, the Sunday coach line shows NEXT week's long run ───────────────
+
+invariant(RUNNERS, 'item 2: on a Sunday once the long run is run, the coach\'s "next long run ~N" is the long run Monday\'s plan shows (no "next long run" at all when Monday plans none) - never the week that is over', (snaps, name) => {
+  const runKm = scenarioRunKm(name);
+  const byDate = new Map(snaps.map(s => [s.date, s]));
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    if (weekdayOf(snap.date) !== 'Sun' || (runKm.get(snap.date) ?? 0) <= 0) continue;
+    const monday = byDate.get(addDays(snap.date, 1));
+    const mondayPlan = monday?.card?.distance?.plan;
+    if (!mondayPlan) continue;
+    const line = (snap.coach ?? []).map(plain).find(l => l.startsWith('- Long run (running only)'));
+    if (!line) continue;
+    const m = /next long run ~(\d+(?:\.\d+)?)\s?(km|mi)/.exec(line);
+    checked++;
+    if (mondayPlan.longRunKm == null) {
+      if (m) out.push({ snap, detail: `"${visible(line)}" but Monday plans no long run` });
+      continue;
+    }
+    if (!m) { out.push({ snap, detail: `"${visible(line)}" has no "next long run" but Monday's plan has a ${Math.round(mondayPlan.longRunKm * 10) / 10} km long run` }); continue; }
+    const expected = inDisplayUnit(mondayPlan.longRunKm, m[2]);
+    if (Math.abs(Number(m[1]) - expected) > 0.55) out.push({ snap, detail: `"${visible(line)}" but Monday's plan has a ${expected} ${m[2]} long run` });
+  }
+  assert.ok(checked > 0, `${name}: no Sunday after a long run was compared, so this invariant checked nothing`);
+  return out;
+});
+
+// ── group 1 / item 3: a break card's "N km over the rest of this week" can be run in the days that are left ───────────
+
+const W25E_REST_OF_WEEK = /~(\d+(?:\.\d+)?)\s?(km|mi) over the rest of this week in ([^,]+?) easy runs?, nothing over ~(\d+(?:\.\d+)?)\s?(km|mi)/;
+
+/** The most runs a phrase allows: "2–3" -> 3, "one or two" -> 2, "two" -> 2, "one" -> 1, "3" -> 3. */
+function w25eMostRuns(phrase: string): number | null {
+  const range = /(\d)\s?[–-]\s?(\d)/.exec(phrase);
+  if (range) return Number(range[2]);
+  if (/one or two/.test(phrase)) return 2;
+  const word = /^(one|two|three)$/.exec(phrase.trim());
+  if (word) return { one: 1, two: 2, three: 3 }[word[1] as 'one' | 'two' | 'three'];
+  const digit = /^(\d)$/.exec(phrase.trim());
+  return digit ? Number(digit[1]) : null;
+}
+
+invariant(RUNNERS, 'item 3: "~5 km over the rest of this week in 2–3 easy runs, nothing over ~2 km" adds up - no more runs than days left (today counts) and the runs at their cap carry the km', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const daysLeft = 7 - ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(weekdayOf(snap.date));
+    for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+      const m = W25E_REST_OF_WEEK.exec(plain(t.text));
+      if (!m) continue;
+      seen++;
+      const runs = w25eMostRuns(m[3]);
+      const km = Number(m[1]);
+      const cap = Number(m[4]);
+      if (runs == null) { out.push({ snap, detail: `${t.where}: cannot read the number of runs in "${visible(t.text)}"` }); continue; }
+      if (runs > daysLeft) out.push({ snap, detail: `${t.where}: "${visible(m[0])}" names ${runs} runs with ${daysLeft} day(s) left` });
+      if (runs * cap < km - 0.05) out.push({ snap, detail: `${t.where}: "${visible(m[0])}" - ${runs} runs of at most ${cap} carry only ${runs * cap} of the ${km}` });
+    }
+  }
+  if (name === 'runner_no_race') assert.ok(seen > 0, `${name}: no mid-week restart line was shown, so this invariant checked nothing`);
+  return out;
+});
