@@ -1038,10 +1038,18 @@ const RATE_FLAT_PCT = 0.05;
  */
 function leanRateText(input: GoalProgressInput, w: WeightBlock, abs: number, flat: boolean, dir: string, band: { minPct: number; maxPct: number } | null, span: string): string {
   if (flat) return `Trend weight flat over ${span}`;
+  const rateKg = Math.abs(w.rateKg as number);
+  const rate = `about ${fmtWeight(input, rateKg, 1)}/wk`;
   const oneDecimal = round1(abs);
   const crossesEdge = band != null && ((abs < band.minPct && oneDecimal >= band.minPct) || (abs >= band.maxPct && oneDecimal <= band.maxPct));
-  const pct = crossesEdge ? `${abs}%` : `about ${oneDecimal}%`;
-  return `Trend weight ${dir} about ${fmtWeight(input, Math.abs(w.rateKg as number), 1)}/wk (${pct} of bodyweight) over ${span}`;
+  // Wave 25s: ONE figure. The kg is rounded to 0.1, so the percent printed beside it ("about 0.1 kg/wk (about 0.2% of bodyweight)") disagreed with it: 0.1 kg is 0.12% of
+  // an 80 kg body, and the exact rate (0.15%) is not what the line shows. The percent appears only where the percent of the SHOWN figure rounds to the same one-decimal
+  // percent as the exact rate, and never beside a band edge (its tone is still decided on the exact number); otherwise the line is the kg alone, and the band tail
+  // ("on pace for lean gain (0.1–0.5% of bodyweight a week)") says what the range is.
+  const shownKg = weightNum(input, rateKg, 1) / (input.unitSystem === 'imperial' ? KG_TO_LB : 1);
+  const impliedPct = rateKg > 0 && w.pctBw != null ? (Math.abs(w.pctBw) * shownKg) / rateKg : null;
+  const consistent = !crossesEdge && impliedPct != null && round1(impliedPct) === oneDecimal;
+  return `Trend weight ${dir} ${rate}${consistent ? ` (about ${oneDecimal}% of bodyweight)` : ''} over ${span}`;
 }
 
 function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: number; maxPct: number } | null): GoalProgressReason | null {

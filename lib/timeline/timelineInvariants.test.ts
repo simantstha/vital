@@ -4089,30 +4089,8 @@ invariant(LIFTERS, 'P3-2: a week off then a session on the review\'s Monday: "to
   return out;
 });
 
-// ── P3-3. The lifter's weight-rate line (day 14-26): "about 0.1 kg/wk (0.16% of bodyweight)" had a rounded kg beside a 2-decimal percent that disagreed with it. Both
-// are "about" ("about 0.1 kg/wk (about 0.2% of bodyweight)"), and a flat trend quotes no figure at all ("flat 0.07 lb/wk" is just "flat").
-invariant(LIFTERS, 'P3-3: the weight-rate line says "about X kg/wk (about Y% of bodyweight)" for a gain and quotes no figure for a flat trend', (snaps, name) => {
-  const out: Violation[] = [];
-  let lines = 0;
-  for (const snap of snaps) {
-    const rate = snap.card?.reasons.find(r => r.kind === 'rate');
-    if (!rate) continue;
-    const text = plain(rate.text);
-    if (/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \(/.test(text)) {
-      lines++;
-      if (!/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \((?:about )?\d\.\d{1,2}% of bodyweight\) over /.test(text)) out.push({ snap, detail: `"${visible(rate.text)}"` });
-      const m = /\(about (\d\.\d)% of bodyweight\)/.exec(text);
-      const exact = /\((\d\.\d\d)% of bodyweight\)/.exec(text);
-      // The exact two-decimal figure survives only where one decimal would read as the other side of the 0.1 / 0.5 band edge (0.09 -> "0.1", 0.52 -> "0.5").
-      const v = exact ? Number(exact[1]) : NaN;
-      const edge = exact != null && ((v < 0.1 && Math.round(v * 10) / 10 >= 0.1) || (v >= 0.5 && Math.round(v * 10) / 10 <= 0.5));
-      if (!m && !edge) out.push({ snap, detail: `the percent is neither "about 0.2%" (one decimal) nor an exact figure at a band edge: "${visible(rate.text)}"` });
-    }
-    if (/^Trend weight flat \d/.test(text) || /^Trend weight flat [\d.]+ (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `a flat trend quotes a figure: "${visible(rate.text)}"` });
-  }
-  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(lines > 0, `${name}: no gain rate line appeared, so this invariant checked nothing`);
-  return out;
-});
+// ── P3-3. (The wave 24s invariant that lived here - "about X kg/wk (about Y% of bodyweight)" - is superseded by wave 25s G3-7 at the end of this file: the two figures
+// must not disagree (0.1 kg is 0.12%, not "about 0.2%"), so the percent is printed only where it rounds consistently with the kg beside it.)
 
 // ── P3-8. lifter_short_week day 57: "Progressing — Squat est. 1RM +9 kg" over an amber "11 of 16 planned sessions in 4 weeks (69%)". The "behind" call is made as of the last
 // day the window learned something (so it does not flip on a Tuesday with no news), the live count keeps sliding; under a Progressing headline the sessions line is
@@ -5294,5 +5272,71 @@ invariant(['weight_loss'], 'item 4: a user who logs no food is never told "Keep 
   const out = textMatches(snaps, allTexts, /daily snack — it['’]s your maintenance/);
   const said = snaps.filter(s => allTexts(s).some(t => /^Keep eating as you are, snack included — that['’]s your maintenance; if your average drifts/.test(plain(t.text)))).length;
   assert.ok(said > 0, `${name}: the settled non-logger wording never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// ── G3 (numbers polish) ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//   G3-7  the weight-rate line shows ONE figure per quantity, and the percent only where it rounds consistently with the shown kg
+//   G3-8  the 4-week delta: same bar, same number (see the investigation note at the end of this block)
+
+const round1_25s = (v: number): number => Math.round(v * 10) / 10;
+
+invariant(LIFTERS, '25s G3-7: the weight-rate line prints "(about Y% of bodyweight)" only where the percent of the SHOWN kg rounds to Y, else "about X kg/wk" alone; a flat trend quotes no figure', (snaps, name) => {
+  const out: Violation[] = [];
+  let printed = 0;
+  let dropped = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    const rate = card?.reasons.find(r => r.kind === 'rate');
+    if (!card || !rate) continue;
+    const text = plain(rate.text);
+    if (/^Trend weight flat \d/.test(text) || /^Trend weight flat [\d.]+ (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `a flat trend quotes a figure: "${visible(rate.text)}"` });
+    if (/, mostly from before the break/.test(text)) continue; // a rebuild's rate line is another builder
+    const m = /^Trend weight (?:up|down) about ([\d.]+) (kg|lb)\/wk(?: \(about (\d\.\d)% of bodyweight\))? over /.exec(text);
+    if (!/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk/.test(text)) continue;
+    if (!m) { out.push({ snap, detail: `"${visible(rate.text)}" is not "about X kg/wk (about Y% of bodyweight) over ..." or "about X kg/wk over ..."` }); continue; }
+    const pct = Math.abs(card.ratePerWeek.pctBodyweight ?? NaN);
+    const trendKg = card.current.weightKg;
+    if (!Number.isFinite(pct) || trendKg == null || trendKg <= 0) continue;
+    const shownKg = m[2] === 'lb' ? Number(m[1]) / LB_PER_KG_24S : Number(m[1]);
+    const implied = round1_25s((shownKg / trendKg) * 100);
+    // A percent one decimal off a band edge (0.09 -> "0.1" beside "slower than lean gain (0.1–0.5%)", 0.52 -> "0.5" beside "above the 0.5%") would read as the other side of it.
+    const edge = (pct < 0.1 && round1_25s(pct) >= 0.1) || (pct >= 0.5 && round1_25s(pct) <= 0.5);
+    const consistent = implied === round1_25s(pct) && !edge;
+    if (m[3] != null) {
+      printed++;
+      if (!consistent) out.push({ snap, detail: `"${visible(rate.text)}": ${m[1]} ${m[2]}/wk of a ${trendKg} kg body is ${implied}%, the exact rate is ${pct}%${edge ? ' (at a band edge)' : ''}: the two figures disagree` });
+      else if (Number(m[3]) !== round1_25s(pct)) out.push({ snap, detail: `"${visible(rate.text)}": the percent should be about ${round1_25s(pct)}% (exact ${pct}%)` });
+    } else {
+      dropped++;
+      if (consistent) out.push({ snap, detail: `"${visible(rate.text)}": the percent rounds consistently (${implied}% of ${trendKg} kg, exact ${pct}%) and should be shown` });
+    }
+  }
+  // (lifter: 0.1 kg beside an exact 0.15% - dropped - and 0.1 kg beside 0.12% - kept; lifter_imperial's lb figures happen to always agree.)
+  if (out.length === 0 && name === 'lifter') assert.ok(printed > 0 && dropped > 0, `${name}: ${printed} rate lines kept the percent and ${dropped} dropped it, so this invariant did not exercise both`);
+  if (out.length === 0 && name === 'lifter_imperial') assert.ok(printed + dropped > 0, `${name}: no gain rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// G3-8. INVESTIGATED, LEFT AS IT IS (wave 25s). The lifter's 4-week squat delta read "+10 kg" on days 28 / 35 ("126 → 136") and "+9 kg" on days 42 / 49 ("130 → 139") for the
+// same +7.5 kg on the bar. The scenario's sets are identical every week (5 reps at RPE 8, so e1RM = 1.2333 x the load): 7.5 kg x 1.2333 = 9.25 kg of e1RM both times. What differs is
+// where the endpoints fall on the whole-kg grid: 135.67 -> 136 less 126.42 -> 126 = 10, but 138.75 -> 139 less 129.50 -> 130 = 9. An estimated 1RM to 0.1 kg is false precision, so the
+// card prints whole-kg endpoints and the change between THEM (lib/liftChange.ts liftDisplayChange; the iOS mirror TrendsStrengthLogic.displayChange does the same), so "+10"
+// always sits beside "126 → 136". Rounding the change instead (+9 every week) would print "+9 kg (126 → 136)", which does not add up. It is honest rounding of one estimate, not
+// different set mixes and not a display bug, so the math and its iOS mirror are untouched. What stays pinned: a printed delta is always the difference of the printed endpoints.
+invariant(LIFTERS, '25s G3-8: a card lift delta is exactly the difference of the whole-kg endpoints printed beside it ("+10 kg vs 4 weeks ago (126 → 136 kg)")', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'lift') continue;
+      const m = /est\. 1RM ([+−-])(\d+) (?:kg|lb) vs [^()]+\((\d+) → (\d+) (?:kg|lb)\)/.exec(plain(r.text));
+      if (!m) continue;
+      checked++;
+      const delta = (m[1] === '+' ? 1 : -1) * Number(m[2]);
+      if (Number(m[4]) - Number(m[3]) !== delta) out.push({ snap, detail: `"${visible(r.text)}": ${m[4]} - ${m[3]} is ${Number(m[4]) - Number(m[3])}, not ${delta}` });
+    }
+  }
+  if (out.length === 0) assert.ok(checked > 10, `${name}: only ${checked} lift deltas were checked, so this invariant checked (almost) nothing`);
   return out;
 });
