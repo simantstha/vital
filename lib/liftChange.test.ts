@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   shiftDay,
-  DELOAD_CUE_HEAD, afterProactiveDeload, heavierLoadStreak, liftBaselineLabel, liftBaselineWeek, proactiveDeload,
+  DELOAD_CUE_HEAD, afterProactiveDeload, deloadCueHead, heavierLoadStreak, liftBaselineLabel, liftBaselineWeek, preDeloadLoads, proactiveDeload,
   cuedLifts, easedLoad, findRecentBreak, headlineLeader, isDeload, isDeloadWeek, isLiftProgressing, isLiftStalled, isLowerBodyCompound, latestTopLoadKg, liftChange4w,
   furthestBehindReturn, liftDisplayChange, liftDisplayName, liftLapseMinDays, liftLastBest, liftRecentEndWeek, liftRegressed, liftReturnDisplay, liftReturnState,
   liftReturnStates, liftShortName, liftTrainedAtWorkingWeight, liftWeekChangeDisplay, liftWeekOverWeek, nextLoadCues, nextWorkingLoad, pickHeadlineLift, pickWeekOverWeek, priorTopLoadKg, rankLifts, shortWeekLoadCues, shortWeekLoadToLift, weekOverWeekWording,
@@ -273,14 +273,23 @@ test('proactiveDeload: after 5 straight weeks of heavier loads, with the pre-del
   assert.equal(proactiveDeload({ squat }, '2026-09-21', { ...DELOAD_OPTS, rebuilding: true }), null);
   assert.equal(proactiveDeload({ squat: squat.map(w => ({ ...w, topLoadKg: null })) }, '2026-09-21', DELOAD_OPTS), null);
   assert.deepEqual(proactiveDeload({ squat }, '2026-09-21', { ...DELOAD_OPTS, imperial: true })?.resume.map(r => [r.load.from, r.load.unit]), [[248, 'lb']]);
-  assert.match(DELOAD_CUE_HEAD, /^Deload week: ~85–90% of last week's loads, 2 working sets$/);
+  assert.match(DELOAD_CUE_HEAD, /^Deload week: ~85–90% of last week's loads, 2 working sets$/); // (the lead-in when no load is known)
+  // Wave 25s: the cue prints the deload LOADS - 87.5% of the pre-deload top load on the plate grid (112.5 kg -> 98.4 -> ~97.5; 92.5 -> 80.9 -> ~80) - in the order of the resume list.
+  assert.deepEqual(cue?.loads, [{ key: 'squat', value: 97.5, unit: 'kg' }, { key: 'bench press', value: 80, unit: 'kg' }]);
+  assert.equal(deloadCueHead(cue as NonNullable<typeof cue>, (v, u) => `${v} ${u}`), 'Deload week: squat ~97.5 kg, bench ~80 kg, 2 working sets');
+  assert.deepEqual(proactiveDeload({ squat }, '2026-09-21', { ...DELOAD_OPTS, imperial: true })?.loads, [{ key: 'squat', value: 215, unit: 'lb' }]); // 248 lb x 0.875 = 217 -> 215
+  assert.equal(deloadCueHead({ weeks: 5, resume: [], loads: [] }, (v, u) => `${v} ${u}`), DELOAD_CUE_HEAD);
   // The deload week (09-28: 97.5 kg x 2 sets): back to the loads the cue named.
   const deload = ls('2026-09-28', 117, 2, { topLoadKg: 97.5, volumeKg: 1920 });
   const after = afterProactiveDeload({ squat: [...squat, deload] }, '2026-09-28', { imperial: false, leadKey: null });
   assert.deepEqual(after?.map(r => [r.key, r.load.from]), [['squat', 112.5]]);
-  // A deload she took on her own (flat loads before it) is not asked for: no promise to keep.
+  // A deload she took on her own (flat loads before it) is not asked for: no promise to keep ...
   const flat = climb([107.5, 107.5, 107.5, 107.5, 107.5, 107.5]);
   assert.equal(afterProactiveDeload({ squat: [...flat, deload] }, '2026-09-28', { imperial: false, leadKey: null }), null);
+  // ... but it goes back by the SAME rule (wave 25s): the loads she had lifted, no step.
+  assert.deepEqual(preDeloadLoads({ squat: [...flat, deload] }, '2026-09-28', { imperial: false, leadKey: null })?.map(r => [r.key, r.load.from]), [['squat', 107.5]]);
+  assert.deepEqual(preDeloadLoads({ squat: [...squat, deload] }, '2026-09-28', { imperial: false, leadKey: null })?.map(r => [r.key, r.load.from]), [['squat', 112.5]]);
+  assert.equal(preDeloadLoads({ squat: [...squat, ls('2026-09-28', 140, 2, { topLoadKg: 115, volumeKg: 3000 })] }, '2026-09-28', { imperial: false, leadKey: null }), null);
   // A week that was not a deload is not "after a deload".
   assert.equal(afterProactiveDeload({ squat: [...squat, ls('2026-09-28', 140, 2, { topLoadKg: 115, volumeKg: 3000 })] }, '2026-09-28', { imperial: false, leadKey: null }), null);
 });

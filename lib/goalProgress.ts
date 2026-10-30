@@ -107,6 +107,7 @@ import {
   stepHeadlineClause,
   stepRateTail,
   fmtWeekday,
+  weeklyRateText,
   weightWeekPlan,
   type WeightPlanPace,
   type WeightPlanStep,
@@ -122,7 +123,7 @@ import {
 } from './brain/weightSignals';
 import type { ProgressionSummary } from './workoutRepository';
 import {
-  DELOAD_CUE_HEAD,
+  deloadCueHead,
   EST_1RM_EXPLAINER,
   isDeloadWeek,
   isLiftProgressing,
@@ -1046,10 +1047,18 @@ const RATE_FLAT_PCT = 0.05;
  */
 function leanRateText(input: GoalProgressInput, w: WeightBlock, abs: number, flat: boolean, dir: string, band: { minPct: number; maxPct: number } | null, span: string): string {
   if (flat) return `Trend weight flat over ${span}`;
+  const rateKg = Math.abs(w.rateKg as number);
+  const rate = `about ${fmtWeight(input, rateKg, 1)}/wk`;
   const oneDecimal = round1(abs);
   const crossesEdge = band != null && ((abs < band.minPct && oneDecimal >= band.minPct) || (abs >= band.maxPct && oneDecimal <= band.maxPct));
-  const pct = crossesEdge ? `${abs}%` : `about ${oneDecimal}%`;
-  return `Trend weight ${dir} about ${fmtWeight(input, Math.abs(w.rateKg as number), 1)}/wk (${pct} of bodyweight) over ${span}`;
+  // Wave 25s: ONE figure. The kg is rounded to 0.1, so the percent printed beside it ("about 0.1 kg/wk (about 0.2% of bodyweight)") disagreed with it: 0.1 kg is 0.12% of
+  // an 80 kg body, and the exact rate (0.15%) is not what the line shows. The percent appears only where the percent of the SHOWN figure rounds to the same one-decimal
+  // percent as the exact rate, and never beside a band edge (its tone is still decided on the exact number); otherwise the line is the kg alone, and the band tail
+  // ("on pace for lean gain (0.1–0.5% of bodyweight a week)") says what the range is.
+  const shownKg = weightNum(input, rateKg, 1) / (input.unitSystem === 'imperial' ? KG_TO_LB : 1);
+  const impliedPct = rateKg > 0 && w.pctBw != null ? (Math.abs(w.pctBw) * shownKg) / rateKg : null;
+  const consistent = !crossesEdge && impliedPct != null && round1(impliedPct) === oneDecimal;
+  return `Trend weight ${dir} ${rate}${consistent ? ` (about ${oneDecimal}% of bodyweight)` : ''} over ${span}`;
 }
 
 function rateReason(input: GoalProgressInput, w: WeightBlock, band: { minPct: number; maxPct: number } | null): GoalProgressReason | null {
@@ -1679,7 +1688,7 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepTail?: string; about?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepTail?: string; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
   if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
@@ -1687,9 +1696,9 @@ function paceReason(
   const abs = round2(Math.abs(pace.pctPerWeek));
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
-  // The headline of an unconfirmed pace says "losing about 0.6 kg a week" (one decimal): the rate line is that very figure, "about 0.6 kg/wk", not a
-  // second rounding of it ("0.58") on the same card (wave 24w).
-  const perWeek = opts.about ? `about ${fmtWeight(input, Math.abs(pace.kgPerWeek))}` : fmtWeight(input, Math.abs(pace.kgPerWeek), 2);
+  // A single rate is one decimal, "about 0.9 kg/wk" (wave 25w, `weeklyRateText`): the same rule as the headline of an unconfirmed pace ("losing about 0.6 kg a week",
+  // wave 24w) and the figure the app's hero prints, never "0.85" one week and "0.9" the next. A range (below) keeps the two decimals the app recomposes.
+  const perWeek = weeklyRateText(input, pace.kgPerWeek);
   let text = `${dir} ${perWeek}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pace.kgPerWeek < 0) {
@@ -2019,12 +2028,10 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
   // Too fast is the week's call (lib/weightPace.ts tooFastLoss, hysteresis) — the very rate the headline quotes, never a
   // different window's — and a pace still between 0.9% and the ceiling keeps it, without calling that "safe".
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
-  // The headline quotes the rate ("losing about 0.6 kg a week") only for a pace nothing has confirmed yet: the rate line then says the same figure.
-  const quotesRate = !plan.confirmed && !plan.tooFast && !plan.nearlyThere && p.kgPerWeek < 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
   // While the easing step is the week's instruction (given or standing) a ceiling warning says where it is (wave 25w), never stands alone beside "Aim for ~2,150 kcal".
   const stepOn = plan.step != null && (plan.step.phase === 'given' || plan.step.phase === 'standing');
   const rate = paceReason(input, p, {
-    tooFast: plan.tooFast, about: quotesRate, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null,
+    tooFast: plan.tooFast, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null,
     stepTail: stepOn && plan.step != null ? stepRateTail(plan.step) : undefined,
   });
   const action = planActionReason(plan);
@@ -2056,7 +2063,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     if (plan.verdict === 'behind') {
       return {
         verdict: 'behind',
-        headline: clip(`Weight is up ${fmtWeight(input, p.kgPerWeek, 2)} a week, away from your target`),
+        headline: clip(`Weight is up ${weeklyRateText(input, p.kgPerWeek)} a week, away from your target`),
         reasons: build(rate),
       };
     }
@@ -2068,7 +2075,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     return {
       verdict: 'progressing',
       // "About" and one decimal (wave 23w): the 2-decimal rate stays on the rate line below, where it is the measurement.
-      headline: clip(`Progressing — losing about ${fmtWeight(input, Math.abs(p.kgPerWeek))} a week`),
+      headline: clip(`Progressing — losing ${weeklyRateText(input, p.kgPerWeek)} a week`),
       reasons: build(rate, action),
     };
   }
@@ -2522,8 +2529,20 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // The first 28 days' sessions line already says "This week 2 of 4": no second week count beside it.
   const young = isYoungGoal(input);
   const weekSessions = young ? null : muscleWeekSessionsReason(input);
+  // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach lines (they print the card).
+  // The same pure rule as the review, read for the last completed week - the lead lift first, as the review lists them, so the two print the same loads word for word;
+  // never while rebuilding after a break. Read up front (wave 25s): a short week inside it is the plan, not a miss.
+  const deloadCue = proactiveDeload(input.progression, addDays(weekStart(input.todayKey), -7), {
+    imperial: input.unitSystem === 'imperial',
+    leadKey: headlineLiftKey(input.progression, input.todayKey),
+    rebuilding: ret != null && furthestBehindReturn(rets.length > 0 ? rets : [ret]) != null,
+  });
   // The week can no longer reach its target: a watch line, and no "Progressing" headline over it.
   const weekShort = weekSessions?.tone === 'watch';
+  // In a deload week that line is neutral (wave 25s): rest is the plan. The same count without the "(last: ...)" that sounds like a warning; the headline says the rest.
+  const weekSessionsShown: GoalProgressReason | null = deloadCue != null && weekSessions?.tone === 'watch'
+    ? { kind: weekSessions.kind, text: weekSessionsReason(input)?.text ?? weekSessions.text, tone: 'neutral' }
+    : weekSessions;
   // ... and when it holds at most half the planned sessions (1 of 4, 2 of 4) it is a SLACK week: the card leads with the week, and colours
   // no lift or weight line green that the week did not produce (wave 23s).
   const sessionsThisWeek = sessionsDoneThisWeek(input);
@@ -2552,13 +2571,11 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   const explainer: GoalProgressReason | null = firstComparisonWeek(input) && leadLifts.some(r => r != null && r.text.includes('est. 1RM'))
     ? { kind: 'explainer', text: EST_1RM_EXPLAINER, tone: 'neutral' }
     : null;
-  // After 5 straight weeks of heavier loads the Monday review cues a deload week; the card says so all week (wave 24s P2-A), and so do the coach
-  // lines (they print the card). The same pure rule as the review, read for the last completed week; never while rebuilding after a break.
-  // It stays on a lapsed day too: the week's plan is still the deload.
-  const deloadLine: GoalProgressReason | null =
-    proactiveDeload(input.progression, addDays(weekStart(input.todayKey), -7), { imperial: input.unitSystem === 'imperial', leadKey: null, rebuilding: returnBreak != null }) != null
-      ? { kind: 'deload', text: DELOAD_CUE_HEAD, tone: 'neutral' }
-      : null;
+  // The deload cue (`deloadCue`, read above) rides the card all week, loads and all - "Deload week: squat ~97.5 kg, bench ~80 kg, deadlift ~115 kg, 2 working sets" - exactly
+  // the lead-in the review printed (wave 25s; it named only a percentage). It stays on a lapsed day too: the week's plan is still the deload.
+  const deloadLine: GoalProgressReason | null = deloadCue != null
+    ? { kind: 'deload', text: deloadCueHead(deloadCue, withUnit, input.exerciseDisplay), tone: 'neutral' }
+    : null;
   // A lapse is not a time to praise the scale either: the weight line is neutral and says so.
   const rateLapse = lapse ? lapseRateReason(input, w, rate, lapse.days) : rate;
   // ... nor a green weight line in a slack week (the scale moved; the sessions did not).
@@ -2573,7 +2590,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
         ...leadLifts,
         explainer,
         deloadLine,
-        weekSessions ?? sessions,
+        weekSessionsShown ?? sessions,
         ret ? returnBreak : young ? null : adherenceDemoted,
         reachLead,
         rateTop ? rateShown : null,
@@ -2584,7 +2601,7 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
       ])
     : capReasons([
         adherenceLow ? adherence : null,
-        weekShort ? weekSessions : null,
+        weekShort ? weekSessionsShown : null,
         ...leadLifts,
         explainer,
         deloadLine,
@@ -2648,6 +2665,10 @@ function muscleOutcome(input: GoalProgressInput, w: WeightBlock, ret: GoalLiftRe
   // and "sessions behind" keep their own headline.
   if (slackWeek && liftState && (liftState.verdict === 'holding' || liftState.verdict === 'progressing') && !lapse && !ret) {
     liftState = { verdict: 'holding', headline: `Week short — ${sessionsThisWeek} of ${weeklyTarget} so far` };
+  }
+  // ... and inside a deload week the same short week reads as the plan it is, not a miss (wave 25s; lifter_obedient days 45-48: an amber "Week short" beside "Deload week").
+  if (deloadCue != null && weekShort && weeklyTarget != null && liftState && (liftState.verdict === 'holding' || liftState.verdict === 'progressing') && !lapse && !ret) {
+    liftState = { verdict: 'holding', headline: `Deload week — ${sessionsThisWeek} of ${weeklyTarget} so far; rest is fine this week` };
   }
 
   // Reaching the weight target never hides training feedback: sessions behind

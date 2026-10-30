@@ -423,22 +423,24 @@ test('muscle: weight gain at/above the top of the band is a watch reason', () =>
   assert.match(rate!.text, /above the 0\.5% of bodyweight a week that keeps gain lean/);
 });
 
-test('a lifter\'s weight rate: kg and percent are both "about" (not "about 0.1 kg/wk (0.16% of bodyweight)"), a flat trend quotes no figure, a band edge keeps its exact percent (wave 24s)', () => {
+test('a lifter\'s weight rate: kg and percent are both "about", the percent only where it rounds consistently with the kg shown (wave 25s: "about 0.1 kg/wk (about 0.2% of bodyweight)" disagreed), a flat trend quotes no figure, a band edge shows no percent (waves 24s, 25s)', () => {
   const rate = (days: number, kgPerDay: number, over: Partial<GoalProgressInput> = {}) => computeGoalProgress(base({
     goal: 'muscle', target: { weightKg: null, date: null, weeklySessions: 4 }, weightReadings: ramp(days, 80, kgPerDay), ...over,
   })).reasons.find(r => r.kind === 'rate');
-  // 0.12 kg a week is 0.15% of 80 kg: the kg is rounded to 0.1, so the percent says "about" too, to one decimal.
-  assert.match(rate(21, 0.027)!.text, /^Trend weight up about 0\.1 kg\/wk \(about 0\.2% of bodyweight\) over \d+ days, on pace for lean gain \(0\.1–0\.5% of bodyweight a week\)$/);
+  // 0.12 kg a week is 0.15% of 80 kg: the kg is rounded to 0.1 and 0.1 kg is 0.12% of 80 kg - "about 0.2%" beside it would disagree (wave 25s), so the line is the kg alone.
+  assert.match(rate(21, 0.027)!.text, /^Trend weight up about 0\.1 kg\/wk over \d+ days, on pace for lean gain \(0\.1–0\.5% of bodyweight a week\)$/);
+  // Where the percent of the shown kg rounds to the same percent as the exact rate, it stays: 0.2 kg is 0.25% of 80 kg, exact 0.2x%.
   assert.match(rate(28, 0.04)!.text, /^Trend weight up about 0\.2 kg\/wk \(about 0\.2% of bodyweight\) over /);
   // A flat trend is "flat": no 0.03 kg/wk, no 0.04%, in kg or in pounds.
   assert.match(rate(12, 0.0005)!.text, /^Trend weight flat over \d+ days, slower than lean gain \(0\.1–0\.5% of bodyweight a week\)$/);
   assert.match(rate(12, 0.0005, { unitSystem: 'imperial' })!.text, /^Trend weight flat over \d+ days, slower than lean gain /);
   // Pounds: both "about" as well.
   assert.match(rate(21, 0.027, { unitSystem: 'imperial' })!.text, /^Trend weight up about 0\.3 lb\/wk \(about 0\.2% of bodyweight\) over /);
-  // Just under the 0.1% floor (0.09%) rounds to "0.1" and would read as inside the band next to "slower than lean gain": the exact percent stays.
-  assert.match(rate(28, 0.0145)!.text, /\(0\.09% of bodyweight\) over \d+ days, slower than lean gain/);
-  // Just over the 0.5% ceiling (0.51%) rounds to "0.5": the exact percent stays beside "above the 0.5% ... that keeps gain lean".
-  assert.match(rate(28, 0.0875)!.text, /\(0\.51% of bodyweight\) over \d+ days, above the 0\.5% of bodyweight a week that keeps gain lean/);
+  // Just under the 0.1% floor (0.09%) would round to "0.1" and read as inside the band next to "slower than lean gain": no percent (wave 25s; it printed the exact 0.09%
+  // beside a 0.1 kg that is 0.12%). The tone is still decided on the exact number.
+  assert.match(rate(28, 0.0145)!.text, /^Trend weight up about 0\.1 kg\/wk over \d+ days, slower than lean gain/);
+  // Just over the 0.5% ceiling (0.51%) would round to "0.5": no percent beside "above the 0.5% ... that keeps gain lean".
+  assert.match(rate(28, 0.0875)!.text, /^Trend weight up about 0\.4 kg\/wk over \d+ days, above the 0\.5% of bodyweight a week that keeps gain lean/);
 });
 
 test('muscle: ETA toward the target weight when gaining inside the band', () => {
@@ -2254,7 +2256,7 @@ test('after 5 straight weeks of heavier loads the goal card (and so the coach li
     const p = computeGoalProgress(deloadCardInput(today, { squat }));
     const line = p.reasons.find(r => r.kind === 'deload');
     assert.ok(line, `${today}: ${JSON.stringify(p.reasons)}`);
-    assert.equal(line.text, "Deload week: ~85–90% of last week's loads, 2 working sets");
+    assert.equal(line.text, 'Deload week: squat ~97.5 kg, 2 working sets'); // 87.5% of the reviewed week's 112.5 kg on the 2.5 kg grid (wave 25s: the loads, as the review prints them)
     assert.equal(line.tone, 'neutral');
     assert.ok(p.reasons.length <= 3);
   }
@@ -2521,21 +2523,26 @@ test('week 2 with weigh-ins: the 4-week lift trend start is announced — never 
 });
 
 test('weight rate: under 0.05% a week reads "flat" and every threshold uses the number as printed', () => {
-  const mk = (kgPerDay: number) => computeGoalProgress(base({
+  const mkProgress = (kgPerDay: number) => computeGoalProgress(base({
     goal: 'muscle',
     target: { weightKg: 90, date: null, weeklySessions: 4 },
     weightReadings: ramp(40, 80, kgPerDay),
-  })).reasons.find(r => r.kind === 'rate');
+  }));
+  const mk = (kgPerDay: number) => mkProgress(kgPerDay).reasons.find(r => r.kind === 'rate');
   assert.match(mk(0.002)!.text, /^Trend weight flat /);
   assert.doesNotMatch(mk(0.002)!.text, /opposite way/);
   assert.match(mk(-0.002)!.text, /^Trend weight flat /); // flat, not "down ... opposite way"
   assert.match(mk(-0.03)!.text, /opposite way/); // a real drop still is
   // Sweep through the 0.1% floor: when the printed percentage is at/above the floor, the text never says "under the floor".
   for (let i = 0; i <= 40; i += 1) {
-    const r = mk(0.009 + i * 0.0001);
+    const p = mkProgress(0.009 + i * 0.0001);
+    const r = p.reasons.find(x => x.kind === 'rate');
     if (!r) continue;
-    const printed = Number(/\((?:about )?([\d.]+)% of bodyweight\)/.exec(r.text)![1]);
-    if (printed >= 0.1) assert.doesNotMatch(r.text, /under the|slower than lean gain/, r.text);
+    // The percent is printed only where it is consistent with the kg beside it (wave 25s); the verdict wording follows the exact rate either way.
+    const exact = Math.abs(p.ratePerWeek.pctBodyweight as number);
+    const printed = /\((?:about )?([\d.]+)% of bodyweight\)/.exec(r.text);
+    if (printed) assert.ok(Number(printed[1]) === Math.round(exact * 10) / 10 || Number(printed[1]) === exact, r.text);
+    if (exact >= 0.1) assert.doesNotMatch(r.text, /under the|slower than lean gain/, r.text);
     else assert.match(r.text, /slower than lean gain \(0\.1–0\.5% of bodyweight a week\)|flat/, r.text);
   }
 });
@@ -2704,7 +2711,7 @@ test('A. one pace for every surface: ratePerWeek is the least-squares slope of t
   // Wave 21w: `current.weightKg` is the one displayed weight (the weekly average); the chart's lagging trend is `trendKg`, untouched.
   assert.ok(p.current.trendKg! - p.weightRead!.scaleKg! >= 0.5, 'the displayed trend line is untouched (still lagging the scale)');
   assert.equal(p.current.weightKg, p.weightRead!.weekMeanKg);
-  assert.match(p.reasons[0].text, /^Down 0\.7 kg\/wk \(0\.7\d% of bodyweight\) over the last 3 weeks, inside the 0\.25–1% safe band$/);
+  assert.match(p.reasons[0].text, /^Down about 0\.7 kg\/wk \(0\.7\d% of bodyweight\) over the last 3 weeks, inside the 0\.25–1% safe band$/);
 });
 
 /** A target of 80 kg with a 70-day-old goal; `date` is the target date. */
@@ -3537,10 +3544,10 @@ test('B3. behind pace projects the date whenever the scale is falling, and says 
   assert.equal(p.onPaceForTargetDate, false);
   const action = p.reasons.find(r => r.kind === 'action')!;
   // The trim is the ONE step (TRIM_STEP_KCAL, 150 kcal) a plateau uses too.
-  assert.match(action.text, /^To make Jan 4, 2027 you'd need ~0\.4\d kg\/wk — move the date or trim ~150 kcal a day \(to ~1,850 kcal\)$/);
+  assert.match(action.text, /^To make Jan 4, 2027 you'd need ~0\.4 kg\/wk — move the date or trim ~150 kcal a day \(to ~1,850 kcal\)$/);
   // No food log: activity and logging first, not a trim there is nothing to check against.
   const noLogs = computeGoalProgress({ ...input, intakeDays: [], intakeHistoryDays: undefined }).reasons.find(r => r.kind === 'action')!;
-  assert.match(noLogs.text, /^To make Jan 4, 2027 you'd need ~0\.4\d kg\/wk — move the date, or add two 30-minute walks and log a few days so we can see where the calories go$/);
+  assert.match(noLogs.text, /^To make Jan 4, 2027 you'd need ~0\.4 kg\/wk — move the date, or add two 30-minute walks and log a few days so we can see where the calories go$/);
   assert.doesNotMatch(noLogs.text, /trim/);
   // Unknown parts are omitted: no budget, no "(to ~... kcal)".
   const noBudget = computeGoalProgress({ ...input, budget: null }).reasons.find(r => r.kind === 'action')!;
@@ -3558,7 +3565,7 @@ test('B3. behind pace projects the date whenever the scale is falling, and says 
   assert.match(tight.reasons.find(r => r.kind === 'action')!.text, /faster than is comfortable to keep; move the date$/);
   // Imperial: lb and the same copy.
   const lb = computeGoalProgressRaw({ ...input, unitSystem: 'imperial' }).reasons.find(r => r.kind === 'action')!;
-  assert.match(lb.text, new RegExp(`~0\\.9\\d${NBSP}lb/wk`));
+  assert.match(lb.text, new RegExp(`~0\\.9${NBSP}lb/wk`)); // (wave 25w: one decimal)
   assertWellFormed(p);
 });
 

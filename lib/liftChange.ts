@@ -1000,6 +1000,18 @@ export interface DeloadCue {
   weeks: number;
   /** The loads she goes back to after the deload week: her pre-deload top load of every cued lift (`load.from`, as logged), the lead lift first. */
   resume: Array<{ key: string; load: NextLoad }>;
+  /** The deload week's own loads (wave 25s): DELOAD_CUE_LOAD_FRACTION (87.5%) of each `resume` lift's pre-deload top load on the 2.5 kg / 5 lb plate grid (`easedLoad`), same lifts, same order. */
+  loads: Array<{ key: string; value: number; unit: 'kg' | 'lb' }>;
+}
+
+/**
+ * The deload cue's lead-in WITH its loads (wave 25s; it used to name only a percentage, "~85–90% of last week's loads"): "Deload week: squat ~97.5 kg, bench ~80 kg,
+ * deadlift ~115 kg, 2 working sets". One function for the review's "Next week" and the goal card (and so the coach lines), so they cannot drift apart. `fmt` joins a value
+ * and its unit (the callers' non-breaking `withUnit`); without a known load the lead-in is the old generic `DELOAD_CUE_HEAD`.
+ */
+export function deloadCueHead(cue: DeloadCue, fmt: (value: number, unit: string) => string, display?: Record<string, string> | null): string {
+  if (cue.loads.length === 0) return DELOAD_CUE_HEAD;
+  return `Deload week: ${cue.loads.map(l => `${liftShortName(l.key, display)} ~${fmt(l.value, l.unit)}`).join(', ')}, 2 working sets`;
 }
 
 /**
@@ -1016,30 +1028,42 @@ export function proactiveDeload(
   if (opts.rebuilding) return null;
   const weeks = heavierLoadStreak(progression, reviewedWeekStart);
   if (weeks < DELOAD_CUE_STREAK_WEEKS) return null;
-  const resume = cuedLifts(progression, reviewedWeekStart, opts.leadKey).map(key => ({
-    key,
-    load: nextWorkingLoad(latestTopLoadKg(progression[key], reviewedWeekStart) as number, key, opts.imperial),
-  }));
-  return { weeks, resume };
+  const tops = cuedLifts(progression, reviewedWeekStart, opts.leadKey).map(key => ({ key, top: latestTopLoadKg(progression[key], reviewedWeekStart) as number }));
+  const resume = tops.map(({ key, top }) => ({ key, load: nextWorkingLoad(top, key, opts.imperial) }));
+  const loads = tops.map(({ key, top }) => ({ key, ...easedLoad(top, DELOAD_CUE_LOAD_FRACTION, opts.imperial) }));
+  return { weeks, resume, loads };
+}
+
+/**
+ * The loads to go back to after ANY deload week (wave 25s: ONE rule for a deload the app prescribed and one she chose herself): the pre-deload top load of every cued
+ * lift, as logged (`load.from`) - no step, the +2.5 kg follows the week after, from a load she has lifted again ("Back to full loads: Squat 107.5 kg, bench 85 kg").
+ * The conservative standard; it used to add the step for her own deload ("Squat 107.5 -> 110 kg") and stop at the loads for a prescribed one. Null when `deloadWeekStart`
+ * was not a deload week, or no pre-deload load is known.
+ */
+export function preDeloadLoads(
+  progression: Record<string, LiftWeekPoint[]>,
+  deloadWeekStart: string,
+  opts: { imperial: boolean; leadKey: string | null },
+): Array<{ key: string; load: NextLoad }> | null {
+  if (!isDeloadWeek(progression, deloadWeekStart)) return null;
+  const out = cuedLifts(progression, deloadWeekStart, opts.leadKey).flatMap(key => {
+    const pre = priorTopLoadKg(progression[key], deloadWeekStart, 4);
+    return pre == null ? [] : [{ key, load: nextWorkingLoad(pre, key, opts.imperial) }];
+  });
+  return out.length > 0 ? out : null;
 }
 
 /**
  * The review of the deload week itself: when the week before it was a proactive-deload cue (`proactiveDeload`) and `deloadWeekStart` was a lighter
- * week, the pre-deload top load of every cued lift, to go back to as the cue promised (`load.from`; the +2.5 kg follows the week after). Null when
- * the deload was not asked for (her own: "Back to full loads: Squat 107.5 -> 110 kg" keeps its step) or nothing is known.
+ * week, the loads to go back to as the cue promised (`preDeloadLoads`). Null when the deload was not asked for or nothing is known.
  */
 export function afterProactiveDeload(
   progression: Record<string, LiftWeekPoint[]>,
   deloadWeekStart: string,
   opts: { imperial: boolean; leadKey: string | null },
 ): Array<{ key: string; load: NextLoad }> | null {
-  if (!isDeloadWeek(progression, deloadWeekStart)) return null;
   if (proactiveDeload(progression, shiftDay(deloadWeekStart, -7), { ...opts, rebuilding: false }) == null) return null;
-  const out = cuedLifts(progression, deloadWeekStart, opts.leadKey).flatMap(key => {
-    const pre = priorTopLoadKg(progression[key], deloadWeekStart, 4);
-    return pre == null ? [] : [{ key, load: nextWorkingLoad(pre, key, opts.imperial) }];
-  });
-  return out.length > 0 ? out : null;
+  return preDeloadLoads(progression, deloadWeekStart, opts);
 }
 
 // ── Next week's loads after a short week ────────────────────────────────────

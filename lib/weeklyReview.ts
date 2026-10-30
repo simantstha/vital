@@ -28,9 +28,9 @@ import { localDayKey, weekDayKeys, weekStartKeyForDay } from './localDay';
 import { arrowPair, withUnit } from './displayText';
 import type { ProgressionSummary } from './workoutRepository';
 import {
-  afterProactiveDeload,
   cuedLifts,
-  DELOAD_CUE_HEAD,
+  DELOAD_CUE_STREAK_WEEKS,
+  deloadCueHead,
   EST_1RM_EXPLAINER,
   easedLoad,
   furthestBehindReturn,
@@ -55,7 +55,7 @@ import {
   nextWorkingLoad,
   pickHeadlineLift,
   pickWeekOverWeek,
-  priorTopLoadKg,
+  preDeloadLoads,
   proactiveDeload,
   rankLifts,
   shortWeekLoadCues,
@@ -638,7 +638,7 @@ function dayGrades(input: WeeklyReviewInput, week: Week): DayGrades | null {
   const plan = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
   const up = plan != null && plan.loKcal != null && plan.loKcal > target;
   const following = up && (plan.phase === 'given' || plan.phase === 'standing');
-  const before = !up ? all : following && plan.outcome == null ? all.filter(d => d.day < plan.since) : [];
+  const before = budgetGradedDays(input, week, all);
   const onStep = following ? all.filter(d => d.day >= plan.since) : [];
   const lo = plan?.loKcal ?? 0;
   const hi = plan?.hiKcal ?? lo;
@@ -649,6 +649,18 @@ function dayGrades(input: WeeklyReviewInput, week: Week): DayGrades | null {
     step: onStep.length > 0 && plan != null ? { loKcal: lo, since: plan.since, reached: onStep.filter(d => stepDayReached(d.kcal as number, lo, hi)).length, logged: onStep.length } : null,
     allLogged: all.length,
   };
+}
+
+/**
+ * The logged days graded against the calorie BUDGET: every logged day without an eat-more step, the days before the step began while it is given or standing and no
+ * read has moved the level (after a read the level before the latest notch is not known here), none otherwise. Shared by `dayGrades` and the "name your busiest days" tip.
+ */
+function budgetGradedDays(input: WeeklyReviewInput, week: Week, all = loggedIntake(input.intakeDays, week)): GoalProgressIntakeDay[] {
+  const target = input.budget?.targetKcal;
+  const plan = input.goal === 'weight_loss' ? input.weightPlan?.step : null;
+  const up = target != null && plan != null && plan.loKcal != null && plan.loKcal > target;
+  const following = up && plan != null && (plan.phase === 'given' || plan.phase === 'standing');
+  return !up ? all : following && plan != null && plan.outcome == null ? all.filter(d => d.day < plan.since) : [];
 }
 
 /** The budget days of the week (the rating and the budget gap grade these); null without a target or under MIN_INTAKE_DAYS of them. */
@@ -2241,11 +2253,29 @@ function calorieTarget(input: WeeklyReviewInput): string {
   return target != null && target > 0 ? `your ${withUnit(fmtKcal(target), 'kcal')} target` : 'your calorie target';
 }
 
+/** The (up to) two logged days of the week that ran furthest over the calorie target - "Tuesday", "Sunday" - in week order: the days most likely to run over again. */
+function busiestDayNames(input: WeeklyReviewInput, week: Week): string[] {
+  const target = input.budget?.targetKcal;
+  if (target == null || target <= 0) return [];
+  return budgetGradedDays(input, week)
+    .filter(d => (d.kcal as number) > target * CALORIE_ADHERENCE_TOLERANCE)
+    .sort((a, b) => (b.kcal as number) - (a.kcal as number) || (a.day < b.day ? -1 : 1))
+    .slice(0, 2)
+    .map(d => d.day)
+    .sort()
+    .map(day => WEEKDAY_NAMES[week.days.indexOf(day)])
+    .filter((n): n is (typeof WEEKDAY_NAMES)[number] => n != null);
+}
+
 /** Weight loss, a week over budget: the weekend plan alternates with other ways in, so it is never the tip two weeks running. */
-function budgetTips(input: WeeklyReviewInput, weekendHigh: boolean): string[] {
+function budgetTips(input: WeeklyReviewInput, week: Week, weekendHigh: boolean): string[] {
   const target = input.budget?.targetKcal;
   const plan = 'Pick the two days most likely to run over and plan those meals ahead.';
-  const written = 'Log your meals before you eat them on your two busiest days — a plan on paper is easier to follow.';
+  // Wave 25w: the days are NAMED from the logs ("Log Tuesday's and Sunday's meals before you eat them."); with no day over the target to name, the earlier weekend-meal tip.
+  const busiest = busiestDayNames(input, week);
+  const written = busiest.length > 0
+    ? `Log ${busiest.map(n => `${n}'s`).join(' and ')} meals before you eat them.`
+    : 'Pick the weekend meal most likely to run over and decide it ahead of time.';
   const goTo = target != null && target > 0
     ? `Keep one go-to dinner that fits your ${withUnit(fmtKcal(target), 'kcal')} day and use it on your busiest night.`
     : 'Keep one go-to dinner that fits your calorie target and use it on your busiest night.';
@@ -2650,22 +2680,25 @@ function slackWeekWin(input: WeeklyReviewInput, week: Week, cands: Candidate[]):
 
 /**
  * The win line of a deload week (muscle goal; a runner's 'light' week is a rest week, not a deload). "As planned" only when the week before
- * asked for a lighter week; after 3+ straight weeks of heavier loads it names the timing; otherwise it just says the lighter week is done.
- * A deload the app itself prescribed (`proactiveDeload`: 5 straight weeks of heavier loads) is praised for its timing, the weeks counted by the
- * same rule that cued it - "good timing after 5 straight weeks of heavier loads", not a bare "as planned" (wave 24s).
+ * asked for a lighter week; otherwise the straight weeks of heavier loads it followed are counted by the rule that cues a deload (`heavierLoadStreak`).
+ * A deload the app itself prescribed (`proactiveDeload`: 5 straight weeks of heavier loads) is praised for its timing - "good timing after 5 straight
+ * weeks of heavier loads", not a bare "as planned" (wave 24s). "Good timing" is said only from that trigger up (wave 25s): a deload she chose herself after
+ * 3 or 4 straight weeks is just stated ("after 3 straight weeks of heavier loads"), because the app would not have cued one yet and calling it good timing
+ * contradicts its own 5-week rule.
  */
 function deloadWin(input: WeeklyReviewInput, week: Week): string {
   const climbing = weeksOfHeavierLoads(input, week);
   const prescribed = proactiveDeload(input.progression, addDays(week.days[0], -7), { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: false }) != null;
   // "As planned" only when last week's "Next week" asked for a lighter week; else the timing: after weeks of heavier loads it was a good call.
   if (!prescribed && input.previousNextWeek && /lighter|deload|ease back/i.test(input.previousNextWeek)) return 'Deload week done — lighter loads, as planned.';
-  return climbing >= DELOAD_TIMING_MIN_WEEKS
-    ? `Deload week done — lighter loads, good timing after ${climbing} straight weeks of heavier loads.`
+  if (climbing >= DELOAD_CUE_STREAK_WEEKS) return `Deload week done — lighter loads, good timing after ${climbing} straight weeks of heavier loads.`;
+  return climbing >= DELOAD_COUNT_MIN_WEEKS
+    ? `Deload week done — lighter loads, after ${climbing} straight weeks of heavier loads.`
     : 'Deload week done — lighter loads.';
 }
 
-/** Straight weeks of heavier loads before a deload that earn the "good timing" note. */
-const DELOAD_TIMING_MIN_WEEKS = 3;
+/** Straight weeks of heavier loads before a deload that are worth stating as a fact (the "good timing" note starts at DELOAD_CUE_STREAK_WEEKS, the deload trigger). */
+const DELOAD_COUNT_MIN_WEEKS = 3;
 
 /** Straight weeks of heavier loads just before the reviewed one (0 when the week before it did not step up): the rule that cues the deload (lib/liftChange.ts `heavierLoadStreak`). */
 function weeksOfHeavierLoads(input: WeeklyReviewInput, week: Week): number {
@@ -2697,34 +2730,25 @@ function loadsList(input: WeeklyReviewInput, entries: Array<{ key: string; load:
 }
 
 /**
- * After a deload week: back to the pre-deload working weights, plus the usual step, for every main lift trained ("Back to full loads: Squat
- * 107.5 → 110 kg, bench 85 → 86.5 kg."). Null without a known load. A deload the app asked for (`proactiveDeload`) goes back to exactly the
- * loads that cue named - "Back to full loads: Squat 112.5 kg, bench 92.5 kg" - and the step follows the week after (wave 24s).
+ * After a deload week: back to the pre-deload working weights, for every main lift trained ("Back to full loads: Squat 107.5 kg, bench 85 kg and deadlift 125 kg."). ONE rule
+ * for a deload the app prescribed and one she chose herself (wave 25s; her own used to add the step, "Squat 107.5 → 110 kg", while the prescribed one went back to the named
+ * loads): the loads she has lifted, no step - the +2.5 kg follows the week after, from a load she has lifted again. Null without a known load.
  */
 function afterDeloadNextWeek(input: WeeklyReviewInput, week: Week): string | null {
-  const asked = afterProactiveDeload(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week) });
-  if (asked) return `Back to full loads: ${loadsList(input, asked)}.`;
-  const keys = cuedLifts(input.progression, week.days[0], reviewLiftKey(input, week))
-    .filter(key => priorTopLoadKg(input.progression[key], week.days[0], 4) != null);
-  if (keys.length === 0) return null;
-  const names = liftNames(input, keys);
-  const parts = keys.map((key, i) => {
-    const pre = priorTopLoadKg(input.progression[key], week.days[0], 4) as number;
-    return `${names[i]} ${loadPairText(nextWorkingLoad(pre, key, isImperial(input)))}`;
-  });
-  return `Back to full loads: ${parts.join(', ')}.`;
+  const loads = preDeloadLoads(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week) });
+  return loads ? `Back to full loads: ${loadsList(input, loads)}.` : null;
 }
 
 /**
  * The proactive deload cue (wave 24s): after 5 straight weeks of heavier loads (lib/liftChange.ts `proactiveDeload`) the next week is a deload,
- * not a sixth step - "Deload week: ~85–90% of last week's loads, 2 working sets — then back to squat 112.5 kg, bench 92.5 kg and deadlift
- * 132.5 kg." The goal card carries the same lead-in all week (`DELOAD_CUE_HEAD`). Null when the run is shorter, while
- * rebuilding after a break, or without a known load.
+ * not a sixth step - "Deload week: squat ~97.5 kg, bench ~80 kg, deadlift ~115 kg, 2 working sets — then back to squat 112.5 kg, bench 92.5 kg and deadlift
+ * 132.5 kg." The loads are printed, not a percentage (wave 25s); the goal card carries the same lead-in all week (`deloadCueHead`). Null when the run is shorter,
+ * while rebuilding after a break, or without a known load.
  */
 function deloadCueNextWeek(input: WeeklyReviewInput, week: Week): string | null {
   const cue = proactiveDeload(input.progression, week.days[0], { imperial: isImperial(input), leadKey: reviewLiftKey(input, week), rebuilding: stillRebuilding(input) });
   if (!cue) return null;
-  return `${DELOAD_CUE_HEAD} — then back to ${cue.resume.length > 0 ? loadsList(input, cue.resume, true) : 'full loads'}.`;
+  return `${deloadCueHead(cue, withUnit, input.exerciseDisplay)} — then back to ${cue.resume.length > 0 ? loadsList(input, cue.resume, true) : 'full loads'}.`;
 }
 
 /**
@@ -2856,12 +2880,12 @@ function easeBackInNextWeek(input: WeeklyReviewInput, week: Week, target: number
   if (back != null) {
     const off = weeksOffRunning(input, week);
     const keep = back.lifts.length > 0;
-    const goal = off >= 2 ? `build back toward ${target} a week` : keep ? `make it ${target} sessions` : `make it ${target} this week`;
-    const tail = `${goal}, adding load only when every set feels solid.`;
-    if (!keep) return `${alreadyBackLead(back)}; ${tail}`;
+    // Loads she is told to KEEP are not also told to grow ("Keep these loads this week: ..., adding load only when every set feels solid" said both - wave 25s).
+    if (!keep) return `${alreadyBackLead(back)}; ${off >= 2 ? `build back toward ${target} a week` : `make it ${target} this week`}, adding load only when every set feels solid.`;
+    const goal = off >= 2 ? `build back toward ${target} ${plural(target, 'session')}` : `make it ${target} ${plural(target, 'session')}`;
     return back.remaining.length > 0
-      ? `${alreadyBackLead(back)}; ${remainingLoadsText(back)}. Keep these loads this week: ${tail}`
-      : `${alreadyBackLead(back)}; keep these loads this week: ${tail}`;
+      ? `${alreadyBackLead(back)}; ${remainingLoadsText(back)}. Keep these loads this week and ${goal}.`
+      : `${alreadyBackLead(back)}; keep these loads this week and ${goal}.`;
   }
   const loads = easedLoadsText(input, week);
   const weights = loads ? ` (${loads})` : '';
@@ -2933,7 +2957,7 @@ function gapNextWeek(input: WeeklyReviewInput, gap: WeekGap, week: Week, prevWee
     case 'phase': return windDownNextWeek(input, week) ?? fallbackNextWeek(input, week);
     case 'budget':
       return input.goal === 'weight_loss'
-        ? rotateTip(input, week, budgetTips(input, false))
+        ? rotateTip(input, week, budgetTips(input, week, false))
         : 'Pick the two days most likely to run over and plan those meals ahead.';
     case 'protein': return 'Add a protein-first breakfast so the day starts ahead of your target.';
     case 'weight':
@@ -2982,7 +3006,7 @@ function buildNextWeek(input: WeeklyReviewInput, cands: Candidate[], week: Week,
 
 /** The weekend-plan tip: rotated for weight loss (it alternates with other tips), the one fixed line for muscle. */
 function weekendTip(input: WeeklyReviewInput, week: Week): string {
-  return input.goal === 'weight_loss' ? rotateTip(input, week, budgetTips(input, true)) : WEEKEND_NEXT_WEEK;
+  return input.goal === 'weight_loss' ? rotateTip(input, week, budgetTips(input, week, true)) : WEEKEND_NEXT_WEEK;
 }
 
 function buildNextWeekRaw(input: WeeklyReviewInput, cands: Candidate[], week: Week, prevWeek: Week, assessment: WeekAssessment): string {
@@ -3126,6 +3150,9 @@ function returnWeekWeighIns(input: WeeklyReviewInput, week: Week): number {
   return prev != null && dayNumber(inWeek[0].day) - dayNumber(prev) - 1 >= WEIGH_IN_GAP_DAYS ? inWeek.length : 0;
 }
 
+/** "Next week" of a return week's review (the first weigh-ins after a gap of 7+ days): the one thing to do. */
+const RETURN_WEEK_NEXT_WEEK = 'Weigh in a couple of mornings this week — your review fills in next Monday.';
+
 function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysWithData: number, statCount: number): WeeklyReview {
   // A weight-loss user who has weighed in before but not once last week (wave 23w): say what is missing and that the plan waits for it.
   const noWeighIns = input.goal === 'weight_loss' && input.weightReadings.length > 0 && weekWeighIns(input, week).length === 0;
@@ -3142,7 +3169,10 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
     stats: [],
     win: null,
     slip: null,
-    nextWeek: noWeighIns ? 'Weigh in on a few mornings this week and your plan picks up from where it left off.' : emptyReviewNextWeek(input, week, prevWeek),
+    // A return week (wave 25w) is one line, not the list of every gap (weigh-ins, meals, workouts): the way back is to weigh in, and the review fills in on its own.
+    nextWeek: noWeighIns
+      ? 'Weigh in on a few mornings this week and your plan picks up from where it left off.'
+      : returned > 0 ? RETURN_WEEK_NEXT_WEEK : emptyReviewNextWeek(input, week, prevWeek),
     dataSufficiency: { daysWithData, statCount, sufficient: false },
   };
 }

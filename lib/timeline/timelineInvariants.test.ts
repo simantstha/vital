@@ -1369,7 +1369,10 @@ invariant(LIFTERS, 'a week whose missing sessions no longer fit (too few days le
     if (weekFitsTarget(done, target, daysLeft, trained.has(snap.date))) continue;
     flagged++;
     const wk = snap.card.reasons.find(r => r.kind === 'week_sessions');
-    if (snap.card.verdict === 'progressing' || wk?.tone !== 'watch') {
+    // (Wave 25s: inside a deload-cue week that same short week is the plan, so the line is NEUTRAL and the headline says so - "Deload week — 1 of 4 so far; rest is fine this week".
+    // Still never "Progressing".)
+    const wanted = inDeloadCueWeek25s(snaps, snap.date) ? wk?.tone === 'neutral' && DELOAD_SHORT_HEADLINE_25S.test(plain(snap.card.headline)) : wk?.tone === 'watch';
+    if (snap.card.verdict === 'progressing' || !wanted) {
       out.push({ snap, detail: `${done} of ${target} sessions, ${daysLeft} day(s) left${trained.has(snap.date) ? ' (one trained today)' : ''}, the missing ones no longer fit, but verdict ${snap.card.verdict}, week line "${visible(wk?.text ?? '(none)')}" (${wk?.tone}): "${visible(snap.card.headline)}"` });
     }
   }
@@ -2563,7 +2566,9 @@ const liftWord = (w: string): string => (/^bench/i.test(w) ? 'bench' : w.toLower
 
 /** Every load a text names for a lift: the load to lift (the arrow's right side, else the single number). */
 function loadMentions(text: string): Array<{ lift: string; load: number; unit: string; raw: string }> {
-  return [...plain(text).matchAll(LOAD_MENTION)].map(m => ({ lift: liftWord(m[1]), load: Number(m[4] ?? m[3]), unit: m[5], raw: m[0] }));
+  // (Wave 25s: a deload cue names the deload loads and, after "— then back to", the loads of the week AFTER it - two loads for one lift on purpose. The deload loads are held to
+  // one per lift per day here; the loads it goes back to are pinned by the P2-A and 25s G2-3 invariants against what she then lifts.)
+  return [...plain(text).split(' — then back to')[0].matchAll(LOAD_MENTION)].map(m => ({ lift: liftWord(m[1]), load: Number(m[4] ?? m[3]), unit: m[5], raw: m[0] }));
 }
 
 invariant(LIFTERS, 'one load per lift per day: no two texts of the same day name different loads for the same lift', (snaps) => {
@@ -2661,7 +2666,7 @@ invariant(LIFTERS, 'in a slack week (at most half the sessions, week out of reac
     if (!card || !slack) continue;
     days++;
     const headline = plain(card.headline);
-    if (card.liftReturn == null && !/^No sessions for/.test(headline) && card.verdict !== 'behind' && !SESSIONS_RE_WEEK.test(headline)) {
+    if (card.liftReturn == null && !/^No sessions for/.test(headline) && card.verdict !== 'behind' && !SESSIONS_RE_WEEK.test(headline) && !(inDeloadCueWeek25s(snaps, snap.date) && DELOAD_SHORT_HEADLINE_25S.test(headline))) {
       out.push({ snap, detail: `${slack.done} of ${slack.target} sessions, week out of reach: headline "${visible(card.headline)}" should lead with the week ("Week short — ${slack.done} of ${slack.target} so far")` });
     }
     for (const r of card.reasons) {
@@ -4084,30 +4089,8 @@ invariant(LIFTERS, 'P3-2: a week off then a session on the review\'s Monday: "to
   return out;
 });
 
-// ── P3-3. The lifter's weight-rate line (day 14-26): "about 0.1 kg/wk (0.16% of bodyweight)" had a rounded kg beside a 2-decimal percent that disagreed with it. Both
-// are "about" ("about 0.1 kg/wk (about 0.2% of bodyweight)"), and a flat trend quotes no figure at all ("flat 0.07 lb/wk" is just "flat").
-invariant(LIFTERS, 'P3-3: the weight-rate line says "about X kg/wk (about Y% of bodyweight)" for a gain and quotes no figure for a flat trend', (snaps, name) => {
-  const out: Violation[] = [];
-  let lines = 0;
-  for (const snap of snaps) {
-    const rate = snap.card?.reasons.find(r => r.kind === 'rate');
-    if (!rate) continue;
-    const text = plain(rate.text);
-    if (/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \(/.test(text)) {
-      lines++;
-      if (!/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk \((?:about )?\d\.\d{1,2}% of bodyweight\) over /.test(text)) out.push({ snap, detail: `"${visible(rate.text)}"` });
-      const m = /\(about (\d\.\d)% of bodyweight\)/.exec(text);
-      const exact = /\((\d\.\d\d)% of bodyweight\)/.exec(text);
-      // The exact two-decimal figure survives only where one decimal would read as the other side of the 0.1 / 0.5 band edge (0.09 -> "0.1", 0.52 -> "0.5").
-      const v = exact ? Number(exact[1]) : NaN;
-      const edge = exact != null && ((v < 0.1 && Math.round(v * 10) / 10 >= 0.1) || (v >= 0.5 && Math.round(v * 10) / 10 <= 0.5));
-      if (!m && !edge) out.push({ snap, detail: `the percent is neither "about 0.2%" (one decimal) nor an exact figure at a band edge: "${visible(rate.text)}"` });
-    }
-    if (/^Trend weight flat \d/.test(text) || /^Trend weight flat [\d.]+ (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `a flat trend quotes a figure: "${visible(rate.text)}"` });
-  }
-  if (name === 'lifter' || name === 'lifter_imperial') assert.ok(lines > 0, `${name}: no gain rate line appeared, so this invariant checked nothing`);
-  return out;
-});
+// ── P3-3. (The wave 24s invariant that lived here - "about X kg/wk (about Y% of bodyweight)" - is superseded by wave 25s G3-7 at the end of this file: the two figures
+// must not disagree (0.1 kg is 0.12%, not "about 0.2%"), so the percent is printed only where it rounds consistently with the kg beside it.)
 
 // ── P3-8. lifter_short_week day 57: "Progressing — Squat est. 1RM +9 kg" over an amber "11 of 16 planned sessions in 4 weeks (69%)". The "behind" call is made as of the last
 // day the window learned something (so it does not flip on a Tuesday with no news), the live count keeps sliding; under a Progressing headline the sessions line is
@@ -4267,19 +4250,27 @@ invariant(LIFTERS, 'P2-A: after 5 consecutive step-up cues the next review (of a
   return out;
 });
 
-invariant(LIFTERS, 'P2-A: the card and the coach lines carry the deload cue on every day of the week the review cued it, and on no other day', (snaps, name) => {
+// (Wave 25s: the cue's lead-in names the deload LOADS now - "Deload week: squat ~97.5 kg, bench ~80 kg, deadlift ~115 kg, 2 working sets" - so the card and the coach lines must
+// carry exactly the lead-in the review printed, word for word; it used to be one fixed sentence.)
+const deloadHead25s = (nextWeek: string): string => plain(nextWeek).split(' — then back to')[0];
+
+invariant(LIFTERS, 'P2-A: the card and the coach lines carry the deload cue on every day of the week the review cued it (exactly the lead-in the review printed), and on no other day', (snaps, name) => {
   const out: Violation[] = [];
-  const deloadWeeks = reviewSnaps24s(snaps).filter(s => cueKind24s((s.review as NonNullable<DaySnapshot['review']>).review.nextWeek) === 'deload').map(s => s.date);
-  const inDeloadWeek = (date: string): boolean => deloadWeeks.some(m => date >= m && date <= addDays(m, 6));
+  const cued = reviewSnaps24s(snaps).filter(s => cueKind24s((s.review as NonNullable<DaySnapshot['review']>).review.nextWeek) === 'deload');
+  const headOf = (date: string): string | null => {
+    const c = cued.find(s => date >= s.date && date <= addDays(s.date, 6));
+    return c ? deloadHead25s((c.review as NonNullable<DaySnapshot['review']>).review.nextWeek) : null;
+  };
   let checked = 0;
   for (const snap of snaps) {
     if (!snap.card) continue;
     const cardLine = snap.card.reasons.find(x => x.kind === 'deload');
     const coachLine = (snap.coach ?? []).some(t => /Deload week:/.test(plain(t)));
-    if (inDeloadWeek(snap.date)) {
+    const head = headOf(snap.date);
+    if (head != null) {
       checked++;
-      if (!cardLine || !/^Deload week: ~85–90% of last week's loads, 2 working sets$/.test(plain(cardLine.text))) out.push({ snap, detail: `deload-cue week, but the card has: ${JSON.stringify(snap.card.reasons.map(x => x.text))}` });
-      if (!coachLine) out.push({ snap, detail: 'deload-cue week, but the coach goal lines do not mention it' });
+      if (!cardLine || plain(cardLine.text) !== head) out.push({ snap, detail: `deload-cue week, the review said "${head}", but the card has: ${JSON.stringify(snap.card.reasons.map(x => x.text))}` });
+      if (!coachLine || !(snap.coach ?? []).some(t => plain(t).includes(head))) out.push({ snap, detail: `deload-cue week, but the coach goal lines do not carry "${head}"` });
     } else if (cardLine || coachLine) {
       out.push({ snap, detail: `no deload was cued for this week, but the card / coach says "${visible(cardLine?.text ?? 'coach line')}"` });
     }
@@ -5067,6 +5058,192 @@ invariant(LIFTERS, '25s G1-2: a review lift delta reads "last wk vs wk of X" exa
   return out;
 });
 
+// ── G2 (instructions) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//   G2-3  the deload cue prints the LOADS on the plate grid, not a percentage, and she then lifts exactly those
+//   G2-4  no "keep these loads ... adding load" in one breath
+//   G2-5  ONE post-deload rule (resume the pre-deload loads, no step), and "good timing" only at the deload trigger (5 straight weeks)
+//   G2-6  in a deload week a short week is neutral
+
+/** The Mondays whose review cued a deload week: the card and the coach lines carry the cue Monday to Sunday after it. */
+function deloadCueMondays25s(snaps: DaySnapshot[]): string[] {
+  return reviewSnaps24s(snaps).filter(x => cueKind24s((x.review as NonNullable<DaySnapshot['review']>).review.nextWeek) === 'deload').map(x => x.date);
+}
+const inDeloadCueWeek25s = (snaps: DaySnapshot[], date: string): boolean => deloadCueMondays25s(snaps).some(m => date >= m && date <= addDays(m, 6));
+/** A short week inside a deload-cue week: the plan, not a miss. */
+const DELOAD_SHORT_HEADLINE_25S = /^Deload week — \d+ of \d+ so far; rest is fine this week$/;
+
+const DELOAD_HEAD_25S = /^Deload week: ((?:(?:squat|bench|deadlift) ~\d+(?:\.\d+)? (?:kg|lb)(?:, (?=(?:squat|bench|deadlift) ~))?)+), 2 working sets$/;
+
+invariant(['lifter_obedient'], '25s G2-3: the deload cue prints the deload loads on the plate grid ("squat ~97.5 kg, bench ~80 kg, deadlift ~115 kg, 2 working sets"): 87.5% of the loads she lifted, for the lifts it then sends her back to, and she lifts exactly those', (snaps, name) => {
+  const out: Violation[] = [];
+  let cues = 0;
+  let followed = 0;
+  for (const snap of reviewSnaps24s(snaps)) {
+    const r = (snap.review as NonNullable<DaySnapshot['review']>).review;
+    if (cueKind24s(r.nextWeek) !== 'deload') continue;
+    cues++;
+    const head = deloadHead25s(r.nextWeek);
+    const m = DELOAD_HEAD_25S.exec(head);
+    if (!m) { out.push({ snap, detail: `the lead-in "${head}" names no deload loads (a percentage is not a load)` }); continue; }
+    const printed = new Map<string, number>();
+    for (const x of m[1].matchAll(/(squat|bench|deadlift) ~(\d+(?:\.\d+)?) kg/g)) printed.set(LIFT_EXERCISE_24S[x[1]], Number(x[2]));
+    const resume = plainLoads24s(r.nextWeek.slice(r.nextWeek.indexOf('then back to')));
+    if ([...printed.keys()].sort().join() !== [...resume.keys()].sort().join()) out.push({ snap, detail: `the deload names ${[...printed.keys()].join(', ')} but "then back to" names ${[...resume.keys()].join(', ')}` });
+    const ill = snap.date >= OBEDIENT_ILL_START && snap.date <= OBEDIENT_ILL_END; // the ill week cannot follow a cue
+    for (const [exercise, load] of printed) {
+      const before = weekTopKg24s(name, exercise, r.weekStart);
+      const want = before == null ? null : Math.round((before * 0.875) / 2.5) * 2.5;
+      if (want == null || load !== want) out.push({ snap, detail: `${exercise}: the cue prints ~${load} kg, 87.5% of her ${before} kg on the 2.5 kg grid is ${want}` });
+      if (ill) continue;
+      followed++;
+      const during = weekTopKg24s(name, exercise, snap.date);
+      if (during !== load) out.push({ snap, detail: `${exercise}: the cue prints ~${load} kg, she lifted ${during ?? 'nothing'} kg in the week of ${snap.date}` });
+    }
+  }
+  if (out.length === 0) assert.ok(cues > 0 && followed > 0, `${name}: no deload cue was followed, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(LIFTERS, '25s G2-4: a review never says "keep these loads" and "adding load" in one breath', (snaps, name) => {
+  const out: Violation[] = [];
+  let kept = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const text = plain(r.nextWeek);
+    if (/keep these loads/i.test(text) && /adding load/i.test(text)) out.push({ snap, detail: `"${visible(r.nextWeek)}" keeps the loads and adds load` });
+    if (/Keep these loads this week and (?:build back toward|make it) \d+ sessions\.$/.test(text)) kept++;
+  }
+  if (name === 'lifter' && out.length === 0) assert.ok(kept > 0, `${name}: no "Keep these loads this week and ..." cue appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(LIFTERS, '25s G2-5: every post-deload cue resumes the pre-deload loads with no step ("Back to full loads: Squat 107.5 kg, bench 85 kg ..."), whether the deload was prescribed or her own', (snaps, name) => {
+  const out: Violation[] = [];
+  let cues = 0;
+  for (const snap of reviewSnaps24s(snaps)) {
+    const r = (snap.review as NonNullable<DaySnapshot['review']>).review;
+    const text = plain(r.nextWeek);
+    if (!/^Back to full loads: /.test(text)) continue;
+    cues++;
+    if (/→/.test(text)) out.push({ snap, detail: `"${visible(r.nextWeek)}" adds a step to the pre-deload loads` });
+    for (const m of text.matchAll(/\b(squat|bench|deadlift)\s+(\d+(?:\.\d+)?)\s?(kg|lb)\b/gi)) {
+      const best = priorBestKg24s(name, LIFT_EXERCISE_24S[m[1].toLowerCase()], r.weekStart);
+      if (best == null) continue;
+      const pre = m[3] === 'lb' ? Math.round(best * LB_PER_KG_24S) : Math.round(best * 2) / 2;
+      if (Number(m[2]) !== pre) out.push({ snap, detail: `"${visible(r.nextWeek)}": ${m[0]} is not the pre-deload load (${pre} ${m[3]})` });
+    }
+  }
+  if ((name === 'lifter' || name === 'lifter_obedient') && out.length === 0) assert.ok(cues > 0, `${name}: no post-deload cue appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(LIFTERS, '25s G2-5: the deload win says "good timing" only after at least 5 straight weeks of heavier loads (the deload trigger); fewer is a plain fact', (snaps, name) => {
+  const out: Violation[] = [];
+  let facts = 0;
+  for (const snap of reviewSnaps24s(snaps)) {
+    const win = plain((snap.review as NonNullable<DaySnapshot['review']>).review.win ?? '');
+    if (!/^Deload week done/.test(win)) continue;
+    const timing = /good timing after (\d+) straight weeks/.exec(win);
+    if (timing && Number(timing[1]) < 5) out.push({ snap, detail: `"${visible(win)}" praises the timing after fewer straight weeks than the 5 that cue a deload` });
+    if (/after [34] straight weeks of heavier loads/.test(win)) {
+      facts++;
+      if (!/^Deload week done — lighter loads, after [34] straight weeks of heavier loads\.$/.test(win)) out.push({ snap, detail: `"${visible(win)}" is not the plain fact` });
+    }
+  }
+  if (name === 'lifter' && out.length === 0) assert.ok(facts > 0, `${name}: no 3-4 week deload win appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['lifter_obedient'], '25s G2-6: in a deload-cue week a short week is neutral - "Deload week — 1 of 4 so far; rest is fine this week" over a neutral sessions line, never an amber "Week short"', (snaps, name) => {
+  const out: Violation[] = [];
+  const cuedMondays = reviewSnaps24s(snaps).filter(s => cueKind24s((s.review as NonNullable<DaySnapshot['review']>).review.nextWeek) === 'deload').map(s => s.date);
+  const inCuedWeek = (date: string): boolean => cuedMondays.some(m => date >= m && date <= addDays(m, 6));
+  let short = 0;
+  let shortDays = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    if (!card || !inCuedWeek(snap.date)) continue;
+    if (/^Week short/.test(plain(card.headline))) out.push({ snap, detail: `deload week, headline "${visible(card.headline)}"` });
+    const line = card.reasons.find(x => x.kind === 'week_sessions');
+    if (!line) continue;
+    short++;
+    if (line.tone === 'watch') out.push({ snap, detail: `deload week, amber sessions line "${visible(line.text)}"` });
+    const n = /^(\d+) of (\d+) sessions this week/.exec(plain(line.text));
+    // A line that reads "4 of 4" is no short week (a deload week with every session done keeps its normal headline); only a short week carries the plan wording.
+    if (n && Number(n[1]) < Number(n[2]) && plain(card.headline) !== `Deload week — ${n[1]} of ${n[2]} so far; rest is fine this week`) out.push({ snap, detail: `deload week, "${visible(line.text)}" under the headline "${visible(card.headline)}"` });
+    if (n && Number(n[1]) < Number(n[2])) shortDays++;
+  }
+  if (out.length === 0) assert.ok(short > 0 && shortDays > 0, `${name}: no short deload week was stepped, so this invariant checked nothing`);
+  return out;
+});
+
+// ── G3 (numbers polish) ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//   G3-7  the weight-rate line shows ONE figure per quantity, and the percent only where it rounds consistently with the shown kg
+//   G3-8  the 4-week delta: same bar, same number (see the investigation note at the end of this block)
+
+const round1_25s = (v: number): number => Math.round(v * 10) / 10;
+
+invariant(LIFTERS, '25s G3-7: the weight-rate line prints "(about Y% of bodyweight)" only where the percent of the SHOWN kg rounds to Y, else "about X kg/wk" alone; a flat trend quotes no figure', (snaps, name) => {
+  const out: Violation[] = [];
+  let printed = 0;
+  let dropped = 0;
+  for (const snap of snaps) {
+    const card = snap.card;
+    const rate = card?.reasons.find(r => r.kind === 'rate');
+    if (!card || !rate) continue;
+    const text = plain(rate.text);
+    if (/^Trend weight flat \d/.test(text) || /^Trend weight flat [\d.]+ (?:kg|lb)\/wk/.test(text)) out.push({ snap, detail: `a flat trend quotes a figure: "${visible(rate.text)}"` });
+    if (/, mostly from before the break/.test(text)) continue; // a rebuild's rate line is another builder
+    const m = /^Trend weight (?:up|down) about ([\d.]+) (kg|lb)\/wk(?: \(about (\d\.\d)% of bodyweight\))? over /.exec(text);
+    if (!/^Trend weight (?:up|down) about [\d.]+ (?:kg|lb)\/wk/.test(text)) continue;
+    if (!m) { out.push({ snap, detail: `"${visible(rate.text)}" is not "about X kg/wk (about Y% of bodyweight) over ..." or "about X kg/wk over ..."` }); continue; }
+    const pct = Math.abs(card.ratePerWeek.pctBodyweight ?? NaN);
+    const trendKg = card.current.weightKg;
+    if (!Number.isFinite(pct) || trendKg == null || trendKg <= 0) continue;
+    const shownKg = m[2] === 'lb' ? Number(m[1]) / LB_PER_KG_24S : Number(m[1]);
+    const implied = round1_25s((shownKg / trendKg) * 100);
+    // A percent one decimal off a band edge (0.09 -> "0.1" beside "slower than lean gain (0.1–0.5%)", 0.52 -> "0.5" beside "above the 0.5%") would read as the other side of it.
+    const edge = (pct < 0.1 && round1_25s(pct) >= 0.1) || (pct >= 0.5 && round1_25s(pct) <= 0.5);
+    const consistent = implied === round1_25s(pct) && !edge;
+    if (m[3] != null) {
+      printed++;
+      if (!consistent) out.push({ snap, detail: `"${visible(rate.text)}": ${m[1]} ${m[2]}/wk of a ${trendKg} kg body is ${implied}%, the exact rate is ${pct}%${edge ? ' (at a band edge)' : ''}: the two figures disagree` });
+      else if (Number(m[3]) !== round1_25s(pct)) out.push({ snap, detail: `"${visible(rate.text)}": the percent should be about ${round1_25s(pct)}% (exact ${pct}%)` });
+    } else {
+      dropped++;
+      if (consistent) out.push({ snap, detail: `"${visible(rate.text)}": the percent rounds consistently (${implied}% of ${trendKg} kg, exact ${pct}%) and should be shown` });
+    }
+  }
+  // (lifter: 0.1 kg beside an exact 0.15% - dropped - and 0.1 kg beside 0.12% - kept; lifter_imperial's lb figures happen to always agree.)
+  if (out.length === 0 && name === 'lifter') assert.ok(printed > 0 && dropped > 0, `${name}: ${printed} rate lines kept the percent and ${dropped} dropped it, so this invariant did not exercise both`);
+  if (out.length === 0 && name === 'lifter_imperial') assert.ok(printed + dropped > 0, `${name}: no gain rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+// G3-8. INVESTIGATED, LEFT AS IT IS (wave 25s). The lifter's 4-week squat delta read "+10 kg" on days 28 / 35 ("126 → 136") and "+9 kg" on days 42 / 49 ("130 → 139") for the
+// same +7.5 kg on the bar. The scenario's sets are identical every week (5 reps at RPE 8, so e1RM = 1.2333 x the load): 7.5 kg x 1.2333 = 9.25 kg of e1RM both times. What differs is
+// where the endpoints fall on the whole-kg grid: 135.67 -> 136 less 126.42 -> 126 = 10, but 138.75 -> 139 less 129.50 -> 130 = 9. An estimated 1RM to 0.1 kg is false precision, so the
+// card prints whole-kg endpoints and the change between THEM (lib/liftChange.ts liftDisplayChange; the iOS mirror TrendsStrengthLogic.displayChange does the same), so "+10"
+// always sits beside "126 → 136". Rounding the change instead (+9 every week) would print "+9 kg (126 → 136)", which does not add up. It is honest rounding of one estimate, not
+// different set mixes and not a display bug, so the math and its iOS mirror are untouched. What stays pinned: a printed delta is always the difference of the printed endpoints.
+invariant(LIFTERS, '25s G3-8: a card lift delta is exactly the difference of the whole-kg endpoints printed beside it ("+10 kg vs 4 weeks ago (126 → 136 kg)")', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'lift') continue;
+      const m = /est\. 1RM ([+−-])(\d+) (?:kg|lb) vs [^()]+\((\d+) → (\d+) (?:kg|lb)\)/.exec(plain(r.text));
+      if (!m) continue;
+      checked++;
+      const delta = (m[1] === '+' ? 1 : -1) * Number(m[2]);
+      if (Number(m[4]) - Number(m[3]) !== delta) out.push({ snap, detail: `"${visible(r.text)}": ${m[4]} - ${m[3]} is ${Number(m[4]) - Number(m[3])}, not ${delta}` });
+    }
+  }
+  if (out.length === 0) assert.ok(checked > 10, `${name}: only ${checked} lift deltas were checked, so this invariant checked (almost) nothing`);
+  return out;
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // ═══ wave 25w: weight round 7. One block, at the END of the file. Every invariant was written BEFORE the rule it locks in. ═══════════
 //   G1  ONE "do the logs show the step?" check (lib/weightWeekPlan.ts `stepLogsShow`, stored on the plan as `step.logsShow`) drives every step sentence:
@@ -5161,6 +5338,108 @@ invariant(['weight_loss'], 'item 4: a user who logs no food is never told "Keep 
   const out = textMatches(snaps, allTexts, /daily snack — it['’]s your maintenance/);
   const said = snaps.filter(s => allTexts(s).some(t => /^Keep eating as you are, snack included — that['’]s your maintenance; if your average drifts/.test(plain(t.text)))).length;
   assert.ok(said > 0, `${name}: the settled non-logger wording never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+//   G2  tidy: item 6 the weekly "log before you eat" tip names the days from the logs; item 7 a return week gets ONE line for next week; item 8 one rule for a
+//       weekly rate in text - one decimal ("Down about 0.9 kg/wk") - for every SINGLE rate. A RANGE ("Down 0.37-0.59 kg/wk") keeps its two decimals: the iOS hero, the Trends
+//       pill and the goal sheet recompose that range themselves from plan.pace / plan.earlierPace (GoalProgressLogic.paceRange, UnitFormat.weightRateRange), so a
+//       server-only change would put "0.4-0.6" on the card beside "0.37-0.59" in the hero. Locked below until the iOS side moves with it.
+
+const W25_DAY_NAMES: Record<string, string> = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
+
+invariant(WEIGHT, 'item 6: the weekly tip is never "Log your meals before you eat them on your two busiest days — a plan on paper ..." (vague, "on paper"): it names the days from the logs, "Log Tuesday\'s and Sunday\'s meals before you eat them."', (snaps, name) => {
+  const scn = buildScenario(name);
+  const budget = scn.budget.targetKcal as number;
+  const out: Violation[] = [...textMatches(snaps, allTexts, /on paper|two busiest days/)];
+  let named = 0;
+  for (const snap of snaps) {
+    const rv = snap.review;
+    if (rv == null || !/before you eat them/.test(plain(rv.review.nextWeek))) continue;
+    named++;
+    const week = scn.intake
+      .filter(i => i.day >= rv.weekStart && i.day <= addDays(rv.weekStart, 6) && i.kcal >= PARTIAL_LOG_KCAL_THRESHOLD && i.kcal > budget * 1.05)
+      .sort((a, b) => b.kcal - a.kcal || (a.day < b.day ? -1 : 1))
+      .slice(0, 2)
+      .map(i => i.day)
+      .sort();
+    const want = week.length === 0 ? null : `Log ${week.map(d => `${W25_DAY_NAMES[weekdayOf(d)]}'s`).join(' and ')} meals before you eat them.`;
+    if (plain(rv.review.nextWeek) !== want) out.push({ snap, detail: `week of ${rv.weekStart}: next week says "${visible(rv.review.nextWeek)}" but the logged days furthest over ${budget} kcal are ${week.join(', ') || '(none)'}` });
+  }
+  if (name === 'weight_loss_logged') assert.ok(named > 0, `${name}: the "log before you eat them" tip never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 7: the review of a return week (the first weigh-ins after a gap of 7+ days) says ONE thing for next week, "Weigh in a couple of mornings this week — your review fills in next Monday.", not a list of every gap', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of w23Mondays(snaps)) {
+    const rv = snap.review;
+    if (rv == null || rv.review.dataSufficiency.sufficient) continue;
+    const week = scn.weighIns.filter(w => w.day >= rv.weekStart && w.day <= addDays(rv.weekStart, 6));
+    const before = scn.weighIns.filter(w => w.day < rv.weekStart);
+    const prev = before.length > 0 ? before[before.length - 1].day : null;
+    if (week.length < 1 || prev == null || dayDiff(week[0].day, prev) - 1 < 7) continue;
+    seen++;
+    if (plain(rv.review.nextWeek) !== 'Weigh in a couple of mornings this week — your review fills in next Monday.') out.push({ snap, detail: `week of ${rv.weekStart} (${week.length} weigh-in(s) after a gap since ${prev}): next week says "${visible(rv.review.nextWeek)}"` });
+  }
+  assert.ok(seen > 0, `${name}: no return week had an unsufficient review, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 8: a SINGLE weekly rate on the card is one decimal and the figure the app\'s own hero prints for ratePerWeek.kg ("Down about 0.9 kg/wk"), never "0.85 kg/wk"', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const kg = snap.card?.ratePerWeek.kg;
+    for (const r of snap.card?.reasons ?? []) {
+      const text = plain(r.text);
+      if (r.kind !== 'rate' || !/^(?:Down|Up) /.test(text) || /^(?:Down|Up) [\d.]+–[\d.]+ kg\/wk/.test(text)) continue; // (a range keeps two decimals: see the block header)
+      seen++;
+      const m = /^(Down|Up) about (\d+\.\d) kg\/wk \(/.exec(text);
+      // (iOS: UnitFormat.weightDelta rounds the payload's two-decimal ratePerWeek.kg to one decimal.)
+      const hero = kg == null ? null : (Math.round(Math.abs(kg) * 10) / 10).toFixed(1);
+      if (m == null) out.push({ snap, detail: `[rate] "${visible(r.text)}" is not "Down about X.X kg/wk (...)"` });
+      else if (hero != null && m[2] !== hero) out.push({ snap, detail: `[rate] "${visible(r.text)}" but ratePerWeek.kg ${kg} reads ${hero} in the hero` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no single-rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 8: the coach\'s single weekly rate is one decimal too ("rate -0.9 kg/wk (-1.02% bw)"), so the model quotes the card\'s figure', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    for (const t of coachTexts(snap)) {
+      const m = /rate (-?\d+\.\d+) kg\/wk(?! over the last \d+ weeks of weigh-ins \(two)/.exec(plain(t.text));
+      if (m == null || /a week ago the pace was/.test(plain(t.text)) || /rate -?\d+\.\d+ to -?\d+\.\d+ kg\/wk/.test(plain(t.text))) continue;
+      seen++;
+      // (A rate under 0.05 kg/wk would print as 0.0: it keeps its second decimal.)
+      const decimals = m[1].split('.')[1].length;
+      if (decimals !== 1 && Math.abs(Number(m[1])) >= 0.05) out.push({ snap, detail: `${t.where}: "${visible(t.text)}"` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no coach rate line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 8 (parity): a RANGE on the card ("Down 0.37–0.59 kg/wk") shows exactly the two-decimal figures the iOS hero recomposes from plan.pace and plan.earlierPace, until iOS moves with it', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const plan = snap.card?.weightRead?.plan;
+    for (const r of snap.card?.reasons ?? []) {
+      const m = r.kind === 'rate' ? /^Down ([\d.]+)–([\d.]+) kg\/wk/.exec(plain(r.text)) : null;
+      if (m == null) continue;
+      seen++;
+      const fmt = (kg: number): string => String(Math.round(Math.abs(kg) * 100) / 100);
+      const want = [plan?.pace?.kgPerWeek, plan?.earlierPace?.kgPerWeek].filter((x): x is number => x != null).map(fmt).sort((a, b) => Number(a) - Number(b));
+      if (want.length !== 2 || m[1] !== want[0] || m[2] !== want[1]) out.push({ snap, detail: `[rate] "${visible(r.text)}" but plan.pace / plan.earlierPace give ${want.join('–')}` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no range line appeared, so this invariant checked nothing`);
   return out;
 });
 

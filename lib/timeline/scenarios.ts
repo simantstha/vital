@@ -550,9 +550,12 @@ export function lifterObedient(): Scenario {
       for (const c of resume) next[c.key] = c.load.from;
       return { loads: next, deload: false };
     }
-    // After 5 straight weeks of heavier loads the cue is a deload: about 87.5% of last week's loads, 2 working sets.
-    if (proactiveDeload(progression, reviewedWeek, opts)) {
+    // After 5 straight weeks of heavier loads the cue is a deload: about 87.5% of last week's loads, 2 working sets. Wave 25s: the review PRINTS those loads
+    // ("squat ~97.5 kg, bench ~80 kg, ..."), and she lifts exactly what it printed (`cue.loads`); a lift the cue does not name falls back to the same 87.5%.
+    const cue = proactiveDeload(progression, reviewedWeek, opts);
+    if (cue) {
       for (const key of Object.keys(next)) next[key] = easedLoad(current[key], DELOAD_CUE_LOAD_FRACTION, false).value;
+      for (const printed of cue.loads) next[printed.key] = printed.value;
       return { loads: next, deload: true };
     }
     for (const c of nextLoadCues(progression, reviewedWeek, opts)) next[c.key] = c.hold ? c.load.from : c.load.to;

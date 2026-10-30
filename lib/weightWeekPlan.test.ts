@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { plainSpaces } from './displayText';
 import {
-  calorieFloorKcal, isInstruction, stepDayReached, stepHeadlineClause, stepLogsShow, stepRateTail, stepVerb, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weightWeekPlan,
+  calorieFloorKcal, isInstruction, stepDayReached, stepHeadlineClause, stepLogsShow, stepRateTail, stepVerb, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weeklyRateFigure, weeklyRateText, weightWeekPlan,
   type WeightPlanInput, type WeightWeekPlan,
 } from './weightWeekPlan';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
@@ -502,9 +502,10 @@ test('plan text joins numbers to units with U+00A0, in kg and in lb', () => {
   assert.doesNotMatch(kg, /\d kcal/);
   const slow = readings(range(0, 100), n => 92 - 0.04 * n);
   const lb = planAt(slow, 70, { unitSystem: 'imperial', targetDate: D(150) });
-  assert.match(lb.action.text, new RegExp(`~1\\.\\d\\d${NB}lb/wk`));
+  // (Wave 25w: a weekly rate is one decimal, "~1 lb/wk" - 0.99 lb rounds to 1.)
+  assert.match(lb.action.text, new RegExp(`~\\d+(?:\\.\\d)?${NB}lb/wk`));
   assert.doesNotMatch(lb.action.text, /\d kg|\d lb/);
-  assert.match(planAt(slow, 70, { targetDate: D(150) }).action.text, new RegExp(`~0\\.\\d\\d${NB}kg/wk`));
+  assert.match(planAt(slow, 70, { targetDate: D(150) }).action.text, new RegExp(`~0\\.\\d${NB}kg/wk`));
 });
 
 test('no weigh-ins, no plan', () => {
@@ -885,4 +886,20 @@ test('25w G1: the plan stores the one answer on its step, and the action line an
   const snack = planAt(fast, 56, over);
   assert.equal(snack.step?.logsShow, false);
   assert.equal(plainSpaces(snack.action.text), "Keep the daily snack (from Apr 19); we'll read it on Mon, May 4");
+});
+
+test('25w item 8: a single weekly rate is one decimal, "about 0.9 kg", of the two-decimal figure the payload carries (what the app\'s hero rounds)', () => {
+  const t = (kg: number, unitSystem: 'metric' | 'imperial' = 'metric') => plainSpaces(weeklyRateText({ unitSystem }, kg));
+  assert.equal(t(-0.85), 'about 0.9 kg'); // the 0.85 / 0.9 flip-flop between weeks
+  assert.equal(t(-0.86), 'about 0.9 kg');
+  assert.equal(t(0.74), 'about 0.7 kg');
+  assert.equal(t(-0.5), 'about 0.5 kg');
+  assert.equal(t(-0.5449), 'about 0.5 kg');
+  assert.equal(t(-0.8451), 'about 0.9 kg'); // rounded to the payload's 0.85 first, as the hero does, then to one decimal
+  assert.equal(t(-1.1), 'about 1.1 kg');
+  assert.equal(t(-0.45, 'imperial'), 'about 1 lb'); // 0.99 lb
+  // A rate that would print as 0.0 keeps its second decimal, unhedged.
+  assert.equal(t(-0.04), '0.04 kg');
+  assert.deepEqual(weeklyRateFigure('metric', -0.9), { value: 0.9, digits: 1 });
+  assert.deepEqual(weeklyRateFigure('metric', 0.02), { value: 0.02, digits: 2 });
 });
