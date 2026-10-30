@@ -92,7 +92,7 @@ private extension DietSheetView {
     var header: some View {
         HStack {
             Text("Diet budget")
-                .font(.system(size: 18, weight: .bold))
+                .scaledFont(size: 18, weight: .bold)
                 .tracking(-0.2)
                 .foregroundStyle(Theme.Colors.textPrimary)
             Spacer()
@@ -116,17 +116,17 @@ private extension DietSheetView {
     var remainingRow: some View {
         HStack(spacing: Theme.Spacing.xs) {
             Text("\(vm.remaining.formatted())")
-                .font(.system(size: 14, weight: .bold))
+                .scaledFont(size: 14, weight: .bold)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .contentTransition(.numericText(value: Double(vm.remaining)))
             Text("kcal left of")
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.Colors.textSecondary)
 
             if vm.isEditingTarget {
                 TextField("", text: $vm.targetInput)
                     .keyboardType(.numberPad)
-                    .font(.system(size: 14, weight: .bold))
+                    .scaledFont(size: 14, weight: .bold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .multilineTextAlignment(.center)
                     .frame(width: 64)
@@ -150,7 +150,7 @@ private extension DietSheetView {
                 } label: {
                     HStack(spacing: 3) {
                         Text(vm.target.formatted())
-                            .font(.system(size: 14, weight: .bold))
+                            .scaledFont(size: 14, weight: .bold)
                             .contentTransition(.numericText(value: Double(vm.target)))
                         Image(systemName: "pencil")
                             .font(.system(size: 11, weight: .semibold))
@@ -182,9 +182,9 @@ private extension DietSheetView {
                         Image(systemName: slot.sfSymbol)
                             .font(.system(size: 16, weight: .medium))
                         Text(slot.label)
-                            .font(.system(size: 11, weight: .semibold))
+                            .scaledFont(size: 11, weight: .semibold)
                         Text(vm.subtotalLabel(for: slot))
-                            .font(.system(size: 10))
+                            .scaledFont(size: 10)
                             .monospacedDigit()
                     }
                     .foregroundStyle(selected ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
@@ -239,10 +239,10 @@ private extension DietSheetView {
         HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(food.name)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("\(Int(food.kcal.rounded())) kcal · P\(Int(food.p.rounded())) C\(Int(food.c.rounded())) F\(Int(food.f.rounded()))")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer(minLength: Theme.Spacing.sm)
@@ -250,7 +250,7 @@ private extension DietSheetView {
                 Task { await vm.logRecentFood(food, slot: vm.selectedSlot) }
             } label: {
                 Text("Log")
-                    .font(.system(size: 13, weight: .bold))
+                    .scaledFont(size: 13, weight: .bold)
                     .foregroundStyle(Theme.Colors.onAccent)
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, 6)
@@ -273,12 +273,12 @@ private extension DietSheetView {
 
         return HStack(spacing: Theme.Spacing.sm) {
             TextField("Custom \(vm.selectedSlot.label.lowercased())…", text: $vm.customName)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.Colors.textPrimary)
 
             TextField("kcal", text: $vm.customKcal)
                 .keyboardType(.numberPad)
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .frame(width: 52)
                 .padding(.horizontal, Theme.Spacing.sm)
@@ -346,7 +346,7 @@ private extension DietSheetView {
                 Image(systemName: icon)
                     .font(.system(size: 17, weight: .medium))
                 Text(label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
             }
             .foregroundStyle(Theme.Colors.textSecondary)
             .frame(maxWidth: .infinity)
@@ -376,7 +376,7 @@ private extension DietSheetView {
                     .motionTransition(.fade)
             } else if vm.loggedEntries.isEmpty {
                 Text("Nothing logged yet. Snap a photo, scan a barcode, or search.")
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .motionTransition(.fade)
             } else {
@@ -387,12 +387,12 @@ private extension DietSheetView {
                                 Image(systemName: group.sfSymbol)
                                     .font(.system(size: 12, weight: .semibold))
                                 Text(group.label)
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .scaledFont(size: 13, weight: .semibold)
                             }
                             .foregroundStyle(Theme.Colors.textSecondary)
                             Spacer()
                             Text("\(group.totalKcal) kcal")
-                                .font(.system(size: 12))
+                                .scaledFont(size: 12)
                                 .foregroundStyle(Theme.Colors.textTertiary)
                         }
 
@@ -425,15 +425,15 @@ private extension DietSheetView {
             HStack(spacing: Theme.Spacing.md) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(vm.healthKitKcal) kcal")
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                     Text("P\(vm.healthKitProtein) · C\(vm.healthKitCarbs) · F\(vm.healthKitFat)")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
                 Spacer(minLength: Theme.Spacing.sm)
                 Text(vm.healthKitAttributionLabel)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.horizontal, Theme.Spacing.lg)
@@ -445,10 +445,10 @@ private extension DietSheetView {
         HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name)
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("\(entry.kcal) kcal")
-                    .font(.system(size: 12))
+                    .scaledFont(size: 12)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             Spacer(minLength: Theme.Spacing.sm)

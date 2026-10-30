@@ -50,8 +50,13 @@ export async function GET(request: Request): Promise<NextResponse> {
     const goal = ctx.goalProgress?.goal ?? ctx.dietBudget?.goal;
     required = requiredOpenerLine(ctx.goalProgress, goal, ctx.unitSystem);
     fallback = goalFallbackOpener(ctx.goalProgress, goal, ctx.unitSystem) ?? FALLBACK;
+    // A required line that already ends in a question (reached goal, returning
+    // user) is the invitation: the model adds no second question after it.
+    const followUp = required?.endsWith('?')
+      ? 'Then add at most ONE short data observation. Do not ask another question.'
+      : 'Then add at most ONE short sentence (an invitation to dig in, or one data observation).';
     const goalRule = required
-      ? `\nBegin with EXACTLY this goal-status text, verbatim, as your opening: "${required}"\nThen add at most ONE short sentence (an invitation to dig in, or one data observation). Do not restate or reword the goal status.`
+      ? `\nBegin with EXACTLY this goal-status text, verbatim, as your opening: "${required}"\n${followUp} Do not restate or reword the goal status.`
       : '';
 
     const msg = await client.messages.create({

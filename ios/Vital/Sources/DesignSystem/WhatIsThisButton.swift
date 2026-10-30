@@ -28,7 +28,7 @@ struct WhatIsThisButton: View {
                     Image(systemName: "info.circle")
                     Text("What is this?")
                 }
-                .font(.system(size: 12.5, weight: .medium))
+                .scaledFont(size: 12.5, weight: .medium)
                 .padding(.vertical, 4)
             } else {
                 Image(systemName: "info.circle")
@@ -40,7 +40,7 @@ struct WhatIsThisButton: View {
         .foregroundStyle(Theme.Colors.textSecondary)
         .popover(isPresented: $isPresented) {
             Text(text)
-                .font(.system(size: 14))
+                .scaledFont(size: 14)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -78,10 +78,10 @@ struct WhatMovedExplainer: View {
                     ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(entry.name)
-                                .font(.system(size: 12.5, weight: .semibold))
+                                .scaledFont(size: 12.5, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                             Text(entry.text)
-                                .font(.system(size: 12.5))
+                                .scaledFont(size: 12.5)
                                 .foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }
@@ -89,7 +89,7 @@ struct WhatMovedExplainer: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, Theme.Spacing.xs)
             }
-            .font(.system(size: 13, weight: .semibold))
+            .scaledFont(size: 13, weight: .semibold)
             .tint(Theme.Colors.textPrimary)
         }
     }

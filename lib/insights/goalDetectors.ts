@@ -150,15 +150,18 @@ export function detectWeightPlateau(input: GoalInsightInput): Finding | null {
   if (input.goal !== 'weight_loss') return null;
   const signal = input.weightSignals.find((s) => s.kind === 'plateau');
   if (!signal) return null;
-  const trendKg = Number(signal.facts.trendKg);
+  // The plateau signal now rests on three flat weeks of raw weekly means (`weeklyMeanKg`); older facts carry the trend and no week count.
+  const trendKg = Number(signal.facts.weeklyMeanKg ?? signal.facts.trendKg);
   if (!Number.isFinite(trendKg) || trendKg <= 0) return null;
+  const weeks = Number(signal.facts.weeks) === 3 ? 3 : 2;
+  const weeksWord = weeks === 3 ? 'three' : 'two';
 
   const w = weight(trendKg, input.unitSystem);
-  return rule('weight_plateau', 'trend flat for 2 weeks', 14, { trendKg, weeks: 2 }, {
+  return rule('weight_plateau', `weight flat for ${weeks} weeks`, 14, { trendKg, weeks }, {
     title: 'Your weight trend has flattened',
-    body: `Your trend has been flat at ${w} for 2 weeks — want to look at it together?`,
+    body: `Your trend has been flat at ${w} for ${weeks} weeks — want to look at it together?`,
     openingMessage:
-      `I noticed your weight trend has been flat at ${w} for about two weeks. ` +
+      `I noticed your weight trend has been flat at ${w} for about ${weeksWord} weeks. ` +
       `That's really common and it doesn't mean anything is wrong. ` +
       `Want to look at it together — how food, training and sleep have been going — and decide whether anything is worth adjusting?`,
   });

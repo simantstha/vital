@@ -150,27 +150,62 @@ struct WeeklyReviewResponse: Decodable, Equatable {
 /// (nil on a cold start, so nothing renders) — never zeros or placeholders.
 @MainActor
 final class WeeklyReviewStore: ObservableObject {
-    static let shared = WeeklyReviewStore()
+    /// What the "First review on …" / "To get started" copy keys off
+    /// (`WeeklyReviewLogic.isNewAccount`): the profile's `createdAt` and
+    /// `stats.loggedDays`.
+    struct Account: Equatable {
+        let createdAtISO: String?
+        let loggedDays: Int?
+    }
+
+    static let shared = WeeklyReviewStore(fetchAccount: {
+        let profile = try await APIClient.shared.fetchProfile()
+        return Account(createdAtISO: profile.createdAt, loggedDays: profile.stats.loggedDays)
+    })
 
     @Published private(set) var latest: WeeklyReviewResponse?
     /// Bumped each time the user commits "Got it" — drives the haptic.
     @Published private(set) var seenTick = 0
+    /// False once the account is established (older than 14 days with real
+    /// logging history): a veteran back after a gap sees "Your next review: …",
+    /// never "First review on …". Starts true, and stays true when the profile
+    /// can't be read, so the long-standing copy is the fail-soft default.
+    @Published private(set) var isNewAccount = true
 
     private let fetch: () async throws -> WeeklyReviewResponse
     private let postSeen: (String) async throws -> Void
+    private let fetchAccount: (() async throws -> Account)?
+    private let now: () -> Date
 
     init(
         fetch: @escaping () async throws -> WeeklyReviewResponse = { try await APIClient.shared.fetchWeeklyReview() },
-        postSeen: @escaping (String) async throws -> Void = { try await APIClient.shared.markWeeklyReviewSeen(id: $0) }
+        postSeen: @escaping (String) async throws -> Void = { try await APIClient.shared.markWeeklyReviewSeen(id: $0) },
+        fetchAccount: (() async throws -> Account)? = nil,
+        now: @escaping () -> Date = { AppClock.now }
     ) {
         self.fetch = fetch
         self.postSeen = postSeen
+        self.fetchAccount = fetchAccount
+        self.now = now
     }
 
     func load() async {
         do {
             let fresh = try await fetch()
-            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) { latest = fresh }
+            // The account only matters for the not-enough-data copy, so skip the
+            // extra request otherwise. Resolved BEFORE publishing the review so a
+            // veteran never sees "First review" flash and flip.
+            var newAccount = isNewAccount
+            if WeeklyReviewLogic.isNotEnoughData(fresh.review), let fetchAccount,
+               let account = try? await fetchAccount() {
+                newAccount = WeeklyReviewLogic.isNewAccount(
+                    createdAtISO: account.createdAtISO, loggedDays: account.loggedDays, now: now()
+                )
+            }
+            withAnimation(Theme.Motion.isReduced ? nil : Theme.Motion.standard) {
+                latest = fresh
+                isNewAccount = newAccount
+            }
         } catch {
             if !error.isCancellation {
                 print("[Vital] fetchWeeklyReview failed: \(error.localizedDescription)")
@@ -199,5 +234,8 @@ final class WeeklyReviewStore: ObservableObject {
     }
 
     /// Sign-out: drop the previous account's review.
-    func reset() { latest = nil }
+    func reset() {
+        latest = nil
+        isNewAccount = true
+    }
 }

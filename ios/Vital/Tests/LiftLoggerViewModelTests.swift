@@ -90,6 +90,7 @@ final class LiftLoggerViewModelTests: XCTestCase {
     private final class RestHarness {
         var now = Date(timeIntervalSinceReferenceDate: 1_000_000)
         var hapticCount = 0
+        var announcements: [String] = []
         func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
     }
 
@@ -98,7 +99,8 @@ final class LiftLoggerViewModelTests: XCTestCase {
     ) -> LiftLoggerViewModel {
         LiftLoggerViewModel(
             preferredExercise: preferred, system: system, sessionId: "session-under-test", api: api,
-            clock: { harness.now }, restHaptic: { harness.hapticCount += 1 }, runsRestTimer: false
+            clock: { harness.now }, restHaptic: { harness.hapticCount += 1 },
+            restAnnouncement: { harness.announcements.append($0) }, runsRestTimer: false
         )
     }
 
@@ -485,7 +487,7 @@ final class LiftLoggerViewModelTests: XCTestCase {
         let squatHint = try XCTUnwrap(vm.progressionHint(for: squatID))
         XCTAssertEqual(LiftLoggerLogic.progressionText(squatHint, system: .metric), "Last 3×5 @ 140\u{00A0}kg · try 142.5\u{00A0}kg")
         let benchHint = try XCTUnwrap(vm.progressionHint(for: benchID))
-        XCTAssertEqual(LiftLoggerLogic.progressionText(benchHint, system: .metric), "Last 3×5 @ 90\u{00A0}kg · try 91.5\u{00A0}kg")
+        XCTAssertEqual(LiftLoggerLogic.progressionText(benchHint, system: .metric), "Last 3×5 @ 90\u{00A0}kg · try 92.5\u{00A0}kg")
         XCTAssertTrue(vm.canApplyProgression(to: squatID))
 
         vm.applyProgression(to: squatID)
@@ -551,9 +553,9 @@ final class LiftLoggerViewModelTests: XCTestCase {
 
         await vm.seedFromHistory(exerciseID: id)
 
-        XCTAssertEqual(vm.progressionHint(for: id)?.suggestedLoad, 91.5)
+        XCTAssertEqual(vm.progressionHint(for: id)?.suggestedLoad, 92.5)
         vm.applyProgression(to: id)
-        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [91.5, 91.5])
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [92.5, 92.5])
     }
 
     func testPoundUsersGetPoundSteps() async throws {
@@ -686,6 +688,47 @@ final class LiftLoggerViewModelTests: XCTestCase {
 
         XCTAssertNil(vm.rest)
         XCTAssertEqual(harness.hapticCount, 0)
+        XCTAssertTrue(harness.announcements.isEmpty, "nothing is announced late")
+    }
+
+    // MARK: - VoiceOver
+
+    func testRestDoneIsAnnouncedToVoiceOverExactlyOnceAtZero() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        let start = harness.now
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        // Mid-countdown: silent.
+        vm.advanceRest(now: start.addingTimeInterval(100))
+        XCTAssertTrue(harness.announcements.isEmpty)
+
+        // At zero: "Rest done", alongside the haptic.
+        vm.advanceRest(now: start.addingTimeInterval(150))
+        XCTAssertEqual(harness.announcements, ["Rest done"])
+        XCTAssertEqual(harness.announcements, [LiftLoggerLogic.restDoneAnnouncement])
+        XCTAssertEqual(harness.hapticCount, 1)
+
+        // Re-checking during the done window, and the window ending, stay silent.
+        vm.advanceRest(now: start.addingTimeInterval(152))
+        vm.advanceRest(now: start.addingTimeInterval(154))
+        XCTAssertEqual(harness.announcements, ["Rest done"])
+    }
+
+    func testSkippingTheRestAnnouncesNothing() async {
+        let harness = RestHarness()
+        let vm = await seededViewModel(FakeAPI(), harness: harness)
+        vm.toggleSetDone(exerciseID: vm.exercises[0].id, setID: vm.exercises[0].sets[0].id)
+
+        vm.skipRest()
+        harness.advance(500)
+        vm.advanceRest(now: harness.now)
+
+        XCTAssertTrue(harness.announcements.isEmpty)
+    }
+
+    func testRestButtonsMeetTheMinimumTapTarget() {
+        XCTAssertGreaterThanOrEqual(LiftLoggerLogic.restButtonMinTapSize, 44)
     }
 
     func testSavingStopsTheRestTimer() async {

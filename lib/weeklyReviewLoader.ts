@@ -19,6 +19,8 @@ import { resolveDailyIntake } from '@/lib/brain/nutritionIntake';
 import { normalizeGoal, resolveDietBudget } from '@/lib/brain/dietBudget';
 import { resolveUnitSystem } from '@/lib/units';
 import { loadGoalProgress } from '@/lib/goalProgressLoader';
+import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
+import { loadRunHistory } from '@/lib/runHistoryLoader';
 import { isStrengthWorkoutType, type DayValue, type GoalProgressBudget } from '@/lib/goalProgress';
 import { endOfLocalWeek, shouldRecomputeReview } from '@/lib/weeklyReviewFreshness';
 import { buildExerciseDisplay, computeWeeklyReview, lastCompletedWeekStart, signupLocalDay, type WeeklyReview } from '@/lib/weeklyReview';
@@ -56,6 +58,21 @@ function addDays(day: string, n: number): string {
 
 const lastRecomputeAt = new Map<string, number>();
 
+/** The stored review's "Next week" text for `weekStart`; null when there is none (or it cannot be read). */
+async function loadPreviousNextWeek(userId: string, weekStart: string): Promise<string | null> {
+  try {
+    const [row] = await db
+      .select({ payload: schema.weekly_reviews.payload })
+      .from(schema.weekly_reviews)
+      .where(and(eq(schema.weekly_reviews.user_id, userId), eq(schema.weekly_reviews.week_start, weekStart)))
+      .limit(1);
+    const next = (row?.payload as Partial<WeeklyReview> | undefined)?.nextWeek;
+    return typeof next === 'string' && next.length > 0 ? next : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Computes (without persisting) the review for the last completed local week. Null when the user is gone. */
 export async function computeLastWeekReview(
   userId: string,
@@ -72,7 +89,7 @@ export async function computeLastWeekReview(
   const daySet = new Set(dayKeys);
 
   const goal = normalizeGoal(user.goal);
-  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows] =
+  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm, previousNextWeek, runHistory, comingWeekProgress] =
     await Promise.all([
       loadGoalProgress(userId, { tz, now: endOfLocalWeek(weekStart, tz) }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
@@ -89,15 +106,32 @@ export async function computeLastWeekReview(
         .selectDistinct({ exercise: schema.workout_sets.exercise, exercise_display: schema.workout_sets.exercise_display })
         .from(schema.workout_sets)
         .where(and(eq(schema.workout_sets.user_id, userId), gte(schema.workout_sets.performed_at, new Date(now.getTime() - 84 * 24 * 60 * 60 * 1000)))),
+      // Race lifecycle: the peak week before the taper (older than the 30-day windows above), read only when the
+      // reviewed or the coming week is a taper / race / recovery week.
+      goal === 'endurance'
+        ? loadRacePeakWeekKm(userId, user.race_date, [weekStart, addDays(weekStart, 7)], user.race_distance_km)
+        : Promise.resolve(null),
+      // The week before's stored "Next week" text, so a tip is never repeated two weeks running.
+      loadPreviousNextWeek(userId, addDays(weekStart, -7)),
+      // The week plan's longer running history (restart median, spike -> hold, baseline), through the reviewed Sunday.
+      goal === 'endurance' ? loadRunHistory(userId, addDays(weekStart, 6)) : Promise.resolve(undefined),
+      // Weight loss: the card as it reads NOW, in the week after the reviewed one — its week plan is the review's "Next week"
+      // and its verdict (lib/weightWeekPlan.ts), so the review and the card give the same instruction.
+      goal === 'weight_loss' ? loadGoalProgress(userId, { tz, now }) : Promise.resolve(null),
     ]);
+  const comingWeekPlan = comingWeekProgress?.weightRead?.plan;
+  const weightPlan = comingWeekPlan != null && comingWeekPlan.weekStart === addDays(weekStart, 7) ? comingWeekPlan : null;
 
+  // The formula TDEE comes from the same auto-budget expenditure summary the goal card reads (lib/goalProgressLoader.ts),
+  // so a reached fat-loss goal whose calorie target already is maintenance is told so ("stay on maintenance") instead of
+  // "switch to maintenance". A custom (pinned) budget carries no expenditure: those fields stay null.
   const budgetInput: GoalProgressBudget = {
     targetKcal: budget.targetKcal,
     proteinG: budget.protein,
     floorKcal: 0,
-    formulaTdee: null,
-    learnedTdee: null,
-    tdeeConfidence: null,
+    formulaTdee: budget.expenditure?.formulaTdee ?? null,
+    learnedTdee: budget.expenditure?.learnedTdee ?? null,
+    tdeeConfidence: budget.expenditure?.confidence ?? null,
   };
 
   const trainingDays = new Set<string>([...completedLocalDays(sets), ...healthKitWorkoutDays(workoutEntries)]);
@@ -121,7 +155,8 @@ export async function computeLastWeekReview(
     }),
     budget: budgetInput,
     trainingDays: [...trainingDays].filter(d => daySet.has(d)),
-    strengthDays: [...strengthDays].filter(d => daySet.has(d)),
+    // Muscle: the whole ~30 days read above (not just the two weeks), so the review can tell a run of on-target or empty weeks.
+    strengthDays: [...strengthDays],
     workouts: workoutEntries
       .filter(w => daySet.has(w.date))
       .map(w => ({
@@ -136,9 +171,24 @@ export async function computeLastWeekReview(
     sleepMinutes: sleep.map(p => ({ day: p.date, value: p.value })),
     sleepGoalMinutes: user.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN,
     weeklySessionsTarget: user.weekly_sessions_target ?? null,
+    // A reached weight target: the review names it, and tells the week it was reached from the weeks spent holding.
+    targetWeightKg: progress?.target.weightKg ?? user.target_weight_kg ?? null,
+    reachedAt: progress?.reachedAt ?? null,
+    previousNextWeek,
+    weightPlan,
     weeklyDistanceKmTarget: user.weekly_distance_km_target ?? null,
     // Long-run progress as of the reviewed week's end (same object the goal card uses), so "Next week" can cap long-run growth.
     longRun: progress?.longRun ?? null,
+    // Muscle: the "building back after a break" state as of the reviewed week's end (same object the goal card shows).
+    liftReturn: progress?.liftReturn ?? null,
+    liftReturns: progress?.liftReturns ?? null,
+    // Muscle: the goal card already explained "est. 1RM" (its first lift-comparison week), so the review does not repeat it.
+    cardExplainedEst1rm: progress?.reasons?.some(r => r.kind === 'explainer') ?? false,
+    // Race lifecycle: the race day decides the reviewed / coming week's phase; the peak week sets its targets.
+    raceDate: goal === 'endurance' ? user.race_date ?? null : null,
+    raceDistanceKm: goal === 'endurance' ? user.race_distance_km ?? null : null,
+    racePeakWeekKm,
+    runHistory,
     unitSystem: resolveUnitSystem(user.unit_system),
     exerciseDisplay: buildExerciseDisplay(displayRows),
     signupDay: signupLocalDay(user.created_at, tz),

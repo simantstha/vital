@@ -178,6 +178,22 @@ test('summarizeProgression: only high-rep sets -> null e1RM', async () => {
   assert.equal(summarizeProgression(sets).squat[0].bestEstimatedOneRepMaxKg, null);
 });
 
+test('summarizeProgression: sessions (distinct days with a working set) and the heaviest working load per week', async () => {
+  const { summarizeProgression } = await repoPromise;
+  const sets = [
+    { exercise: 'squat', performed_at: new Date('2026-09-21T10:00:00Z'), local_day: '2026-09-21', reps: 5, load_kg: 100, is_warmup: false },
+    { exercise: 'squat', performed_at: new Date('2026-09-21T10:05:00Z'), local_day: '2026-09-21', reps: 5, load_kg: 110, is_warmup: false },
+    { exercise: 'squat', performed_at: new Date('2026-09-21T10:09:00Z'), local_day: '2026-09-21', reps: 5, load_kg: 150, is_warmup: true }, // warm-up: ignored
+    { exercise: 'squat', performed_at: new Date('2026-09-26T10:00:00Z'), local_day: '2026-09-26', reps: 5, load_kg: 95, is_warmup: false },
+    { exercise: 'squat', performed_at: new Date('2026-09-28T10:00:00Z'), local_day: '2026-09-28', reps: 5, load_kg: 112.5, is_warmup: false },
+    { exercise: 'pull-up', performed_at: new Date('2026-09-21T11:00:00Z'), local_day: '2026-09-21', reps: 8, load_kg: null, is_warmup: false },
+  ];
+  const summary = summarizeProgression(sets);
+  assert.deepEqual(summary.squat.map(w => [w.weekStart, w.sessions, w.topLoadKg]), [['2026-09-21', 2, 110], ['2026-09-28', 1, 112.5]]);
+  // Bodyweight-only week: a session, but no load.
+  assert.deepEqual([summary['pull-up'][0].sessions, summary['pull-up'][0].topLoadKg], [1, null]);
+});
+
 // ── DB-backed (mocked) ───────────────────────────────────────────────────────
 
 test('logWorkoutSession: writes one row per set, keyed by session_id + set_index', async () => {

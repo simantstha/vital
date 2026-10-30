@@ -44,10 +44,31 @@ enum TrendsWeightCardLogic {
     /// uses (established trend + >= 7-day entry span) — this card only ever
     /// renders for the weight_loss goal (see `TrendsView.showsWeightCard`),
     /// so "down is good" is a safe, non-configurable assumption here.
-    static func ratePill(trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem) -> RatePill? {
+    ///
+    /// `withholdsLocalRate`: the server is reading the scale itself (early read /
+    /// welcome back / plateau / moving again — `GoalProgressLogic.usesServerWeightRead`) and has
+    /// withheld a pace on purpose, so no pill of this card's own 7-day rate may
+    /// contradict the goal card above it. Defaults to `false` (older server).
+    ///
+    /// `paceRange` (wave 22w): the goal card shows a RANGE for an on-pace week
+    /// (`GoalProgressLogic.paceRange`: "Down 0.37–0.59 kg/wk"), so the pill says the same
+    /// range — "↓ 0.37–0.59 kg/wk", always a loss, tinted `.positive` — rather than this
+    /// card's own single 7-day rate beside it. Behind the same gates as the single rate.
+    /// Defaults to `nil` (an older server, any other week): the pill is exactly as before.
+    static func ratePill(
+        trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
+        withholdsLocalRate: Bool = false, paceRange: GoalProgressLogic.PaceRange? = nil
+    ) -> RatePill? {
+        guard !withholdsLocalRate else { return nil }
         guard let trend, trend.established else { return nil }
         guard let span = WeightHeroLogic.daySpan(entries: entries),
               span >= WeightHeroLogic.minimumSpanDaysForWeeklyRate else { return nil }
+        if let paceRange {
+            return RatePill(
+                text: "↓\(UnitFormat.nbsp)\(GoalProgressLogic.paceRangeValueText(paceRange, system: system))",
+                tone: .positive
+            )
+        }
         guard let deltaPerWeek = trend.delta7dKgPerWeek ?? trend.delta30dKgPerWeek else { return nil }
 
         let displayValue = system == .metric ? deltaPerWeek : UnitConvert.kgToLb(deltaPerWeek)
@@ -57,6 +78,49 @@ enum TrendsWeightCardLogic {
         let tone: PillTone = rounded < 0 ? .positive : (rounded > 0 ? .caution : .neutral)
         let nbsp = UnitFormat.nbsp
         return RatePill(text: "\(arrow)\(nbsp)\(magnitude)\(nbsp)\(system.weightUnit)/wk", tone: tone)
+    }
+
+    /// The card's big number, split into the pieces the display needs, plus the label it carries.
+    struct HeadlineWeight: Equatable {
+        let magnitude: String
+        let unit: String
+        /// "This week" / "Weekly avg" / "Latest" when the number is the goal's progress weight; `nil`
+        /// for the smoothed trend (the card is titled "Weight" and the chart is that trend).
+        let label: String?
+    }
+
+    /// The big number: the smoothed trend's newest point (`nil` until the trend is established, the
+    /// card then shows its placeholder) — except on a weight-loss goal whose payload carries the
+    /// progress weight (`GoalProgressLogic.progressWeight`, wave 21), where it is that weight, the
+    /// one the goal card, the headline's "to go" and Today's hero quote, with the label saying what
+    /// it is. The chart line stays the trend either way. `UnitFormat.weight`'s own rounding and
+    /// unit conversion are reused and parsed apart on the (non-breaking) space between number and
+    /// unit.
+    static func headlineWeight(
+        trend: WeightTrendDTO?, progressWeight: GoalProgressLogic.ProgressWeight? = nil, system: UnitSystem
+    ) -> HeadlineWeight? {
+        guard let trend, trend.established, let latest = trend.days.last else { return nil }
+        let formatted = UnitFormat.weight(kg: progressWeight?.kg ?? latest.trendKg, system)
+        let label = progressWeight?.label
+        guard let spaceIndex = formatted.firstIndex(of: "\u{00A0}") else {
+            return HeadlineWeight(magnitude: formatted, unit: "", label: label)
+        }
+        return HeadlineWeight(
+            magnitude: String(formatted[formatted.startIndex..<spaceIndex]),
+            unit: String(formatted[formatted.index(after: spaceIndex)...]),
+            label: label
+        )
+    }
+
+    /// The card's headline for VoiceOver: "This week 82.3 kg" for the progress weight, else the
+    /// trend's "Trend 82 kg" (or the honest placeholder), exactly as before.
+    static func spokenHeadline(
+        trend: WeightTrendDTO?, progressWeight: GoalProgressLogic.ProgressWeight? = nil, system: UnitSystem
+    ) -> String {
+        if let progressWeight, let trend, trend.established, trend.days.last != nil {
+            return "\(progressWeight.label) \(UnitFormat.weight(kg: progressWeight.kg, system))"
+        }
+        return WeightHeroLogic.trendHeadline(trend: trend, system: system)
     }
 
     /// "−3.1 kg since 28 Aug" (value and unit joined by U+00A0) — the total change between the first and last
@@ -108,23 +172,33 @@ struct TrendsWeightCard: View {
     /// `TrendsViewModel.hasAnimatedIn` is still `false` — see
     /// `Sparkline.animatesOnAppear`'s doc comment for the same one-shot gate.
     var animatesIn: Bool = false
+    /// The server is reading the scale itself (`GoalProgressLogic.usesServerWeightRead`):
+    /// the rate pill is dropped rather than quote a 7-day rate the goal card withholds.
+    var withholdsLocalRate: Bool = false
+    /// Wave 22w: the range the goal card shows for an on-pace week (`GoalProgressLogic.paceRange`);
+    /// the pill then says that range instead of this card's own 7-day rate. `nil` (an older server,
+    /// any other week) keeps the pill exactly as before.
+    var paceRange: GoalProgressLogic.PaceRange? = nil
+    /// The goal's progress weight on a wave 21 weight-loss server (`GoalProgressLogic.progressWeight`):
+    /// the big number is then that weight, labelled, so this card and the goal card above it do not
+    /// show two different weights; the chart line below stays the smoothed trend. `nil` (an older
+    /// server, other goals) keeps the trend number exactly as before.
+    var progressWeight: GoalProgressLogic.ProgressWeight? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var trendHeadline: String { WeightHeroLogic.trendHeadline(trend: trend, system: system) }
     private var ratePill: TrendsWeightCardLogic.RatePill? {
-        TrendsWeightCardLogic.ratePill(trend: trend, entries: entries, system: system)
+        TrendsWeightCardLogic.ratePill(
+            trend: trend, entries: entries, system: system, withholdsLocalRate: withholdsLocalRate, paceRange: paceRange
+        )
     }
 
-    /// Split from `trendHeadline`'s combined "Trend 82.0 kg" into the two
-    /// pieces the big number display needs — reuses `UnitFormat.weight`'s
-    /// existing rounding/conversion (never re-derives it) and just parses
-    /// its output apart on the (non-breaking) space between number and unit.
-    private var latestWeightParts: (magnitude: String, unit: String)? {
-        guard let trend, trend.established, let latest = trend.days.last else { return nil }
-        let formatted = UnitFormat.weight(kg: latest.trendKg, system)
-        guard let spaceIndex = formatted.firstIndex(of: "\u{00A0}") else { return (formatted, "") }
-        return (String(formatted[formatted.startIndex..<spaceIndex]), String(formatted[formatted.index(after: spaceIndex)...]))
+    /// Split from `trendHeadline`'s combined "Trend 82.0 kg" into the two pieces the big number
+    /// display needs (`TrendsWeightCardLogic.headlineWeight`), plus the label when it is the
+    /// goal's progress weight.
+    private var latestWeightParts: TrendsWeightCardLogic.HeadlineWeight? {
+        TrendsWeightCardLogic.headlineWeight(trend: trend, progressWeight: progressWeight, system: system)
     }
 
     /// Mirrors `WeightHeroView.sparklinePoints` exactly (last ~30 days,
@@ -201,20 +275,30 @@ struct TrendsWeightCard: View {
     private var cardBody: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text("Weight")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
+                    Text("Weight")
+                        .scaledFont(size: 17, weight: .semibold)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                    if let label = latestWeightParts?.label {
+                        Text(label)
+                            .scaledFont(size: 13)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
 
                 if let parts = latestWeightParts {
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                    // The rate pill drops under the weight at accessibility sizes.
+                    AccessibilityAdaptiveStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             Text(parts.magnitude)
-                                .font(.system(size: 34, weight: .bold, design: .rounded))
+                                .scaledFont(size: 34, weight: .bold, design: .rounded)
                                 .foregroundStyle(Theme.Colors.textPrimary)
                                 .contentTransition(.numericText())
+                                // Hero number: cap its growth (see WeightHeroView).
+                                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                             if !parts.unit.isEmpty {
                                 Text(parts.unit)
-                                    .font(.system(size: 15))
+                                    .scaledFont(size: 15)
                                     .foregroundStyle(Theme.Colors.textSecondary)
                             }
                         }
@@ -225,13 +309,13 @@ struct TrendsWeightCard: View {
                     }
                 } else {
                     Text(trendHeadline)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .scaledFont(size: 20, weight: .bold, design: .rounded)
                         .foregroundStyle(Theme.Colors.textPrimary)
                 }
 
                 if let sublineText {
                     Text(sublineText)
-                        .font(.system(size: 13))
+                        .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
 
@@ -246,7 +330,7 @@ struct TrendsWeightCard: View {
 
     private func pillView(_ pill: TrendsWeightCardLogic.RatePill) -> some View {
         Text(pill.text)
-            .font(.system(size: 13, weight: .bold))
+            .scaledFont(size: 13, weight: .bold)
             .foregroundStyle(pillColor(pill.tone))
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
@@ -355,8 +439,11 @@ struct TrendsWeightCard: View {
                 Spacer()
                 Text("Today")
             }
-            .font(.system(size: 10))
+            .scaledFont(size: 10)
             .foregroundStyle(Theme.Colors.textTertiary)
+            // Positioned by a fixed offset under the plot, so it stops
+            // growing past the largest standard size.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .offset(y: 14)
         }
     }
@@ -383,7 +470,10 @@ struct TrendsWeightCard: View {
     }
 
     private var accessibilityLabel: String {
-        var parts = ["Weight", trendHeadline]
+        var parts = [
+            "Weight",
+            TrendsWeightCardLogic.spokenHeadline(trend: trend, progressWeight: progressWeight, system: system),
+        ]
         if let ratePill { parts.append(ratePill.text) }
         if let sublineText { parts.append(sublineText) }
         return parts.joined(separator: ", ")

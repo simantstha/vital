@@ -80,10 +80,18 @@ export function formatPace(paceMinPerKm: unknown, units: UnitSystem = 'metric'):
   return `${minutes}′${seconds < 10 ? '0' : ''}${seconds}″`;
 }
 
-/** `"72.8 kg"` (metric) or `"160 lb"` (imperial) from a kilogram weight. `null` on non-finite input. */
+/**
+ * `"72.8 kg"` (metric) or `"160 lb"` (imperial) from a kilogram weight. `null`
+ * on non-finite input. Imperial rounds to whole pounds except under 1 lb, which
+ * keeps one decimal (`"0.4 lb"`) so a small weekly rate is not shown as `"0 lb"`.
+ */
 export function formatWeight(kg: unknown, units: UnitSystem = 'metric'): string | null {
   if (!isFiniteNumber(kg)) return null;
-  if (units === 'imperial') return `${Math.round(kg * LB_PER_KG)} lb`;
+  if (units === 'imperial') {
+    const lb = kg * LB_PER_KG;
+    if (Math.abs(lb) < 1) return `${roundTo(lb, 1)} lb`;
+    return `${Math.round(lb)} lb`;
+  }
   return `${kg.toFixed(1)} kg`;
 }
 

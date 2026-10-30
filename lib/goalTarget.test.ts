@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseRaceDate, parseRaceDistanceKm, parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget } from './goalTarget';
+import { isTargetDateNotInFuture, TARGET_DATE_NOT_FUTURE_ERROR, parseRaceDate, parseRaceDistanceKm, parseTargetDate, parseTargetWeightKg, parseWeeklySessionsTarget } from './goalTarget';
 
 test('parseTargetWeightKg accepts 30–300 kg and rounds to 0.1', () => {
   assert.deepEqual(parseTargetWeightKg(30), { ok: true, value: 30 });
@@ -51,4 +51,15 @@ test('parseRaceDistanceKm accepts presets and 1–250, rounds to 0.1', () => {
   for (const v of [0.9, 250.1, NaN, '10', null, undefined]) {
     assert.equal(parseRaceDistanceKm(v).ok, false, `expected ${String(v)} to be rejected`);
   }
+});
+
+test('isTargetDateNotInFuture is true only for real days that are today or earlier', () => {
+  const today = '2026-10-06';
+  for (const v of ['2026-10-06', '2026-10-05', '2020-01-01']) {
+    assert.equal(isTargetDateNotInFuture(v, today), true, `expected ${v} to count as not in the future`);
+  }
+  for (const v of ['2026-10-07', '2029-10-07', '2026-13-01', '2026-02-30', 'soon', '10/12/2026', 20261201, null, undefined]) {
+    assert.equal(isTargetDateNotInFuture(v, today), false, `expected ${String(v)} not to count`);
+  }
+  assert.equal(TARGET_DATE_NOT_FUTURE_ERROR, 'Target date must be in the future');
 });

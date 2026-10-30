@@ -73,12 +73,12 @@ struct PersonalDetailsView: View {
 
                     if let errorMessage {
                         Text(errorMessage)
-                            .font(Theme.Typography.bodySmall)
+                            .scaledFont(Theme.Typography.bodySmall)
                             .foregroundStyle(Theme.Colors.alert)
                     }
 
                     Text("Your coach uses these to size your budgets and targets.")
-                        .font(.system(size: 12))
+                        .scaledFont(size: 12)
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -126,22 +126,23 @@ struct PersonalDetailsView: View {
     ) -> some View {
         HStack(spacing: Theme.Spacing.md) {
             Text(label)
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.Colors.textSecondary)
-                .frame(width: 72, alignment: .leading)
+                // A minimum (not fixed) width: the label column still lines
+                // up at standard sizes but can grow with Dynamic Type.
+                .frame(minWidth: 72, alignment: .leading)
 
             TextField("--", text: text)
                 .keyboardType(keyboard)
                 .multilineTextAlignment(.trailing)
-                .font(Theme.Typography.bodyMedium)
-                .fontWeight(.medium)
+                .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                 .foregroundStyle(Theme.Colors.textPrimary)
 
             if let unit {
                 Text(unit)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
-                    .frame(width: 26, alignment: .leading)
+                    .frame(minWidth: 26, alignment: .leading)
             }
         }
         .padding(.horizontal, Theme.Spacing.lg)

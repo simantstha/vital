@@ -279,3 +279,21 @@ test('day-of-week stays quiet without all seven weekdays covered', () => {
   }));
   assert.equal(finding, null);
 });
+
+test('cadence_break fires at the 21-day cap and stops after it (a lapsed user is not nudged forever)', () => {
+  // Active every day, then silent for the trailing `silent` days.
+  const silentFor = (silent: number) => {
+    const values = regular(1);
+    for (let i = 0; i < silent; i += 1) {
+      const d = new Date(Date.UTC(2026, 8, 7));
+      d.setUTCDate(d.getUTCDate() - i);
+      delete values[d.toISOString().slice(0, 10)];
+    }
+    return detectCadenceBreak(series('exercise_min', values));
+  };
+  const atCap = silentFor(21);
+  assert.ok(atCap, 'still fires 21 days in');
+  assert.equal(atCap.effect, 21);
+  assert.equal(silentFor(22), null);
+  assert.equal(silentFor(45), null);
+});

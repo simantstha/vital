@@ -20,7 +20,7 @@ struct CautionBanner: View {
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .scaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(Theme.Colors.caution)
                 // Decorative — the title + body already say everything;
                 // VoiceOver shouldn't stop on it separately.
@@ -28,11 +28,10 @@ struct CautionBanner: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 Text(title)
-                    .font(Theme.Typography.bodyMedium)
-                    .fontWeight(.semibold)
+                    .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text(message)
-                    .font(Theme.Typography.bodySmall)
+                    .scaledFont(Theme.Typography.bodySmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 

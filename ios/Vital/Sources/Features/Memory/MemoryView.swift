@@ -121,7 +121,7 @@ private extension MemoryView {
                 .screenTitleStyle()
                 .foregroundStyle(Theme.Colors.textPrimary)
             Text(vm.headerSubline)
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,7 +135,7 @@ private extension MemoryView {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.Colors.textTertiary)
             TextField("Search memory", text: $vm.searchText)
-                .font(Theme.Typography.bodyMedium)
+                .scaledFont(Theme.Typography.bodyMedium)
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
@@ -163,20 +163,19 @@ private extension MemoryView {
             HStack(spacing: Theme.Spacing.sm) {
                 GroupIconBadge(systemName: "sparkle")
                 Text("DID I GET THIS RIGHT?")
-                    .font(.system(size: 12, weight: .bold))
+                    .scaledFont(size: 12, weight: .bold)
                     .tracking(0.6)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Spacer()
             }
 
             Text(fact.proposedNode.label)
-                .font(Theme.Typography.bodyLarge)
-                .fontWeight(.semibold)
+                .scaledFont(Theme.Typography.bodyLarge.weight(.semibold))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(MemoryLogic.pendingReasonText(fact.reason))
-                .font(Theme.Typography.bodySmall)
+                .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -184,7 +183,7 @@ private extension MemoryView {
                     Task { await vm.resolveFact(id: fact.id, action: "confirm") }
                 } label: {
                     Text("Yes, remember")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.onAccent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -196,7 +195,7 @@ private extension MemoryView {
                     Task { await vm.resolveFact(id: fact.id, action: "reject") }
                 } label: {
                     Text("Not quite")
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -224,8 +223,7 @@ private extension MemoryView {
             HStack(spacing: Theme.Spacing.sm) {
                 GroupIconBadge(systemName: "target")
                 Text("Goals")
-                    .font(Theme.Typography.bodyLarge)
-                    .fontWeight(.bold)
+                    .scaledFont(Theme.Typography.bodyLarge.weight(.bold))
                     .foregroundStyle(Theme.Colors.textPrimary)
             }
             .padding(.horizontal, Theme.Spacing.xs)
@@ -234,10 +232,10 @@ private extension MemoryView {
                 HStack(spacing: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(goal)
-                            .font(Theme.Typography.bodyMedium)
+                            .scaledFont(Theme.Typography.bodyMedium)
                             .foregroundStyle(Theme.Colors.textPrimary)
                         Text("Set in Profile")
-                            .font(Theme.Typography.labelSmall)
+                            .scaledFont(Theme.Typography.labelSmall)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -245,8 +243,7 @@ private extension MemoryView {
                     Button("Edit in Profile") {
                         NotificationCenter.default.post(name: .vitalOpenGoalEditor, object: nil)
                     }
-                    .font(Theme.Typography.labelSmall)
-                    .fontWeight(.semibold)
+                    .scaledFont(Theme.Typography.labelSmall.weight(.semibold))
                     .foregroundStyle(Theme.Colors.accentContent)
                     .accessibilityIdentifier("memory.goal.edit")
                 }
@@ -280,11 +277,10 @@ private extension MemoryView {
         HStack(spacing: Theme.Spacing.sm) {
             GroupIconBadge(systemName: groupIcon(section.group))
             Text(section.group.title)
-                .font(Theme.Typography.bodyLarge)
-                .fontWeight(.bold)
+                .scaledFont(Theme.Typography.bodyLarge.weight(.bold))
                 .foregroundStyle(Theme.Colors.textPrimary)
             Text("\(section.facts.count)")
-                .font(Theme.Typography.labelSmall)
+                .scaledFont(Theme.Typography.labelSmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .padding(.horizontal, Theme.Spacing.xs)
@@ -306,11 +302,10 @@ private extension MemoryView {
             HStack(spacing: Theme.Spacing.sm) {
                 GroupIconBadge(systemName: "person.2.fill")
                 Text("People")
-                    .font(Theme.Typography.bodyLarge)
-                    .fontWeight(.bold)
+                    .scaledFont(Theme.Typography.bodyLarge.weight(.bold))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text("\(vm.filteredEntities.count)")
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .padding(.horizontal, Theme.Spacing.xs)
@@ -341,6 +336,7 @@ private extension MemoryView {
                 .fill(Theme.Colors.glassFill)
                 .frame(width: 40, height: 40)
                 .overlay(
+                    // Glyph in a fixed 40pt avatar circle: fixed size.
                     Text(entity.label.prefix(1).uppercased())
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
                         .foregroundStyle(Theme.Colors.textSecondary)
@@ -348,18 +344,17 @@ private extension MemoryView {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(entity.label)
-                    .font(Theme.Typography.bodyMedium)
-                    .fontWeight(.medium)
+                    .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                     .foregroundStyle(Theme.Colors.textPrimary)
                 Text(entity.kind)
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
             Spacer(minLength: Theme.Spacing.sm)
 
             Text(entity.factCount == 1 ? "1 fact" : "\(entity.factCount) facts")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .lineLimit(1)
 
@@ -381,7 +376,7 @@ private extension MemoryView {
                     ? "Nothing learned yet — facts appear here as you chat with your coach."
                     : "No matches for \u{201C}\(vm.searchText)\u{201D}."
             )
-            .font(Theme.Typography.bodySmall)
+            .scaledFont(Theme.Typography.bodySmall)
             .foregroundStyle(Theme.Colors.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -434,15 +429,14 @@ private struct FactRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Theme.Spacing.sm) {
                     Text(fact.label)
-                        .font(Theme.Typography.bodyMedium)
-                        .fontWeight(.medium)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     if fact.isConstraint {
                         ConstraintTag()
                     }
                 }
                 Text(sourceLine)
-                    .font(Theme.Typography.labelSmall)
+                    .scaledFont(Theme.Typography.labelSmall)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
             .accessibilityElement(children: .ignore)
@@ -471,7 +465,7 @@ private struct FactRow: View {
 private struct ConstraintTag: View {
     var body: some View {
         Text("Always avoid")
-            .font(.system(size: 11, weight: .bold))
+            .scaledFont(size: 11, weight: .bold)
             .foregroundStyle(Theme.Colors.caution)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -508,7 +502,7 @@ private struct EditFactSheet: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 TextField("Fact", text: $text)
-                    .font(Theme.Typography.bodyLarge)
+                    .scaledFont(Theme.Typography.bodyLarge)
                     .padding(Theme.Spacing.md)
                     .background(
                         RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)

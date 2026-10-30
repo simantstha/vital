@@ -118,15 +118,14 @@ test('a diet budget with no lowEnergyWarning omits the SAFETY line', async () =>
 test('an established trend with span >= 7 renders trend weight + rate, plus one line per signal', async () => {
   const { buildPromptText } = await contextPromise;
   const ctx = baseCtx('metric');
-  (ctx as Record<string, unknown>).weightTrend = {
-    established: true,
-    days: [
-      { day: '2026-07-25', rawKg: 82.5, trendKg: 82.5 },
-      { day: '2026-08-04', rawKg: 81.2, trendKg: 81.2 },
-    ],
-    delta7dKgPerWeek: -1.3,
-    delta30dKgPerWeek: -1.1,
-  };
+  // 22 daily weigh-ins falling 0.9 kg/wk, the newest on 2026-08-04: the rate is the pace of the raw weigh-ins (lib/weightPace.ts).
+  const start = Date.UTC(2026, 6, 14);
+  const days = Array.from({ length: 22 }, (_, i) => {
+    const kg = Math.round((82.4 - (0.9 / 7) * i) * 100) / 100;
+    return { day: new Date(start + i * 86_400_000).toISOString().slice(0, 10), rawKg: kg, trendKg: kg };
+  });
+  (ctx as Record<string, unknown>).weightTrend = { established: true, days, delta7dKgPerWeek: -1.3, delta30dKgPerWeek: -1.1 };
+  (ctx as Record<string, unknown>).localToday = '2026-08-04';
   (ctx as Record<string, unknown>).weightSignals = [
     { kind: 'too_fast_loss', severity: 'watch', facts: { rateKgPerWeek: -1.3, pctPerWeek: 1.6 } },
   ];
@@ -134,8 +133,59 @@ test('an established trend with span >= 7 renders trend weight + rate, plus one 
   const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
 
   assert.match(text, /### Weight trend & energy signals/);
-  assert.match(text, /- Trend weight: 81\.2 kg \(0\.9 kg\/wk loss\)/);
+  assert.match(text, /- Trend weight: 79\.7 kg \(0\.9 kg\/wk loss\)/);
   assert.match(text, /- \[WATCH\] Losing faster than recommended: rateKgPerWeek=-1\.3, pctPerWeek=1\.6/);
+});
+
+test('a fat-loss goal card replaces the smoothed trend line with its weekly average and the week\'s pace (one displayed weight)', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  const start = Date.UTC(2026, 6, 14);
+  const days = Array.from({ length: 22 }, (_, i) => {
+    const kg = Math.round((82.4 - (0.9 / 7) * i) * 100) / 100;
+    return { day: new Date(start + i * 86_400_000).toISOString().slice(0, 10), rawKg: kg, trendKg: kg };
+  });
+  (ctx as Record<string, unknown>).weightTrend = { established: true, days, delta7dKgPerWeek: -1.3, delta30dKgPerWeek: -1.1 };
+  (ctx as Record<string, unknown>).localToday = '2026-08-04';
+  (ctx as Record<string, unknown>).weightSignals = [];
+  // Only the fields the weight line reads; formatGoalProgressLines is not under test here.
+  (ctx as Record<string, unknown>).goalProgress = {
+    goal: 'weight_loss',
+    target: { weightKg: 76, date: null, weeklySessions: null, weeklyDistanceKm: null },
+    distance: null,
+    current: { weightKg: 79.9, trendKg: 79.7, startWeightKg: 82.4, changeKg: -2.5, progressPct: 30 },
+    ratePerWeek: { kg: null, pctBodyweight: null },
+    eta: null,
+    onPaceForTargetDate: null,
+    verdict: 'progressing',
+    headline: 'Progressing — losing about 0.47 kg a week',
+    reasons: [],
+    weightRead: { weekMeanKg: 79.9, scaleKg: 79.6, plan: { state: 'pace', pace: { kgPerWeek: -0.47 }, action: { kind: 'keep_going', text: 'Keep your routine — it is working' }, weekStart: '2026-08-03' } },
+    dataSufficiency: { weighIns: 22, needed: 3, sessionsLast28d: 0 },
+  };
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+
+  assert.match(text, /- Weekly average weight: 79\.9 kg \(0\.47 kg\/wk loss\)/);
+  assert.doesNotMatch(text, /- Trend weight:/);
+});
+
+test('a weigh-in more than a week old is never the source of a quoted weekly rate', async () => {
+  const { buildPromptText } = await contextPromise;
+  const ctx = baseCtx('metric');
+  const start = Date.UTC(2026, 6, 14);
+  const days = Array.from({ length: 22 }, (_, i) => {
+    const kg = Math.round((82.4 - (0.9 / 7) * i) * 100) / 100;
+    return { day: new Date(start + i * 86_400_000).toISOString().slice(0, 10), rawKg: kg, trendKg: kg };
+  });
+  (ctx as Record<string, unknown>).weightTrend = { established: true, days, delta7dKgPerWeek: -0.9, delta30dKgPerWeek: -0.9 };
+  (ctx as Record<string, unknown>).localToday = '2026-08-13'; // newest weigh-in (08-04) is 9 days old
+  (ctx as Record<string, unknown>).weightSignals = [];
+
+  const text = buildPromptText(ctx as Parameters<typeof buildPromptText>[0]);
+
+  assert.doesNotMatch(text, /kg\/wk/);
+  assert.match(text, /last weigh-in 9 days ago — do not quote a weekly rate/);
 });
 
 test('a not-yet-reliable trend tells the coach not to quote a weekly rate', async () => {
