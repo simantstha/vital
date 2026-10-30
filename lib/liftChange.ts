@@ -129,12 +129,14 @@ export function liftBaselineWeek(weeks: LiftWeekPoint[], anchorWeekStart: string
 
 /**
  * "vs 4 weeks ago", or "vs wk of Aug 31" when the baseline number came from the week before the 4-weeks-ago week (`liftBaselineWeek`). The weekly review passes
- * `'before'`: its window ends at the REVIEWED week, not today, so its 4-week number is "vs 4 weeks before" (it printed the same words as the goal card on a Monday the
- * card's window had already moved a week on, two different deltas under one label). "vs 4 weeks ago" / "before" when there is nothing to name.
+ * `'week'` (wave 25s): its window ends at the REVIEWED week, not today, so on a Monday its 4-week number differs from the card's (card "+9 kg vs 4 weeks ago", review
+ * "+10 kg vs 4 weeks before": two near-identical labels over two numbers). It therefore NAMES its baseline week every time - "vs wk of Mar 16" - and falls back to
+ * "vs 4 weeks before" only when there is no comparison to name.
  */
-export function liftBaselineLabel(weeks: LiftWeekPoint[], anchorWeekStart: string, ref: 'ago' | 'before' = 'ago'): string {
+export function liftBaselineLabel(weeks: LiftWeekPoint[], anchorWeekStart: string, ref: 'ago' | 'week' = 'ago'): string {
   const b = liftBaselineWeek(weeks, anchorWeekStart);
-  if (b == null || b.fourWeeksAgo) return `vs 4 weeks ${ref}`;
+  if (b == null) return ref === 'week' ? 'vs 4 weeks before' : 'vs 4 weeks ago';
+  if (b.fourWeeksAgo && ref === 'ago') return 'vs 4 weeks ago';
   return `vs wk of ${formatLiftWeek(b.weekStart)}`;
 }
 

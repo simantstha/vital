@@ -4148,10 +4148,10 @@ interface LiftDelta24s { text: string; lift: string; delta: number; label: strin
 function liftDeltas24s(text: string): LiftDelta24s[] {
   const out: LiftDelta24s[] = [];
   const t = plain(text);
-  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM ([+−-])(\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|over 4 wks|vs wk of [A-Z][a-z]{2} \d+)/g)) {
+  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) est\. 1RM ([+−-])(\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|over 4 wks|(?:last wk )?vs wk of [A-Z][a-z]{2} \d+)/g)) {
     out.push({ text: m[0], lift: m[1], delta: (m[2] === '+' ? 1 : -1) * Number(m[3]), label: m[4] === 'over 4 wks' ? 'vs 4 weeks before' : m[4] });
   }
-  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) estimated 1RM is (up|down) (\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|vs wk of [A-Z][a-z]{2} \d+)/g)) {
+  for (const m of t.matchAll(/([A-Z][a-z]+(?: [A-Z][a-z]+)?) estimated 1RM is (up|down) (\d+(?:\.\d+)?)\s?(?:kg|lb)?\s?(vs 4 weeks ago|vs 4 weeks before|(?:last wk )?vs wk of [A-Z][a-z]{2} \d+)/g)) {
     out.push({ text: m[0], lift: m[1], delta: (m[2] === 'up' ? 1 : -1) * Number(m[3]), label: m[4] });
   }
   return out;
@@ -4181,8 +4181,11 @@ invariant(LIFTERS, 'P3-6: a "vs 4 weeks ago" delta has its baseline in the week 
       const candidates = [addDays(end, -28), addDays(end, -35)].flatMap(w => { const e = e1rm(w); return e == null ? [] : [{ week: w, e }]; });
       if (candidates.length === 0) continue;
       const best = candidates.reduce((a, c) => (c.e > a.e ? c : a));
-      const want = best.week === addDays(end, -28) ? (reviewed != null ? 'vs 4 weeks before' : 'vs 4 weeks ago') : `vs wk of ${monthDay24s(best.week)}`;
-      if (d.label !== want) out.push({ snap, detail: `${where}: "${visible(d.text)}" — ${d.lift}'s baseline is the week of ${monthDay24s(best.week)} (${best.e} kg; the comparison ends ${monthDay24s(end)}), so the label should be "${want}"` });
+      // (Wave 25s: the card says "vs 4 weeks ago" only when the baseline IS that week; the review always names the baseline week - "vs wk of Mar 16" - so its number never
+      // sits under the card's near-identical "vs 4 weeks ago" label. The week named must still be the real baseline week, so this is no weaker than before.)
+      const want = reviewed == null && best.week === addDays(end, -28) ? 'vs 4 weeks ago' : `vs wk of ${monthDay24s(best.week)}`;
+      // (A review that shares the card's baseline week with a different number says "last wk vs wk of Apr 6": the 25s block below pins exactly when.)
+      if (d.label !== want && !(reviewed != null && d.label === `last wk ${want}`)) out.push({ snap, detail: `${where}: "${visible(d.text)}" — ${d.lift}'s baseline is the week of ${monthDay24s(best.week)} (${best.e} kg; the comparison ends ${monthDay24s(end)}), so the label should be "${want}"` });
     }
   };
   for (const snap of snaps) {
@@ -4443,7 +4446,8 @@ invariant(WEIGHT, 'P3-1: never two different calorie instructions on one card: a
     const warn = reasons.find(r => r.kind === 'rate' && /ease calories toward maintenance/.test(plain(r.text)));
     const step = reasons.find(r => (r.kind === 'next_step' || r.kind === 'action') && /\d,\d{3}\s?kcal|snack/.test(plain(r.text)));
     if (warn != null && step != null) out.push({ snap, detail: `"${visible(warn.text)}" next to [${step.kind}] "${visible(step.text)}"` });
-    if (reasons.some(r => r.kind === 'rate' && /your easing step covers this$/.test(plain(r.text)))) covered++;
+    // (Wave 25w: "covers this" is for a logger the logs show taking the step; everyone else is told the easing step "addresses this" - either way the step is named, not a second instruction.)
+    if (reasons.some(r => r.kind === 'rate' && /(?:your easing step covers|the easing step \(.*\) addresses) this$/.test(plain(r.text)))) covered++;
   }
   if (out.length === 0) assert.ok(covered > 0, `${name}: no rate warning said the easing step covers it, so this invariant checked nothing`);
   return out;
@@ -4999,6 +5003,164 @@ invariant(RUNNERS, 'no card, coach line or opener says "N km left" for more than
     }
   }
   if (name === 'runner_messy' || name === 'runner_comeback_spike') assert.ok(checked > 3, `${name}: only ${checked} "N km left" figures were checked, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// wave 25s: strength round 7. One block, at the END of the file. Every invariant here was written BEFORE the rule it locks in.
+//   G1-2  the weekly review names its baseline WEEK on every lift delta (stat, headline, win, slip), so its number never sits under the card's "vs 4 weeks ago"
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+const NAMED_WEEK_25S = /^(?:Lighter week · )?(?:last wk )?vs wk of [A-Z][a-z]{2} \d{1,2}$/;
+
+invariant(LIFTERS, '25s G1-2: every lift delta in the weekly review (stat, headline, win, slip) names its baseline week ("vs wk of Mar 16"), never "vs 4 weeks before" / "over 4 wks"', (snaps, name) => {
+  const out: Violation[] = [];
+  let deltas = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const texts: Text[] = [{ where: 'review.headline', text: r.headline }];
+    if (r.win) texts.push({ where: 'review.win', text: r.win });
+    if (r.slip) texts.push({ where: 'review.slip', text: r.slip });
+    for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) texts.push({ where: `review.stat ${st.label}`, text: `${st.label} ${st.value} ${st.comparison}` });
+    for (const t of texts) {
+      for (const d of liftDeltas24s(t.text)) {
+        deltas++;
+        if (!/^(?:last wk )?vs wk of [A-Z][a-z]{2} \d{1,2}$/.test(d.label) || /over 4 wks/.test(plain(t.text))) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" labels ${d.lift}'s delta "${d.label}", which names no week` });
+      }
+    }
+    // A stat whose value is a signed 4-week delta carries the named week in its comparison (a week-over-week "vs the week before" is a different number and says so).
+    for (const st of r.stats) {
+      if (!/est\. 1RM$/.test(st.label) || !/^[+−-]\d/.test(plain(st.value)) || !st.comparison) continue;
+      const c = plain(st.comparison);
+      if (!NAMED_WEEK_25S.test(c) && !/^(?:Lighter week · )?vs (?:the|last) week(?: before)?$|^vs last trained week$/.test(c)) out.push({ snap, detail: `review.stat ${st.label} ${st.value}: comparison "${visible(st.comparison)}" names no baseline week` });
+    }
+  }
+  if (name === 'lifter' || name === 'lifter_obedient') assert.ok(deltas > 3, `${name}: only ${deltas} review lift deltas were checked, so this invariant checked (almost) nothing`);
+  return out;
+});
+
+// The one way the card and the review can name the SAME baseline week: she lifted that lift on the review's own Monday, so the card's window ends a week later than the review's
+// (which is cut at the reviewed week) - lifter_obedient day 70, card "+9 kg vs wk of Apr 6", review "+6 kg vs wk of Apr 6". The review then says whose recent end its number is:
+// "last wk vs wk of Apr 6". It says so exactly then: never when nothing on the card shares its week, never missing when something does.
+invariant(LIFTERS, '25s G1-2: a review lift delta reads "last wk vs wk of X" exactly when that day\'s card names the same lift against the same week X with a different number', (snaps, name) => {
+  const out: Violation[] = [];
+  let shared = 0;
+  for (const snap of snaps) {
+    const r = snap.review?.review;
+    if (!r) continue;
+    const cardDeltas = [...cardTexts(snap), ...coachTexts(snap)].flatMap(t => liftDeltas24s(t.text));
+    const texts: string[] = [r.headline, ...(r.win ? [r.win] : []), ...(r.slip ? [r.slip] : [])];
+    for (const st of r.stats) if (/est\. 1RM$/.test(st.label) && st.comparison) texts.push(`${st.label} ${st.value} ${st.comparison}`);
+    for (const text of texts) {
+      for (const d of liftDeltas24s(text)) {
+        const week = d.label.replace(/^last wk /, '');
+        const collides = cardDeltas.some(c => c.lift === d.lift && c.label === week && c.delta !== d.delta);
+        if (collides) shared++;
+        if (collides !== d.label.startsWith('last wk ')) {
+          out.push({ snap, detail: `"${visible(text)}": ${collides ? 'the card names the same week with a different number, so the review must say "last wk"' : '"last wk" without a card number under the same label'}` });
+        }
+      }
+    }
+  }
+  if (name === 'lifter_obedient') assert.ok(shared > 0, `${name}: no review shared a baseline week with a different card number, so this invariant checked nothing`);
+  return out;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ═══ wave 25w: weight round 7. One block, at the END of the file. Every invariant was written BEFORE the rule it locks in. ═══════════
+//   G1  ONE "do the logs show the step?" check (lib/weightWeekPlan.ts `stepLogsShow`, stored on the plan as `step.logsShow`) drives every step sentence:
+//       the headline's verb, the action line, the rate warning's tail. "Aim for" until the logs show the step, "stay at" after; "covers this" is
+//       said to the logger who is taking it, "the easing step (...) addresses this" to everyone else; a non-logger is never told what the app cannot see.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+import { STEP_LOGS_MIN_DAYS, STEP_TAKEN_MARGIN_KCAL } from '../weightWeekPlan';
+
+/**
+ * The oracle for "the logs show the step": 3+ logged days from the day the step began to the Sunday before the card's week, their mean at least the step's low end
+ * minus the margin. Worked out here from the scenario's own rows, never by calling the helper under test. Null for a step with no calorie level (a user who logs no food).
+ */
+function w25LogsShow(name: ScenarioName, snap: DaySnapshot): boolean | null {
+  const step = snap.card?.weightRead?.plan?.step;
+  if (step?.loKcal == null) return null;
+  const logged = w24Logged(name, step.since, addDays(mondayOfDate(snap.date), -1));
+  return logged.length >= STEP_LOGS_MIN_DAYS && w24Mean(logged) >= step.loKcal - STEP_TAKEN_MARGIN_KCAL;
+}
+
+invariant(['weight_loss_logged', 'weight_loss_obedient'], 'item 1: "Nearly there — stay at ~X" is said only once the logs since the step began show it; until then the headline says "aim for ~X", the verb the plan\'s own action uses', (snaps, name) => {
+  const out: Violation[] = [];
+  const verbs = new Set<string>();
+  for (const snap of snaps) {
+    const m = /^Nearly there — (stay at|aim for) ~/.exec(plain(snap.card?.headline ?? ''));
+    if (m == null) continue;
+    verbs.add(m[1]);
+    const shown = w25LogsShow(name, snap);
+    const want = shown ? 'stay at' : 'aim for';
+    if (m[1] !== want) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" says "${m[1]}" but the logs since ${snap.card?.weightRead?.plan?.step?.since} ${shown ? 'show' : 'do not show'} the step` });
+    // The action line below it uses the same verb (the "Your logs are still ~2,000 kcal ..." line names the logs instead and has none).
+    const action = snap.card?.reasons.find(r => r.kind === 'action' || r.kind === 'next_step');
+    const a = action == null ? null : /^(?:Set a new target or switch to maintenance — )?(stay at|aim for) ~/i.exec(plain(action.text));
+    if (a != null && a[1].toLowerCase() !== m[1]) out.push({ snap, detail: `headline "${visible(snap.card?.headline ?? '')}" but the action says "${visible(action?.text ?? '')}"` });
+  }
+  assert.ok(verbs.size > 0, `${name}: no "Nearly there — stay at / aim for" headline appeared, so this invariant checked nothing`);
+  if (out.length === 0) assert.ok(verbs.has(name === 'weight_loss_obedient' ? 'stay at' : 'aim for'), `${name}: the expected verb never appeared (${[...verbs].join(', ')})`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 2/5: "your easing step covers this" is said only to a logger the logs show taking the step; everyone else gets "the easing step (~2,150–2,200 kcal) addresses this" (a non-logger: "(a daily snack)")', (snaps, name) => {
+  const out: Violation[] = [];
+  const seen = { covers: 0, addresses: 0 };
+  for (const snap of snaps) {
+    const step = snap.card?.weightRead?.plan?.step;
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'rate') continue;
+      const text = plain(r.text);
+      if (/ — your easing step covers this$/.test(text)) {
+        seen.covers++;
+        if (w25LogsShow(name, snap) !== true) out.push({ snap, detail: `"${visible(r.text)}" but the logs do not show the step (${step?.loKcal == null ? 'no calorie level: the user logs no food' : `since ${step.since}`})` });
+      } else if (/ — the easing step \(.*\) addresses this$/.test(text)) {
+        seen.addresses++;
+        if (step == null) { out.push({ snap, detail: `"${visible(r.text)}" with no step on the plan` }); continue; }
+        const shown = w25LogsShow(name, snap);
+        const level = step.loKcal == null || step.hiKcal == null ? 'a daily snack' : `~${w24Kcal(step.loKcal)}${step.hiKcal === step.loKcal ? '' : `–${w24Kcal(step.hiKcal)}`} kcal`;
+        if (shown === true) out.push({ snap, detail: `"${visible(r.text)}" but the logs show the step, which "covers this"` });
+        if (!text.endsWith(` — the easing step (${level}) addresses this`)) out.push({ snap, detail: `"${visible(r.text)}" does not name the step's level "${level}"` });
+      }
+    }
+  }
+  assert.ok(seen.covers + seen.addresses > 0, `${name}: no rate warning carried the step tail, so this invariant checked nothing`);
+  if (name === 'weight_loss_obedient') assert.ok(seen.covers > 0, `${name}: the logger taking the step never heard "covers this"`);
+  else assert.ok(seen.addresses > 0, `${name}: "addresses this" never appeared`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 5: while the easing step is given or standing, a rate warning about the 1% ceiling ("above" or "close to") never stands alone: it ends with the step tail', (snaps, name) => {
+  const out: Violation[] = [];
+  let seen = 0;
+  for (const snap of snaps) {
+    const step = snap.card?.weightRead?.plan?.step;
+    if (step == null || (step.phase !== 'given' && step.phase !== 'standing')) continue;
+    for (const r of snap.card?.reasons ?? []) {
+      if (r.kind !== 'rate' || r.tone !== 'watch' || !/(?:above|close to) the 1% a week ceiling/.test(plain(r.text))) continue;
+      seen++;
+      if (!/ — (?:your easing step covers this|the easing step \(.*\) addresses this)$/.test(plain(r.text))) out.push({ snap, detail: `[${r.kind} / ${r.tone}] "${visible(r.text)}" with the ${step.phase} step "${visible(snap.card?.weightRead?.plan?.action.text ?? '')}" on the card` });
+    }
+  }
+  assert.ok(seen > 0, `${name}: no ceiling warning stood next to an active step, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss'], 'item 3: a user who logs no food is never told "the step you started" (the app cannot see a snack): it is "Keep the daily snack (from Jun 5)"', (snaps, name) => {
+  const out = textMatches(snaps, allTexts, /the step you started/);
+  const from = snaps.filter(s => allTexts(s).some(t => /Keep the daily snack \(from [A-Z][a-z]{2} \d{1,2}\)/.test(plain(t.text)))).length;
+  assert.ok(from > 0, `${name}: "Keep the daily snack (from <date>)" never appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(['weight_loss'], 'item 4: a user who logs no food is never told "Keep the daily snack — it\'s your maintenance" (a snack is not a maintenance): it is "Keep eating as you are, snack included — that\'s your maintenance; ..."', (snaps, name) => {
+  const out = textMatches(snaps, allTexts, /daily snack — it['’]s your maintenance/);
+  const said = snaps.filter(s => allTexts(s).some(t => /^Keep eating as you are, snack included — that['’]s your maintenance; if your average drifts/.test(plain(t.text)))).length;
+  assert.ok(said > 0, `${name}: the settled non-logger wording never appeared, so this invariant checked nothing`);
   return out;
 });
 

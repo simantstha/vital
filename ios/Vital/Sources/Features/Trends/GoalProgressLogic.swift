@@ -739,8 +739,10 @@ enum GoalProgressLogic {
 
     /// The headline lift as a short tail for the Today line: the server's lift
     /// reason ("Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)", always the
-    /// shared headline lift, first) becomes "Squat +10 kg / 4 wk". `nil` when
-    /// there is no lift reason, or it carries no signed change ("unchanged").
+    /// shared headline lift, first) becomes "Squat +10 kg / 4 wk" - or, when the
+    /// reason dates its baseline ("... +9 kg vs wk of Apr 6 (...)"), "Squat +9 kg
+    /// vs wk of Apr 6". `nil` when there is no lift reason, or it carries no signed
+    /// change ("unchanged").
     static func liftShortText(_ progress: GoalProgressDTO) -> String? {
         guard let reason = progress.reasons.first(where: { $0.kind.lowercased().contains("lift") }),
               let nameEnd = reason.text.range(of: " est. 1RM"),
@@ -750,6 +752,12 @@ enum GoalProgressLogic {
         guard !name.isEmpty else { return nil }
         // Keep "+10 kg" and "/ 4 wk" whole: wrapping happens between them.
         let change = String(reason.text[delta]).replacingOccurrences(of: " ", with: nbsp)
+        // The server dates the baseline ("vs wk of Apr 6") when its number came from the week before the 4-weeks-ago week (`liftBaselineLabel`, wave 24s);
+        // "/ 4 wk" would then be wrong, so the Today line says the same week the card does (wave 25s): "Squat +9 kg vs wk of Apr 6".
+        if let week = reason.text.range(of: #"vs\swk\sof\s[A-Z][a-z]{2}\s\d{1,2}"#, options: .regularExpression) {
+            let named = String(reason.text[week]).replacingOccurrences(of: " ", with: nbsp)
+            return "\(name) \(change) \(named)"
+        }
         return "\(name) \(change) /\(nbsp)4\(nbsp)wk"
     }
 

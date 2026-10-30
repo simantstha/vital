@@ -327,7 +327,7 @@ test('a lift not trained in the reviewed week gets its dated last value, not a d
   assert.equal(statByLabel(lb, 'Squat est. 1RM')!.value, `${Math.round(squat[4].bestEstimatedOneRepMaxKg as number * 2.20462)} lb`);
 });
 
-test('muscle: best-lift stat says "vs 4 weeks before" (the reviewed week\'s window) when that window has data', () => {
+test('muscle: best-lift stat names its baseline week ("vs wk of Aug 31"), not the card\'s "vs 4 weeks ago" (the reviewed week\'s window) when that window has data (wave 25s)', () => {
   // anchor = WEEK_START (2026-09-28): recent {09-28, 09-21}, baseline {08-31, 08-24}
   const progression: ProgressionSummary = {
     'Bench Press': [liftWk('2026-08-31', 100), liftWk('2026-09-21', 104), liftWk(WEEK_START, 103)],
@@ -340,7 +340,7 @@ test('muscle: best-lift stat says "vs 4 weeks before" (the reviewed week\'s wind
   }));
   const lift = statByLabel(r, 'Bench Press est. 1RM')!;
   assert.equal(lift.value, '+4 kg'); // best(104, 103) - 100
-  assert.equal(lift.comparison, 'vs 4 weeks before');
+  assert.equal(lift.comparison, 'vs wk of Aug 31'); // the week 4 weeks before the window's end (09-28)
 });
 
 test('muscle: without 4-weeks-ago data the lift stat is labelled "vs the week before" (or "vs last trained week" across a skipped week)', () => {
@@ -377,7 +377,7 @@ test('weekly-review lift stat equals the shared definition for the same fixture'
   assert.equal(liftChange4w(progression['Bench Press'], '2026-10-05')!.changeKg, 6.2);
 });
 
-test('muscle: weekly review names the same headline lift as the goal card, labelled over 4 wks', () => {
+test('muscle: weekly review names the same headline lift as the goal card, labelled with its baseline week (wave 25s: it read "over 4 wks")', () => {
   const progression: ProgressionSummary = {
     'Bench Press': [liftWk('2026-08-31', 99.2, 30), liftWk(WEEK_START, 107.9, 30)],
     Squat: [liftWk('2026-08-31', 120, 6), liftWk(WEEK_START, 140.4, 6)],
@@ -390,7 +390,7 @@ test('muscle: weekly review names the same headline lift as the goal card, label
   }));
   assert.equal(statByLabel(r, 'Squat est. 1RM')!.value, '+20 kg');
   assert.equal(statByLabel(r, 'Bench Press est. 1RM'), undefined);
-  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks');
+  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +20 kg vs wk of Aug 31');
   assert.equal(pickHeadlineLift(progression, WEEK_START)!.exercise, 'Squat');
 });
 
@@ -574,7 +574,7 @@ test('weekRating muscle: 3 of 4 sessions is "mixed" even when the 4-week goal ve
     Squat: [liftWk('2026-08-31', 120, 6), liftWk(WEEK_START, 140.4, 6)],
   };
   const r = computeWeeklyReview(muscleWeek({ verdict: 'progressing', trainingDays: [WEEK[0], WEEK[2], WEEK[4]], progression }));
-  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +20 kg over 4 wks');
+  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +20 kg vs wk of Aug 31');
   assert.equal(r.verdict, 'progressing');
   assert.equal(r.weekRating, 'mixed');
 });
@@ -893,7 +893,7 @@ test('mixed lifter (3 of 4 sessions): the Slip names the sessions and Next week 
   const r = computeWeeklyReview(priyaWeek());
   assert.equal(r.weekRating, 'mixed');
   assert.deepEqual(r.weekGap, { kind: 'sessions', done: 3, target: 4 });
-  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +10 kg over 4 wks');
+  assert.equal(r.headline, '3 of 4 sessions, Squat est. 1RM +10 kg vs wk of Aug 31');
   assert.equal(r.slip, '3 of 4 sessions — one short');
   // One session short: back to 4, the missed one is not put back on the calendar (a muscle week is never made up).
   // (This fixture is the lifter's second week of lift data: the first review that shows an est. 1RM stat explains it, once - wave 23s.)
@@ -1544,11 +1544,11 @@ test('coherence: mixed / tough ⇒ the Slip names the gap and Next week never re
 
 // ── non-breaking spaces: numbers never part from their units (asserts the RAW copy) ──
 
-test('review copy joins numbers to units, "a → b" pairs and "over 4 wks" with U+00A0', () => {
+test('review copy joins numbers to units and "a → b" pairs with U+00A0 (the baseline week reads in plain spaces: "vs wk of Aug 31")', () => {
   const lifter = computeWeeklyReviewRaw(priyaWeek());
-  assert.equal(lifter.headline, `3 of 4 sessions, Squat est. 1RM +10${NBSP}kg over 4${NBSP}wks`);
+  assert.equal(lifter.headline, `3 of 4 sessions, Squat est. 1RM +10${NBSP}kg vs wk of Aug 31`);
   assert.equal(statByLabel(lifter, 'Squat est. 1RM')!.value, `+10${NBSP}kg`);
-  assert.equal(lifter.win, `Squat estimated 1RM is up 10${NBSP}kg vs 4 weeks before.`);
+  assert.equal(lifter.win, `Squat estimated 1RM is up 10${NBSP}kg vs wk of Aug 31.`);
 
   const runner = computeWeeklyReviewRaw(marcusWeek());
   assert.equal(runner.headline, `3 sessions, 24.5 of ~24${NBSP}km — on plan · goal 30${NBSP}km, +12% vs last week`);
@@ -2103,9 +2103,9 @@ test('the card and the review name the same lift and the same number (anchored o
   const cardLift = card.reasons.find(r => r.kind === 'lift')!.text; // "Squat est. 1RM +11 kg vs 4 weeks ago (130 → 141 kg)"
   const stat = review.stats.find(s => s.label.endsWith('est. 1RM'))!;
   assert.equal(plainSpaces(cardLift).split(' est.')[0], stat.label.split(' est.')[0]); // same lift
-  // The same number; the review's window ends at the REVIEWED week, so it says "before" (on a Monday after she has lifted, the card's window has moved on a week and
-  // the two must not print different deltas under one label - wave 24s).
-  assert.equal(stat.comparison, 'vs 4 weeks before');
+  // The same number; the review's window ends at the REVIEWED week, so it names its baseline week (on a Monday after she has lifted, the card's window has moved on a week and
+  // the two must not print different deltas under one label - waves 24s, 25s: "vs wk of Aug 31", never the card's "vs 4 weeks ago" words).
+  assert.equal(stat.comparison, 'vs wk of Aug 31');
   assert.equal(stat.value, /est\. 1RM ([+−]\d+ kg) vs 4 weeks ago/.exec(plainSpaces(cardLift))![1]); // same number
   assert.equal(stat.label, 'Squat est. 1RM');
   assert.equal(stat.value, '+10 kg');
@@ -2682,10 +2682,10 @@ test('a slack week (1-2 of 4 sessions) has no 4-week lift win: the session itsel
   assert.ok(one.stats.some(st => st.label.endsWith('est. 1RM')), JSON.stringify(one.stats));
   assert.ok(one.stats.filter(st => st.label.endsWith('est. 1RM')).every(st => st.tone !== 'good'), JSON.stringify(one.stats));
   assert.equal(one.headline, '1 of 4 sessions last week — a short week');
-  // A lift trained at working weight that week may still show its gain: green stat, in the headline "over 4 wks".
+  // A lift trained at working weight that week may still show its gain: green stat, in the headline "vs wk of Aug 31".
   const trainedSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 1)] } }));
   assert.equal(statByLabel(trainedSquat, 'Squat est. 1RM')!.tone, 'good');
-  assert.match(trainedSquat.headline, /^1 of 4 sessions, Squat est\. 1RM \+5\skg over 4\swks$/);
+  assert.match(trainedSquat.headline, /^1 of 4 sessions, Squat est\. 1RM \+5\skg vs wk of Aug 31$/);
   // ... but not when that week's squat was a light day (a top set under 90% of its best): neutral again.
   const lightSquat = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0]], strengthDays: [WEEK[0]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 90, 1)] } }));
   assert.equal(statByLabel(lightSquat, 'Squat est. 1RM')!.tone, 'neutral');
@@ -2700,7 +2700,7 @@ test('a slack week (1-2 of 4 sessions) has no 4-week lift win: the session itsel
   assert.equal(statByLabel(rising, 'Weekly avg weight')!.tone, 'neutral');
   assert.equal(rising.win, "You still got Thursday's bench session in.");
   const three = computeWeeklyReview(liftReview({ trainingDays: [WEEK[0], WEEK[2], WEEK[4]], strengthDays: [WEEK[0], WEEK[2], WEEK[4]], weightReadings: flat, progression: { squat: [...steadySquat, lwk(WEEK_START, 138, 110, 3)] } }));
-  assert.match(three.win ?? '', /^Squat estimated 1RM is up 5\skg vs 4 weeks before\.$/);
+  assert.match(three.win ?? '', /^Squat estimated 1RM is up 5\skg vs wk of Aug 31\.$/);
 });
 
 test('a flat weekly average reads "no change", not "0 kg"', () => {

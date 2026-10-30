@@ -104,6 +104,8 @@ import {
   PLATEAU_SPAN_DAYS,
   WEEK_MEAN_MIN_WEIGH_INS,
   stepDayReached,
+  stepHeadlineClause,
+  stepRateTail,
   fmtWeekday,
   weightWeekPlan,
   type WeightPlanPace,
@@ -1665,14 +1667,16 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
  * a pace wobbling around 1% never flips the tone from one day to the next; with the call on, a pace between 0.9% and the ceiling
  * keeps the watch ("close to the ceiling", hysteresis) and is not called "safe".
  * `easeToMaintenance`: the target is reached and the loss is still past the ceiling, so the warning says what to do.
- * `stepCovers` (wave 24w): ...and the plan already gives the easing step, which is that instruction - the warning says so instead of adding another.
+ * `stepTail` (wave 24w, 25w): ...and the plan already gives the easing step, which is that instruction - the warning says so instead of adding another
+ * (`stepRateTail`: "your easing step covers this" to a logger the logs show taking it, "the easing step (~2,150-2,200 kcal) addresses this" to everyone else).
+ * It closes every watch about the ceiling while a step is active - "above" it and "close to" it - so a warning never stands without the step beside it.
  * `other` (wave 22w): the pace a week earlier, when "on pace" rests on two paces that straddle the date - the rate is then the honest
  * range ("Down 0.37-0.58 kg/wk"), not one number that lands weeks off the date it is called on track for.
  */
 function paceReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
-  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepCovers?: boolean; about?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
+  opts: { tooFast?: boolean; easeToMaintenance?: boolean; stepTail?: string; about?: boolean; other?: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek'> | null; endedOn?: string | null } = {},
 ): GoalProgressReason {
   if (opts.other != null && pace.kgPerWeek < 0 && opts.other.kgPerWeek < 0) return paceRangeReason(input, pace, opts.other, opts.endedOn);
   const dir = pace.kgPerWeek < 0 ? 'Down' : 'Up';
@@ -1689,10 +1693,10 @@ function paceReason(
     if (opts.tooFast && abs > band.maxPct) {
       tone = 'watch';
       // While the plan's easing step is the instruction, the warning adds no second one (wave 24w): the step covers it.
-      text += `, above the ${band.maxPct}% a week ceiling${opts.stepCovers ? ' — your easing step covers this' : opts.easeToMaintenance ? ' — ease calories toward maintenance' : ''}`;
+      text += `, above the ${band.maxPct}% a week ceiling${opts.stepTail ?? (opts.easeToMaintenance ? ' — ease calories toward maintenance' : '')}`;
     } else if (opts.tooFast && abs >= band.minPct) {
       tone = 'watch';
-      text += `, close to the ${band.maxPct}% a week ceiling`;
+      text += `, close to the ${band.maxPct}% a week ceiling${opts.stepTail ?? ''}`;
     } else if (abs >= band.minPct && abs <= band.maxPct) {
       tone = 'good';
       text += `, inside the ${band.minPct}–${band.maxPct}% safe band`;
@@ -1983,7 +1987,7 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     // One calorie instruction per card (wave 24w): while the step is given or standing it is the instruction; once it is read there is none to repeat.
     const stepActive = plan.step != null && (plan.step.phase === 'given' || plan.step.phase === 'standing');
     const stillFast = pace != null && plan.tooFast && pace.kgPerWeek < 0
-      ? paceReason(input, pace, { tooFast: true, easeToMaintenance: plan.step == null, stepCovers: stepActive })
+      ? paceReason(input, pace, { tooFast: true, easeToMaintenance: plan.step == null, stepTail: stepActive && plan.step != null ? stepRateTail(plan.step) : undefined })
       : null;
     const watch = underEating ?? stillFast;
     const when = w.reachedAt ? ` (${fmtDate(w.reachedAt, input.todayKey)})` : '';
@@ -2014,7 +2018,12 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
   const held = plan.tooFast && round2(absPct) <= FAT_LOSS_BAND.maxPct;
   // The headline quotes the rate ("losing about 0.6 kg a week") only for a pace nothing has confirmed yet: the rate line then says the same figure.
   const quotesRate = !plan.confirmed && !plan.tooFast && !plan.nearlyThere && p.kgPerWeek < 0 && absPct > PLATEAU_MAX_PCT_PER_WEEK;
-  const rate = paceReason(input, p, { tooFast: plan.tooFast, about: quotesRate, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null });
+  // While the easing step is the week's instruction (given or standing) a ceiling warning says where it is (wave 25w), never stands alone beside "Aim for ~2,150 kcal".
+  const stepOn = plan.step != null && (plan.step.phase === 'given' || plan.step.phase === 'standing');
+  const rate = paceReason(input, p, {
+    tooFast: plan.tooFast, about: quotesRate, other: plan.earlierPace, endedOn: w.aging ? w.lastWeighInDay : null,
+    stepTail: stepOn && plan.step != null ? stepRateTail(plan.step) : undefined,
+  });
   const action = planActionReason(plan);
 
   if (plan.tooFast && !plan.nearlyThere) {
@@ -2029,10 +2038,9 @@ function fatLossOutcomeFresh(input: GoalProgressInput, w: WeightBlock): Outcome 
     // dates give (the card does not turn "too fast" for the last few days and "reached" right after).
     // The week the step is given it starts the easing; the weeks after, it is a level to keep until the step is read (wave 23w).
     const standing = plan.step != null && plan.step.phase !== 'given';
-    // A standing step says what to eat, not "your easing step" (wave 24w): the level, or the snack for someone who logs no food.
-    const level = plan.step?.loKcal != null && plan.step.hiKcal != null
-      ? `stay at ~${plan.step.loKcal === plan.step.hiKcal ? withUnit(fmtKcal(plan.step.hiKcal), 'kcal') : `${fmtKcal(plan.step.loKcal)}–${withUnit(fmtKcal(plan.step.hiKcal), 'kcal')}`}`
-      : 'keep your daily snack';
+    // A standing step says what to eat, not "your easing step" (wave 24w): the level, or the snack for someone who logs no food. The verb is the plan's own
+    // (wave 25w, `stepHeadlineClause`): "stay at" once the logs show the step, "aim for" until then - the action line below it says the same.
+    const level = plan.step != null ? stepHeadlineClause(plan.step) : 'keep your daily snack';
     return {
       verdict: plan.verdict,
       headline: clip(standing ? `Nearly there — ${level}` : 'Nearly there — start easing calories toward maintenance'),

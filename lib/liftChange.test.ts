@@ -38,14 +38,32 @@ test('liftBaselineWeek / liftBaselineLabel: "vs 4 weeks ago" only when the basel
   assert.deepEqual(liftChange4w(older, ANCHOR), { baselineKg: 110, recentKg: 105, changeKg: -5 });
   // The same number from the 4-weeks-ago week itself (ties go to the newer week): "4 weeks ago".
   assert.equal(liftBaselineLabel([wk('2026-08-31', 102), wk('2026-09-07', 102), wk('2026-10-05', 105)], ANCHOR), 'vs 4 weeks ago');
-  // The weekly review's window ends at the reviewed week: "vs 4 weeks before"; a named week reads the same on both.
-  assert.equal(liftBaselineLabel(full, ANCHOR, 'before'), 'vs 4 weeks before');
-  assert.equal(liftBaselineLabel(gap, ANCHOR, 'before'), 'vs wk of Aug 31');
+  // The weekly review's window ends at the reviewed week, so on a Monday its number differs from the card's: it names its baseline week EVERY time (wave 25s; it read
+  // "vs 4 weeks before", two near-identical labels over two numbers): "vs wk of Sep 7" for the same 4-weeks-ago baseline the card calls "vs 4 weeks ago".
+  assert.equal(liftBaselineLabel(full, ANCHOR, 'week'), 'vs wk of Sep 7');
+  assert.equal(liftBaselineLabel(gap, ANCHOR, 'week'), 'vs wk of Aug 31');
+  assert.equal(liftBaselineLabel(older, ANCHOR, 'week'), 'vs wk of Aug 31');
+  // Nothing to name: the generic wording, one per window.
+  assert.equal(liftBaselineLabel([wk('2026-09-14', 100), wk('2026-10-05', 101)], ANCHOR, 'week'), 'vs 4 weeks before');
   // No comparison: nothing to name.
   assert.equal(liftBaselineWeek([wk('2026-09-14', 100), wk('2026-10-05', 101)], ANCHOR), null);
   assert.equal(liftBaselineLabel([wk('2026-09-14', 100), wk('2026-10-05', 101)], ANCHOR), 'vs 4 weeks ago');
   // A one-digit day has no leading zero.
   assert.equal(liftBaselineLabel([wk('2026-04-06', 139), wk('2026-05-11', 151)], '2026-05-11'), 'vs wk of Apr 6');
+});
+
+// Parity with ios/Vital/Tests/TrendsStrengthLogicTests.swift testChipNamesTheBaselineWeekWhenItIsNotTheFourWeeksAgoWeek (wave 25s): the same fixtures on the dense 8-week grid
+// 2026-08-17 ... 2026-10-05 (the Swift `keys`), the same labels. The Trends chip and the Today line say "vs 4 wk ago" only when the baseline number came from that week, else
+// "vs wk of Aug 31" - exactly what liftBaselineLabel says on the card. If you change one, change the other.
+test('iOS chip parity: the label for the dense-grid fixtures the Swift tests pin (wave 25s)', () => {
+  const label = (points: Record<string, number>): string => liftBaselineLabel(Object.entries(points).map(([w, e]) => wk(w, e)), ANCHOR);
+  assert.equal(label({ '2026-09-07': 100, '2026-10-05': 110 }), 'vs 4 weeks ago'); // the 4-weeks-ago week only
+  assert.equal(label({ '2026-08-31': 100, '2026-10-05': 110 }), 'vs wk of Aug 31'); // 4-weeks-ago week empty: the week before it
+  assert.equal(label({ '2026-08-31': 110, '2026-09-07': 102, '2026-10-05': 105 }), 'vs wk of Aug 31'); // both, the older one better
+  assert.equal(label({ '2026-08-31': 102, '2026-09-07': 102, '2026-10-05': 105 }), 'vs 4 weeks ago'); // a tie goes to the newer week
+  assert.equal(label({ '2026-08-31': 101, '2026-08-24': 100, '2026-09-21': 103, '2026-09-28': 106.4 }), 'vs 4 weeks ago'); // empty current week: the end is 09-28, its 4-weeks-ago week 08-31
+  assert.equal(label({ '2026-08-24': 100, '2026-09-28': 106 }), 'vs wk of Aug 24'); // the end is 09-28 and 08-31 is empty: 08-24
+  assert.equal(label({ '2026-09-14': 100, '2026-10-05': 101 }), 'vs 4 weeks ago'); // no comparison: the generic words, never a week
 });
 
 test('squat: a decline is reported as a negative change', () => {

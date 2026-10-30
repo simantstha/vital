@@ -13,7 +13,7 @@ import type { GoalKind, GoalProgress } from '../goalProgress';
 import { liftLapseMinDays } from '../liftChange';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
 import { PACE_SETTLE_DAYS, relationForDays, weeksForDays } from '../weightPace';
-import { REACHED_ASK_DAYS } from '../weightWeekPlan';
+import { REACHED_ASK_DAYS, stepVerb } from '../weightWeekPlan';
 import type { UnitSystem } from '../units';
 
 /**
@@ -221,7 +221,9 @@ export function goalOpenerLine(gp: GoalProgress | null | undefined, units: UnitS
     const step = plan?.step;
     if (plan != null && step != null && (step.phase === 'standing' || step.phase === 'settled') && holdKg != null && Math.abs(holdKg - target) <= HOLDING_RANGE_KG) {
       const at = Math.round(holdKg * 10) === Math.round(target * 10) ? weightAmount(target, units) : weightFixed(holdKg, units);
-      const level = step.loKcal != null && step.hiKcal != null ? `stay around ~${kcalRange(step.loKcal, step.hiKcal)}` : 'keep your daily snack';
+      // "Stay around" a level the logs show (or the named maintenance it settled on), "aim for" it until they do (wave 25w: the plan's own `step.logsShow`).
+      const verb = stepVerb(step.phase === 'settled' || step.logsShow === true) === 'stay at' ? 'stay around' : 'aim for';
+      const level = step.loKcal != null && step.hiKcal != null ? `${verb} ~${kcalRange(step.loKcal, step.hiKcal)}` : 'keep your daily snack';
       return `You're holding at ${at} ${unit} — ${level} this week and keep weighing in.`;
     }
     // The plan has a calorie instruction for a reached goal (a held weight on real intake made the maintenance target, or the

@@ -43,6 +43,7 @@ import {
   liftWeekChangeDisplay,
   formatLiftWeek,
   liftBaselineLabel,
+  liftChange4w,
   liftDisplayName,
   liftLastBest,
   liftRecentEndWeek,
@@ -427,6 +428,8 @@ interface Week {
   eligible: Set<string>;
   /** Muscle: the session already logged on the review's own Monday, if any (wave 23s; see `readMondaySession`). */
   monday?: MondaySession | null;
+  /** Muscle: the lift data BEFORE it was cut at the reviewed week (what the goal card reads that Monday, this Monday's session included); set only when it was cut (wave 25s). */
+  cardProgression?: ProgressionSummary;
 }
 
 /** The session already logged on the review's own Monday (wave 23s, 24s): see `readMondaySession`. */
@@ -967,12 +970,20 @@ function liftCandidate(input: WeeklyReviewInput, week: Week): Candidate | null {
     }
   }
   if (picked) {
+    const shown = liftDisplayChange(picked.change, imperial).change;
+    // Always "vs wk of Mar 16" (wave 25s): the window ends at the reviewed week, not today, so this is not the card's "vs 4 weeks ago" number and does not borrow its words.
+    let windowLabel = liftBaselineLabel(input.progression[picked.exercise], liftAnchor(week), 'week');
+    // The one way the card can name the SAME week: she lifted this lift on the review's own Monday, so the card's window ends a week later (this Monday's session is in it,
+    // the review's is cut at the reviewed week) while both compare with the same baseline week (lifter_obedient day 70: card "+9 kg vs wk of Apr 6", review "+6 kg vs wk of
+    // Apr 6"). Two numbers under one label: the review says whose recent end it is.
+    const cardWeeks = week.cardProgression?.[picked.exercise];
+    const cardChange = cardWeeks ? liftChange4w(cardWeeks, liftAnchor(week)) : null;
+    if (cardWeeks && cardChange && liftDisplayChange(cardChange, imperial).change !== shown && liftBaselineLabel(cardWeeks, liftAnchor(week)) === windowLabel) windowLabel = `last wk ${windowLabel}`;
     best = {
       key: picked.exercise,
       name: liftDisplayName(picked.exercise, input.exerciseDisplay),
-      shown: liftDisplayChange(picked.change, imperial).change,
-      // "vs 4 weeks before" (the window ends at the reviewed week, not today), or "vs wk of Aug 31" when the baseline came from the week before it (label only, wave 24s).
-      windowLabel: liftBaselineLabel(input.progression[picked.exercise], liftAnchor(week), 'before'),
+      shown,
+      windowLabel,
       stalled: isLiftStalled(input.progression[picked.exercise], liftAnchor(week)),
     };
   } else {
@@ -1970,9 +1981,9 @@ function buildHeadline(input: WeeklyReviewInput, cands: Candidate[], week: Week)
       // Returning from a break: the rebuild leads ("Squat est. 1RM 136 of 142 kg pre-break"), regained or not.
       parts.push(returnHeadlinePart(input, `${parts.join(', ')}, `));
     } else if (lift && lift.tone === 'good') {
-      // The lift change is a 4-week number inside a one-week sentence: say so.
+      // The lift change is a 4-week number inside a one-week sentence: its comparison names the baseline week ("vs wk of Mar 16", wave 25s; it used to read "over 4 wks").
       const cmp = lift.comparison ?? '';
-      const window = cmp.includes('4 weeks') ? `over ${withUnit(4, 'wks')}` : cmp.replace('last trained week', 'last trained wk');
+      const window = cmp.replace('last trained week', 'last trained wk');
       parts.push(`${lift.label} ${lift.value} ${window}`);
     }
     else if (protein) parts.push(`protein ${protein.value.replace('/', ' of ')} ${loggedWord(protein)}days`);
@@ -3134,6 +3145,7 @@ export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
   const lifterInput = rawInput.goal === 'muscle' && Object.values(rawInput.progression).some(ws => ws.some(w => w.weekStart > week.days[0]))
     ? { ...rawInput, progression: progressionUpTo(rawInput.progression, week.days[0]) }
     : rawInput;
+  if (lifterInput !== rawInput) week.cardProgression = rawInput.progression;
   const input = lifterInput; // (the budget stays the one in force: `budgetDays` splits the week at an eat-more step's start - wave 24w)
   const prevWeek = makeWeek(addDays(input.weekStart, -7), input.signupDay);
   const daysWithData = countDataDays(input, week);

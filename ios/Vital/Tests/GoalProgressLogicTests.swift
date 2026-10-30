@@ -699,6 +699,27 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertNil(try decode(",\"adherence\":{\"done\":9,\"planned\":16,\"weeklyTarget\":4}").adherence?.pct)
     }
 
+    /// Wave 25s: the card's reason dates its baseline ("vs wk of Apr 6") when the number came from the week before the 4-weeks-ago week
+    /// (`liftBaselineLabel` in lib/liftChange.ts). The Today line says that week too, not "/ 4 wk" (the card said +9 kg vs wk of Apr 6
+    /// while the line said "Squat +9 kg / 4 wk"). Server wording quoted exactly; the spaces are non-breaking.
+    func testTodayLiftLineNamesTheBaselineWeekWhenTheCardDoes() {
+        func muscle(_ text: String) -> GoalProgressDTO {
+            GoalProgressDTO(
+                goal: "muscle", target: .init(weightKg: 83),
+                current: .init(weightKg: 80, startWeightKg: 79, changeKg: 1, progressPct: 25), eta: "2026-12-06", verdict: .progressing,
+                reasons: [GoalReasonDTO(kind: "lift", text: text, tone: .good)]
+            )
+        }
+        let dated = muscle("Squat est. 1RM +9 kg vs wk of Apr 6 (139 → 148 kg)")
+        XCTAssertEqual(GoalProgressLogic.liftShortText(dated), "Squat +9\u{00A0}kg vs\u{00A0}wk\u{00A0}of\u{00A0}Apr\u{00A0}6")
+        // The server's own non-breaking spaces and a two-digit day read the same.
+        let nb = muscle("Squat est. 1RM +9\u{00A0}kg vs wk of Aug 31 (139 → 148\u{00A0}kg)")
+        XCTAssertEqual(GoalProgressLogic.liftShortText(nb), "Squat +9\u{00A0}kg vs\u{00A0}wk\u{00A0}of\u{00A0}Aug\u{00A0}31")
+        // The 4-weeks-ago baseline keeps "/ 4 wk".
+        let ago = muscle("Squat est. 1RM +10 kg vs 4 weeks ago (153 → 163 kg)")
+        XCTAssertEqual(GoalProgressLogic.liftShortText(ago), "Squat +10\u{00A0}kg /\u{00A0}4\u{00A0}wk")
+    }
+
     /// Wrapping may only happen between tokens: no plain space sits directly
     /// before a unit, and "/ 4 wk" is one token.
     func testValueUnitTokensDoNotBreakMidValue() {

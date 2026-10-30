@@ -227,6 +227,64 @@ final class TrendsStrengthLogicTests: XCTestCase {
         XCTAssertNil(TrendsStrengthLogic.change(e1rm: series(["2026-09-14": 100])))
     }
 
+    // MARK: - The chip names the baseline week (wave 25s; parity with lib/liftChange.ts `liftBaselineLabel`)
+
+    /// Same fixtures, same labels as `lib/liftChange.test.ts` "iOS chip parity" on the dense grid `keys` (2026-08-17 ... 2026-10-05).
+    /// The goal card says "vs wk of Aug 31" when the baseline number came from the week before the 4-weeks-ago week; the chip said
+    /// "vs 4 wk ago" over the same number. Non-breaking spaces read as plain ones here (the TypeScript side has none).
+    func testChipNamesTheBaselineWeekWhenItIsNotTheFourWeeksAgoWeek() {
+        let k = keys
+        func series(_ points: [String: Double]) -> [Double?] { k.map { points[$0] } }
+        func label(_ points: [String: Double]) -> String {
+            TrendsStrengthLogic.baselineLabel(e1rm: series(points), keys: k).replacingOccurrences(of: "\u{00A0}", with: " ")
+        }
+        // The 4-weeks-ago week only.
+        XCTAssertEqual(label(["2026-09-07": 100, "2026-10-05": 110]), "vs 4 wk ago")
+        // The 4-weeks-ago week is empty (an ill week): the baseline is the week of Aug 31.
+        XCTAssertEqual(label(["2026-08-31": 100, "2026-10-05": 110]), "vs wk of Aug 31")
+        // Both weeks have data and the older one is the better: the number is from five weeks back.
+        XCTAssertEqual(label(["2026-08-31": 110, "2026-09-07": 102, "2026-10-05": 105]), "vs wk of Aug 31")
+        // A tie goes to the newer week.
+        XCTAssertEqual(label(["2026-08-31": 102, "2026-09-07": 102, "2026-10-05": 105]), "vs 4 wk ago")
+        // The empty current week: the end is 09-28, its 4-weeks-ago week 08-31.
+        XCTAssertEqual(label(["2026-08-31": 101, "2026-08-24": 100, "2026-09-21": 103, "2026-09-28": 106.4]), "vs 4 wk ago")
+        // The end is 09-28 and 08-31 is empty: the week before it, 08-24.
+        XCTAssertEqual(label(["2026-08-24": 100, "2026-09-28": 106]), "vs wk of Aug 24")
+        // No grid, or one that does not line up with the series: the generic words.
+        XCTAssertEqual(TrendsStrengthLogic.baselineLabel(e1rm: series(["2026-08-31": 100, "2026-10-05": 110]), keys: nil), "vs 4\u{00A0}wk ago")
+        XCTAssertEqual(TrendsStrengthLogic.baselineLabel(e1rm: series(["2026-08-31": 100, "2026-10-05": 110]), keys: ["2026-10-05"]), "vs 4\u{00A0}wk ago")
+        // One-digit days carry no leading zero (as `formatLiftWeek` on the server).
+        XCTAssertEqual(TrendsStrengthLogic.monthDayText(weekStart: "2026-04-06")?.replacingOccurrences(of: "\u{00A0}", with: " "), "Apr 6")
+        XCTAssertNil(TrendsStrengthLogic.monthDayText(weekStart: "nope"))
+    }
+
+    func testStatusChipSaysTheSameWeekAsTheCard() {
+        let k = keys
+        func series(_ points: [String: Double]) -> [Double?] { k.map { points[$0] } }
+        let gap = series(["2026-08-31": 100, "2026-10-05": 110])
+        // The number is the same either way (`change` is untouched); only the label names the week.
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: gap, system: .metric, keys: k).text, "+10\u{00A0}kg vs wk\u{00A0}of\u{00A0}Aug\u{00A0}31")
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: gap, system: .metric).text, "+10\u{00A0}kg vs 4\u{00A0}wk ago")
+        // A decline and "no change" name it too.
+        let down = series(["2026-08-31": 110, "2026-10-05": 100])
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: down, system: .metric, keys: k).text, "\u{2212}10\u{00A0}kg vs wk\u{00A0}of\u{00A0}Aug\u{00A0}31")
+        let flat = series(["2026-08-31": 200, "2026-10-05": 201])
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: flat, system: .metric, keys: k).text, "No change vs wk\u{00A0}of\u{00A0}Aug\u{00A0}31")
+        // With the 4-weeks-ago week itself the chip reads as it always did.
+        let ago = series(["2026-09-07": 100, "2026-10-05": 110])
+        XCTAssertEqual(TrendsStrengthLogic.status(e1rm: ago, system: .metric, keys: k).text, "+10\u{00A0}kg vs 4\u{00A0}wk ago")
+        assertNoBreakableUnitSpace(TrendsStrengthLogic.status(e1rm: gap, system: .imperial, keys: k).text)
+    }
+
+    func testCardChipNamesTheBaselineWeek() throws {
+        let k = keys
+        let summary = WorkoutSummaryResponse(days: 84, exercises: [
+            "squat": [stat(k[2], e1rm: 100), stat(k[7], e1rm: 110)],
+        ])
+        let card = try XCTUnwrap(TrendsStrengthLogic.card(from: summary, system: .metric, today: today))
+        XCTAssertEqual(card.lifts.first?.status.text, "+10\u{00A0}kg vs wk\u{00A0}of\u{00A0}Aug\u{00A0}31")
+    }
+
     // MARK: - card
 
     private func exercises() -> [String: [WorkoutWeeklyStatDTO]] {
