@@ -244,12 +244,15 @@ test('wave 23w: once the step toward maintenance is given the opener is one shor
     current: { weightKg: weekMeanKg, startWeightKg: 92, changeKg: -8, progressPct: 100 },
     weightRead: { ...READ, state: 'reached', weekMeanKg, scaleKg: 84, reachedDaysAgo: 12, plan },
   });
-  const standing = planWith({ phase: 'standing', loKcal: 2150, hiKcal: 2200, food: false }, { kind: 'maintenance_target', text: "Stay at ~2,150–2,200 kcal (the step you started Jun 5); we'll read it on Mon, Jun 22", kcalTarget: 2150 });
+  const standing = planWith({ phase: 'standing', loKcal: 2150, hiKcal: 2200, food: false, logsShow: true }, { kind: 'maintenance_target', text: "Stay at ~2,150–2,200 kcal (the step you started Jun 5); we'll read it on Mon, Jun 22", kcalTarget: 2150 });
   assert.equal(goalOpenerLine(reached(standing), 'metric'), "You're holding at 84 kg — stay around ~2,150–2,200 kcal this week and keep weighing in.");
   assert.equal(goalOpenerLine(reached(standing, 83.7), 'metric'), "You're holding at 83.7 kg — stay around ~2,150–2,200 kcal this week and keep weighing in.");
+  // Wave 25w: until the logs show the step it is "aim for", the plan's own verb ("Aim for ~2,150–2,200 kcal a day").
+  const notYet = planWith({ phase: 'standing', loKcal: 2150, hiKcal: 2200, food: false, logsShow: false }, { kind: 'maintenance_target', text: "Aim for ~2,150–2,200 kcal a day; we'll read it on Mon, Jun 22", kcalTarget: 2150 });
+  assert.equal(goalOpenerLine(reached(notYet), 'metric'), "You're holding at 84 kg — aim for ~2,150–2,200 kcal this week and keep weighing in.");
   const settled = planWith({ phase: 'settled', loKcal: 2050, hiKcal: 2050, food: false }, { kind: 'hold', text: 'Stay at ~2,050 kcal — your maintenance; if your average drifts 1 kg above or below your target, that is your cue to act', kcalTarget: 2050 });
   assert.equal(goalOpenerLine(reached(settled), 'metric'), "You're holding at 84 kg — stay around ~2,050 kcal this week and keep weighing in.");
-  const snack = planWith({ phase: 'standing', loKcal: null, hiKcal: null, food: true }, { kind: 'maintenance_target', text: "Keep the daily snack (the step you started Jun 5); we'll read it on Mon, Jun 22" });
+  const snack = planWith({ phase: 'standing', loKcal: null, hiKcal: null, food: true }, { kind: 'maintenance_target', text: "Keep the daily snack (from Jun 5); we'll read it on Mon, Jun 22" });
   assert.equal(goalOpenerLine(reached(snack), 'metric'), "You're holding at 84 kg — keep your daily snack this week and keep weighing in.");
   // The week the step is read says so, in the plan's words (without the date of the next read).
   const read = planWith({ phase: 'read', loKcal: 2150, hiKcal: 2200, food: false }, { kind: 'maintenance_target', text: "Your weekly average held within 0.5 kg on ~2,150–2,200 kcal — keep it, that's your maintenance", kcalTarget: 2150 });
