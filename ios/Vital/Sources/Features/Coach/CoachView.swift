@@ -95,7 +95,7 @@ struct CoachView: View {
 
             VStack(spacing: 0) {
                 navigationBar
-                if vm.isCoachOffline && !vm.isOnboarding {
+                if vm.showsOfflineState {
                     offlineBanner
                 }
                 messageList
@@ -110,6 +110,7 @@ struct CoachView: View {
         // Check for stale conversations on every appearance.
         .task {
             vm.refreshIfStale()
+            vm.retryOpener() // no-op unless the last load found the coach offline
             vm.loadOpener()
         }
         // Spec §3.4/§10 V3: pre-warm the shared voice session/engine the
@@ -204,11 +205,18 @@ struct CoachView: View {
                 .scaledFont(Theme.Typography.bodySmall)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Spacer(minLength: 0)
+            // The composer and chips are disabled while offline, so the banner
+            // carries the way back.
+            Button("Retry") { vm.retryOpener() }
+                .scaledFont(Theme.Typography.bodySmall)
+                .foregroundStyle(Theme.Colors.accentContent)
+                .disabled(vm.isOpening)
+                .accessibilityIdentifier("coach.offlineRetry")
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.sm)
         .background(Theme.Colors.cautionSoft)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coach.offlineBanner")
         .motionTransition(.fade)
     }
@@ -459,7 +467,7 @@ struct CoachView: View {
             } else {
                 HStack(spacing: Theme.Spacing.sm) {
                     ZStack(alignment: .leading) {
-                        TextField("Message your coach…", text: composerText, axis: .vertical)
+                        TextField(vm.showsOfflineState ? "Coach is offline" : "Message your coach…", text: composerText, axis: .vertical)
                             .scaledFont(Theme.Typography.bodyMedium)
                             .foregroundStyle(Theme.Colors.textPrimary)
                             .tint(Theme.Colors.accentContent)
@@ -467,7 +475,7 @@ struct CoachView: View {
                             // Disabled while recording (typing over a live
                             // turn would fight the mic) and while the
                             // recorded clip is being transcribed.
-                            .disabled(voice.isRecording || isTranscribing)
+                            .disabled(voice.isRecording || isTranscribing || vm.showsOfflineState)
                             .focused($composerFocused)
                             .onSubmit {
                                 vm.send()
@@ -533,6 +541,8 @@ struct CoachView: View {
                         )
                 )
                 .shadow(color: Theme.Colors.cardShadow, radius: 1, x: 0, y: 1)
+                // Offline: the whole composer reads as unavailable, not just empty.
+                .opacity(vm.showsOfflineState ? 0.5 : 1.0)
                 .padding(.horizontal, Theme.Spacing.lg)
                 .padding(.vertical, Theme.Spacing.md)
                 .background(Theme.Colors.canvas)
@@ -570,13 +580,14 @@ struct CoachView: View {
                     }
                     .buttonStyle(.plain)
                     // These tap straight into `vm.send()`, so they follow the
-                    // same busy state that guards it.
-                    .disabled(vm.isBusy)
+                    // same busy state that guards it - and the coach being offline.
+                    .disabled(vm.isBusy || vm.showsOfflineState)
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.sm)
         }
+        .opacity(vm.showsOfflineState ? 0.5 : 1.0)
         .scrollIndicators(.hidden)
         // The row clips at the trailing edge with no affordance that more
         // chips follow — a trailing fade reads as "scroll for more" the way
@@ -645,6 +656,7 @@ struct CoachView: View {
     private var canSend: Bool {
         CoachViewModel.isSendableInput(vm.input)
             && !vm.isBusy
+            && !vm.showsOfflineState
             && !voice.isRecording
             && !isTranscribing
     }
@@ -781,7 +793,7 @@ struct CoachView: View {
     /// whole message into a no-op. The `!isRecording` clause is unchanged,
     /// so stopping an in-progress recording always stays available.
     private var isMicButtonDisabled: Bool {
-        (vm.isBusy && !voice.isRecording) || isTranscribing
+        (vm.isBusy && !voice.isRecording) || isTranscribing || vm.showsOfflineState
     }
 
     /// A *fresh* recording (see `micButton`'s gesture) starts tentatively as

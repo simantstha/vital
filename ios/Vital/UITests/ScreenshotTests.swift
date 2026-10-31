@@ -770,16 +770,16 @@ final class ScreenshotTests: XCTestCase {
         // The fixture seeds a restored transcript for every *established*
         // scenario except server_error, where every endpoint 500s and
         // CoachViewModel.loadOpener() falls back to its own hardcoded
-        // greeting. `new_user` seeds no history on purpose (see
+        // offline line (composer and chips disabled). `new_user` seeds no history on purpose (see
         // `FixtureData.coachRestoration`), so it falls through to the
         // fixture's `/api/coach/opener` response instead — the new-user
         // copy, not the returning-user "Nice work…" praise, since there's no
         // history yet to praise. Either way the Coach tab never stays empty
         // once its `.task` resolves, so this is fixture-driven either way.
         if scenario == "server_error" {
-            lastStep = "\(scenario) \(appearance) captureCoach waitForText(hardcoded opener)"
-            XCTAssertTrue(waitForText(app, containing: "Ask me anything about your health trends"),
-                           "Coach should fall back to its hardcoded opener when every endpoint 500s [\(appearance)]")
+            lastStep = "\(scenario) \(appearance) captureCoach waitForText(hardcoded offline line)"
+            XCTAssertTrue(waitForText(app, containing: "I can't reach Vital right now"),
+                           "Coach should fall back to its hardcoded offline line when every endpoint 500s [\(appearance)]")
             lastStep = "\(scenario) \(appearance) captureCoach waitForText(Coach is offline)"
             XCTAssertTrue(waitForText(app, containing: "Coach is offline"),
                            "Coach should say it is offline when its load failed [\(appearance)]")

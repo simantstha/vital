@@ -878,6 +878,8 @@ final class FakeCoachAPI: CoachAPIProviding {
     var restoration: CoachRestorationResponse
     /// Defaults to `general` — tests exercising goal-aware chips override this.
     var dietGoal: String = "general"
+    /// Set by a test to make `fetchCoachOpener()` throw (the coach is unreachable).
+    var openerFailure: Error?
     var nextMessageEvents: [CoachStreamEvent] = []
     var nextMessageFailure: Error?
     var nextActionEvents: [CoachStreamEvent] = []
@@ -925,7 +927,8 @@ final class FakeCoachAPI: CoachAPIProviding {
     }
 
     func fetchCoachOpener() async throws -> String {
-        "Fresh opener"
+        if let openerFailure { throw openerFailure }
+        return "Fresh opener"
     }
 
     func resetCoachConversation() async throws {

@@ -439,6 +439,35 @@ final class CoachViewModel: ObservableObject {
     /// Copy for that banner.
     nonisolated static let offlineBannerText =
         "Coach is offline \u{2014} your data is safe, try again in a moment."
+    /// The one line the transcript shows while offline, in place of a greeting
+    /// that invites a question the coach cannot answer (the composer and chips
+    /// are disabled meanwhile - see `showsOfflineState`).
+    nonisolated static let offlineOpenerText = "I can't reach Vital right now, so I can't answer yet."
+
+    /// True while the coach can't be reached (and this isn't onboarding): the
+    /// banner shows, the starter chips and the composer are dimmed and disabled.
+    /// Cleared by a successful `loadOpener()` (via Retry or on returning to the
+    /// tab) and by any send.
+    var showsOfflineState: Bool { isCoachOffline && !isOnboarding }
+
+    /// `rows` without the offline opener line, so `loadOpener()` (which only
+    /// seeds an empty transcript) can try again. Anything else is kept.
+    nonisolated static func rowsRemovingOfflineOpener(_ rows: [ChatRow]) -> [ChatRow] {
+        rows.filter { row in
+            if case .message(let message) = row, message.role == .assistant, message.text == offlineOpenerText {
+                return false
+            }
+            return true
+        }
+    }
+
+    /// Retry from the offline banner / on returning to the Coach tab: drops the
+    /// offline line and asks for a real opener again. No-op unless offline.
+    func retryOpener() {
+        guard mode == nil, isCoachOffline, !isBusy, openerTask == nil else { return }
+        rows = Self.rowsRemovingOfflineOpener(rows)
+        loadOpener()
+    }
     /// A brief, dismissible notice for a low-stakes inline action failing —
     /// `MemorySavedChip`'s Undo, `MemoryProposalCard`'s Remember/Not now.
     /// Deliberately separate from `errorMessage`, which drives the fixed
@@ -886,8 +915,9 @@ final class CoachViewModel: ObservableObject {
             // fetched for restoration — no extra network call.
             let fetchedOpener = try? await api.fetchCoachOpener()
             isCoachOffline = (fetchedOpener == nil)
-            let text = fetchedOpener
-                ?? Self.fallbackOpenerText(isVerifiedNewConversation: hasRestoredConversation, goal: userGoal)
+            // Offline: say so, rather than a greeting ("Ask me anything...") that
+            // sits above a composer that cannot answer.
+            let text = fetchedOpener ?? Self.offlineOpenerText
             // The user may have started typing/sending while we waited — only
             // seed the opener if the transcript is still empty.
             if rows.isEmpty {
@@ -911,6 +941,10 @@ final class CoachViewModel: ObservableObject {
     nonisolated static let returningFallbackOpener =
         "Hey! I'm your Vital coach. Ask me anything about your health trends, sleep, or how to optimize your day."
 
+    /// (No longer shown by `loadOpener()`: the opener only fails when the coach is
+    /// unreachable, and that now reads `offlineOpenerText`. Kept as the pure
+    /// new-vs-returning rule its tests pin.)
+    ///
     /// Pure selection rule, kept `nonisolated` so it's directly unit-testable
     /// with no `@MainActor` hop. `isVerifiedNewConversation` should be
     /// `hasRestoredConversation` read right after `restoreConversation()`
@@ -1063,6 +1097,8 @@ final class CoachViewModel: ObservableObject {
 
         input = ""
         errorMessage = nil
+        // Sending is itself the attempt: the offline lock must not outlive it.
+        isCoachOffline = false
 
         // A new turn always interrupts any reply still being read aloud —
         // whether it's starting a fresh recording or sending (typed or
