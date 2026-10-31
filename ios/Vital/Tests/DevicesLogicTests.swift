@@ -172,6 +172,13 @@ final class DevicesLogicTests: XCTestCase {
 
     // MARK: - Connected sources (Profile row, Today checklist)
 
+    func testProfileRowValueNamesEveryConnectedSource() {
+        XCTAssertEqual(DevicesLogic.profileRowValue(appleConnected: true, whoopConnected: true), "Apple Health, WHOOP \u{00B7} connected")
+        XCTAssertEqual(DevicesLogic.profileRowValue(appleConnected: true, whoopConnected: false), "Apple Health \u{00B7} connected")
+        XCTAssertEqual(DevicesLogic.profileRowValue(appleConnected: false, whoopConnected: true), "WHOOP \u{00B7} connected")
+        XCTAssertEqual(DevicesLogic.profileRowValue(appleConnected: false, whoopConnected: false), "Not connected")
+    }
+
     func testAnySourceConnectedReadsIntegrationsAndDevices() {
         let apple = ProfileIntegration(name: "Apple Health", status: "connected")
         let none = ProfileIntegration(name: "Apple Health", status: "disconnected")

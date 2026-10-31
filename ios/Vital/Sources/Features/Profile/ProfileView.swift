@@ -282,7 +282,9 @@ private extension ProfileView {
                 }
 
                 settingsLink(index: 4, icon: "heart.fill", title: "Devices",
-                             value: appleHealthConnected ? "Apple Health · connected" : "Not connected") {
+                             value: DevicesLogic.profileRowValue(
+                                appleConnected: appleHealthConnected, whoopConnected: vm.whoopConnected
+                             )) {
                     DevicesView(appleHealthConnected: appleHealthConnected)
                 }
 

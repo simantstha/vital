@@ -203,7 +203,26 @@ enum DevicesLogic {
         return "\(mergedThisMonth) merged this month"
     }
 
-    // MARK: - Connected sources (Today checklist, Trends sleep card)
+    // MARK: - Connected sources (Profile row, Today checklist, Trends sleep card)
+
+    /// The sources the server says are connected, in display order: "Apple Health"
+    /// (the combined HealthKit integration - never "Apple Watch", see
+    /// `statusRowTitle`) then "WHOOP".
+    static func connectedSourceNames(appleConnected: Bool, whoopConnected: Bool) -> [String] {
+        var names: [String] = []
+        if appleConnected { names.append("Apple Health") }
+        if whoopConnected { names.append("WHOOP") }
+        return names
+    }
+
+    /// Profile -> "Devices" row value: "Apple Health, WHOOP · connected",
+    /// "Apple Health · connected", "WHOOP · connected", or "Not connected" when
+    /// nothing is. Derived from the real sources, never a hard-coded name.
+    static func profileRowValue(appleConnected: Bool, whoopConnected: Bool) -> String {
+        let names = connectedSourceNames(appleConnected: appleConnected, whoopConnected: whoopConnected)
+        guard !names.isEmpty else { return "Not connected" }
+        return "\(names.joined(separator: ", ")) \u{00B7} connected"
+    }
 
     /// True when the server knows ANY connected source: the profile's integrations
     /// list (its one combined "Apple Health" entry) or `/api/devices` (Apple Health

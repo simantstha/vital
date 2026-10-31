@@ -18,6 +18,9 @@ final class ProfileViewModel: ObservableObject {
     @Published var name: String = ""
     @Published var avatarInitial: String = "?"
     @Published var integrations: [ProfileIntegration] = []
+    /// Whether `/api/devices` reports WHOOP connected - the Profile "Devices" row names every
+    /// connected source, not just Apple Health. Stays `false` when that lookup fails (soft).
+    @Published var whoopConnected = false
     @Published var activityStats: [ProfileStatCell] = []
     @Published var isLoading = true
     @Published var errorMessage: String? = nil
@@ -133,8 +136,10 @@ final class ProfileViewModel: ObservableObject {
 
     func load() async {
         withAnimation(Theme.Motion.appear) { isLoading = true }
+        var profileLoaded = false
         do {
             let response = try await apiClient.fetchProfile()
+            profileLoaded = true
             name = response.name
             avatarInitial = String(response.name.prefix(1)).uppercased()
             integrations = response.integrations
@@ -157,6 +162,12 @@ final class ProfileViewModel: ObservableObject {
             activityStats = Self.activityCells(from: response.stats)
         } catch {
             errorMessage = UserFacingError.message(for: error, context: .read, tag: "fetchProfile", includesAction: false)
+        }
+        if profileLoaded {
+            // Fail-soft: the row then names Apple Health alone, as it did before WHOOP was listed.
+            if let devices = try? await apiClient.fetchDevices() {
+                whoopConnected = devices.devices.contains { $0.id == .whoop && $0.connected }
+            }
         }
         await loadBudget()
         withAnimation(Theme.Motion.appear) { isLoading = false }
