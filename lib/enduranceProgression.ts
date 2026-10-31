@@ -1039,7 +1039,10 @@ export interface RestOfWeekBudget {
   daysLeft: number;
   /** The weekday ("Saturday") when exactly one usual run day is left; null otherwise. */
   day: string | null;
-  /** Not done, but under 3 km (2 mi) left: one short easy run. */
+  /**
+   * Not done, but one short easy run is all that is left: under 3 km (2 mi) left, or (wave 26e) the one run day left is the Sunday and what is left is under a long run (5 km / 3 mi):
+   * it is never called "the longest run".
+   */
   small: boolean;
   /** `small`, and the week already sits in the plan's good band: resting is fine too. */
   easyOk: boolean;
@@ -1047,6 +1050,8 @@ export interface RestOfWeekBudget {
   afterRun: boolean;
   /** The most the week may reach: the number x `weekLimitFraction(kind)`. */
   limitKm: number;
+  /** Wave 26e: set when exactly one run day is left (the day can be named): the longest run of the week before today's (km; on the last day Sunday's own run is the long run itself): a named Sunday run is only "the long run" when it is longer than that. Absent on payloads from before. */
+  longestKm?: number;
 }
 
 /** A sick or very light week (no long gap) is "restarted" from this share of the recent median week. */
@@ -1686,6 +1691,7 @@ export interface RestOfWeekWording {
   day?: string | null;
   small?: boolean;
   easyOk?: boolean;
+  longestKm?: number;
 }
 
 /** Wave 24e: the wording of a restart that begins mid-week. `pending`: still on a break, what to take if the runner starts today; else the week as it is. */
@@ -1778,7 +1784,8 @@ export function restOfWeekPhrase(
       const lr = opts.longRunKm as number;
       const day = trim.day === undefined ? 'Sunday' : trim.day;
       const when = trim.today ? "today's" : `${day}'s`;
-      const word = trim.today || day === 'Sunday' ? longRunWord(lr, u) : 'run';
+      // (Wave 26e: a Sunday run no longer than a run the week already holds is not "the long run": "keep Sunday's run to ~6 km".)
+      const word = (trim.today || day === 'Sunday') && !(trim.longestKm != null && lr <= trim.longestKm + 1e-9) ? longRunWord(lr, u) : 'run';
       return `keep ${when} ${word} to ~${formatTargetLongRun(lr, u)}${stays}`;
     }
     case 'total': {
@@ -1852,7 +1859,8 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const u = plan.unitsPerKm;
   const t = plan.targetKm;
   const lr = plan.longRunKm;
-  const lrWord = lr != null ? longRunWord(lr, u) : 'long run';
+  // (Wave 26e: a trimmed Sunday run no longer than a run the week already holds is the week's last run, not "the long run" - the same reading as `restOfWeekPhrase`.)
+  const lrWord = lr == null ? 'long run' : plan.longRunTrim?.longestKm != null && lr <= plan.longRunTrim.longestKm + 1e-9 ? 'last run' : longRunWord(lr, u);
   const held = plan.longRunJump != null ? " (held after last week's jump)" : '';
   // (Wave 26e group F: a marathon's medium-long week says so - the coach's target line reads the same `MEDIUM_WEEK_COPY`.)
   const mediumNote = plan.longRun.medium === true && plan.longRunTrim == null ? ` — ${MEDIUM_WEEK_COPY}` : '';
@@ -2551,6 +2559,9 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
         const noRunDayLeft = lastDay && !ranOnLastDay && kind !== 'taper' && notUsualRunDay(ctx, w, 6);
         const restDone = noRunDayLeft && small;
         if (restDone) { weekDone = true; small = false; }
+        // Wave 26e (round 8, P2-1): a Sunday that is the only run day left, with less than a long run (5 km / 3 mi) left, is "one short easy run" - "~3 km left" - never "keep
+        // Sunday's longest run to ~3 km" after 4.8, 4.6 and 4.6 km runs. (The cutback's deeper cut leaves 3 km on its Saturday.)
+        if (!weekDone && !small && usual.length === 1 && usual[0] === 6 && !isLongRun(floorLongRunKm(left, ctx.units), ctx.units)) small = true;
         // Wave 24e (round 7): the last day KEEPS Saturday's long-run figure ("keep Sunday's long run to ~6 km"), but a "N km left" clause is only true as of the
         // card: once today's run is in it is recomputed from the week's total ("15 of ~10 km" next to "~2 km left" was Sunday's card after a 7 km run).
         let remaining = left;
@@ -2573,6 +2584,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
           easyOk: small && band.goodFromKm > 0 && doneShown >= band.goodFromKm - 1e-9,
           afterRun: ranOnLastDay || restDone,
           limitKm: round1(limit),
+          ...(usual.length === 1 ? { longestKm: round1(longestThen) } : {}),
         };
       }
     }

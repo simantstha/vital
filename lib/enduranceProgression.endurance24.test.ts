@@ -131,8 +131,9 @@ test('metric and imperial trim the second cutback the same way (Saturday: 16.5 k
   assert.equal(km.targetKm, 23);
   assert.ok(km.longRunTrim!.fullKm > km.longRunKm! && mi.longRunTrim!.fullKm > mi.longRunKm!, 'both are trimmed below the long run they started with');
   assert.equal(Math.round((mi.longRunKm as number) * MI * 2) / 2, (mi.longRunKm as number) * MI > 0 ? Math.round((mi.longRunKm as number) * MI * 2) / 2 : 0);
-  assert.equal(nbsp(km.purpose), `Cutback week: ~23 km, long run ${km.longRunKm} km \u2014 absorb the last three weeks`);
-  assert.match(nbsp(mi.purpose), /^Cutback week: ~14 mi, long run [\d.]+ mi \u2014 absorb the last three weeks$/);
+  // (Wave 26e round 8, P2-1: the Sunday run that is left is not "the long run" when the week already holds a longer run - the week's last run.)
+  assert.equal(nbsp(km.purpose), `Cutback week: ~23 km, last run ${km.longRunKm} km \u2014 absorb the last three weeks`);
+  assert.match(nbsp(mi.purpose), /^Cutback week: ~14 mi, last run [\d.]+ mi \u2014 absorb the last three weeks$/);
   assert.ok(Math.abs(((mi.longRunKm as number) * MI * 2) - Math.round((mi.longRunKm as number) * MI * 2)) < 0.01, 'to the half mile');
 });
 

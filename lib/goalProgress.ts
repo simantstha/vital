@@ -413,9 +413,11 @@ export interface GoalWeekPlan {
     /** Additive (wave 24e): the usual run days still ahead; `day` names the one when exactly one is left. */
     daysLeft?: number;
     day?: string | null;
-    /** Additive (wave 24e): not done but under 3 km / 2 mi left: one short easy run; `easyOk` = resting is fine too. */
+    /** Additive (wave 24e): not done but under 3 km / 2 mi left: one short easy run; `easyOk` = resting is fine too. (Wave 26e: also a Sunday with less than a long run left.) */
     small?: boolean;
     easyOk?: boolean;
+    /** Additive (wave 26e): the longest run of the week so far, km - a Sunday run no longer than it is not called "the long run". */
+    longestKm?: number;
     /** Additive (wave 24e): the last day with today's run in: the numbers are the morning's (Saturday's trim). */
     afterRun?: boolean;
   };
@@ -2975,7 +2977,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.hold?.skippedCutback ? { skippedCutback: true } : {}),
             ...(plan.longRunAhead ? { longRunAhead: true } : {}),
             ...(plan.last?.cutback === true && plan.stepBaseKm > (plan.last?.km ?? 0) + 1e-9 ? { stepBaseKm: plan.stepBaseKm, stepAfterCutback: true } : {}),
-            ...(plan.longRunTrim != null ? { longRunTrim: { fullKm: plan.longRunTrim.fullKm, remainingKm: plan.longRunTrim.remainingKm, weekDone: plan.longRunTrim.weekDone, today: plan.longRunTrim.today, daysLeft: plan.longRunTrim.daysLeft, day: plan.longRunTrim.day, small: plan.longRunTrim.small, easyOk: plan.longRunTrim.easyOk, afterRun: plan.longRunTrim.afterRun } } : {}),
+            ...(plan.longRunTrim != null ? { longRunTrim: { fullKm: plan.longRunTrim.fullKm, remainingKm: plan.longRunTrim.remainingKm, weekDone: plan.longRunTrim.weekDone, today: plan.longRunTrim.today, daysLeft: plan.longRunTrim.daysLeft, day: plan.longRunTrim.day, small: plan.longRunTrim.small, easyOk: plan.longRunTrim.easyOk, afterRun: plan.longRunTrim.afterRun, ...(plan.longRunTrim.longestKm != null ? { longestKm: plan.longRunTrim.longestKm } : {}) } } : {}),
             // (Wave 23e P3-a: a "touch over" is said once - the coach's "fine, said once" clause is the Monday's; a spike's hold ('well') is said all week.)
             ...(plan.last?.overCap && (plan.last.capRead !== 'touch' || weekdayOf(input.todayKey) === 1) ? { overCap: true, ...(plan.last.capRead != null ? { overCapRead: plan.last.capRead } : {}) } : {}),
           },

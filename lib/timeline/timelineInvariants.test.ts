@@ -5776,3 +5776,45 @@ invariant(RUNNERS, 'item 10: the hold-week card says "Your cutback became a norm
   void name;
   return out;
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+// ═══ wave 26e (ENDURANCE): round 8 runner review (P2-1, P3-1, P3-2). Every invariant here was written BEFORE the rule it locks in. ═══
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ── P2-1: a planned run is never called "longest run 3 km" / "long run 3 km" when the runner already ran more than that this week ──────────────
+// (Cutback Saturday, runs of 4.8 / 4.6 / 4.6 km done, 3 km left: "keep Sunday's longest run to ~3 km" - the week's budget is a short easy run, not a long run.)
+// Scope: the long run the REST-OF-WEEK BUDGET plans (the card / coach / opener "keep Sunday's long run to ~N km", and the plan line and coach "next long run" figure while a budget is
+// in force). A week's own planned long run that the runner simply ran past ("long run 7.5 km (eased for the cutback)" after a 9.4 km Tuesday) is a deviation, not a budget, and is judged by the review.
+{
+  /** A planned-run phrase: "keep Sunday's longest run to ~3 km", "next long run ~3 km", ", longest run 3 km", ": long run 7 km" (the sentence-case "Long run 11 km" reason is the run just done, not a plan). */
+  const PLANNED_RUN = /(?:keep (?:today's|\w+day's) |next |[,:;] )(longest run|long run)(?: to)? ~?(\d+(?:\.\d+)?)\s?(km|mi)\b/g;
+  invariant(RUNNERS, 'wave 26e P2-1: no card, coach line or opener calls a planned run "longest run N" / "long run N" when the runner already ran more than N that week', (snaps, name) => {
+    const runKm = scenarioRunKm(name);
+    const out: Violation[] = [];
+    let checked = 0;
+    for (const snap of snaps) {
+      const monday = mondayOfDate(snap.date);
+      // (Sunday's own run IS the week's long run: the days before it are the runs "already ran". A Sunday coach line that already reads NEXT week's long run is not this week's plan.)
+      const sunday = weekdayOf(snap.date) === 'Sun';
+      const through = sunday ? addDays(snap.date, -1) : snap.date;
+      let longest = 0;
+      for (let d = monday; d <= through; d = addDays(d, 1)) longest = Math.max(longest, runKm.get(d) ?? 0);
+      if (longest <= 0) continue;
+      for (const t of [...cardTexts(snap), ...coachTexts(snap)]) {
+        const text = plain(t.text);
+        for (const m of text.matchAll(PLANNED_RUN)) {
+          if (sunday && /^next /.test(m[0])) continue;
+          if (!/^keep /.test(m[0]) && snap.card?.distance?.plan?.longRunTrim == null) continue;
+          checked++;
+          const shownKm = m[3] === 'mi' ? Number(m[2]) * KM_PER_MILE : Number(m[2]);
+          // (Half a display unit of slack: the plan's figures are rounded to 0.5.)
+          const slack = m[3] === 'mi' ? 0.5 * KM_PER_MILE : 0.5;
+          if (longest > shownKm + slack + 1e-9) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" - but the week's longest run so far is ${Math.round(longest * 10) / 10} km` });
+        }
+      }
+    }
+    void checked; // (After the fix no budget run is named "longest run" any more, so what was checked cannot be asserted positive: the failing-first run is the proof the pattern bites.)
+    return out;
+  });
+}
+

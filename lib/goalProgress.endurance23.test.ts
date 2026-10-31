@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enduranceWeekPlan, longRunStepKm, type PlanRun } from './enduranceProgression';
+import { enduranceWeekPlan, longRunStepKm, restOfWeekPhrase, type PlanRun } from './enduranceProgression';
 import { computeGoalProgress as computeGoalProgressRaw, type GoalProgress, type GoalProgressInput } from './goalProgress';
 import { plainSpaces } from './displayText';
 
@@ -79,7 +79,7 @@ test('the plan trims the long run to what is left when done + the unrun long run
   // Saturday evening, Saturday's run in: ONE usual run day is left, so the day is named and the long run is cut to what is left, a number everywhere.
   const sat = '2026-10-24';
   const named = enduranceWeekPlan({ runs: toPlanRuns(weeks(sat, [[[1, 4], [3, 4], [5, 4]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sat });
-  assert.deepEqual(named.longRunTrim, { fullKm: 7, doneKm: 12, remainingKm: 5, weekDone: false, today: false, daysLeft: 1, day: 'Sunday', small: false, easyOk: false, afterRun: false, limitKm: 18.7 });
+  assert.deepEqual(named.longRunTrim, { fullKm: 7, doneKm: 12, remainingKm: 5, weekDone: false, today: false, daysLeft: 1, day: 'Sunday', small: false, easyOk: false, afterRun: false, limitKm: 18.7, longestKm: 4 });
   assert.equal(named.longRunKm, 5);
   assert.equal(named.longRun.nextKm, 5);
   assert.equal(named.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~17 km, long run 5 km — absorb the last three weeks');
@@ -178,10 +178,22 @@ test('the remaining-km line and the plan line carry the same number, and so does
   assert.equal(named.reasons[0].text, "12 of ~17 km — keep Sunday's long run to ~5 km");
   assert.equal(named.distance!.plan?.longRunKm, 5);
   assert.equal(named.longRun?.nextKm, 5);
-  // On the long-run day itself the line is about today.
+  // On the long-run day itself the line is about today. (Wave 26e round 8, P2-1: 4 km is less than a long run - after 5, 5 and 3 km runs it is "one short easy run", not "the longest run".)
   const sun = '2026-10-25';
   const today = computeGoalProgress(input(weeks(sun, [[[1, 5], [3, 5], [5, 3]], ...CUTBACK_HISTORY]), { todayKey: sun }));
-  assert.match(today.reasons[0].text, /^13 of ~17 km — keep today's longest run to ~4 km$/);
+  assert.match(today.reasons[0].text, /^13 of ~17 km — ~4 km left: one short easy run$/);
+  assert.doesNotMatch(texts(today), /longest run/);
+  // The cutback Saturday of the on-plan runner (round 8, P2-1): 5 + 5 + 4 km run, 3 km left - the sentence is "~3 km left", on the card, the plan line and the coach, never "longest run 3 km".
+  const sat3 = computeGoalProgress(input(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat }));
+  assert.equal(sat3.distance!.plan?.longRunTrim?.small, true);
+  assert.equal(sat3.distance!.plan?.longRunKm, null);
+  assert.equal(sat3.reasons[0].text, '14 of ~17 km — ~3 km left: one short easy run');
+  assert.doesNotMatch([texts(sat3), sat3.headline, sat3.distance!.plan!.purpose].join(' | '), /longest run|long run/);
+  // A Sunday run no longer than a run the week already holds is not "the long run" (a 9 km Tuesday, 6 km left): "keep Sunday's run to ~6 km".
+  const trim = { remainingKm: 6, weekDone: false, today: false, daysLeft: 1, day: 'Sunday', small: false, easyOk: false };
+  const phrase = (longestKm: number) => plainSpaces(restOfWeekPhrase({ ...trim, longestKm }, { unitsPerKm: 1, longRunKm: 6, longRunAhead: true, form: 'card' }));
+  assert.equal(phrase(9), "keep Sunday's run to ~6 km");
+  assert.equal(phrase(5), "keep Sunday's long run to ~6 km");
 });
 
 test('the Sunday of a hold week he built through reads "above the hold", not "on plan"; kept, it is "on plan"; the Monday after says so too', () => {
