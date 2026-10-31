@@ -108,11 +108,11 @@ final class TrendsViewModelErrorCopyTests: XCTestCase {
     func testLearningCardProgressHelperOnlyPassesLearningStatus() {
         let learning = TrendsHeadline.Status.learning(TrendsHeadline.LearningProgress(daysRemaining: 9))
         XCTAssertEqual(
-            TrendsViewModel.learningCardProgress(status: learning, hasLoadedGrid: true, errorMessage: nil)?.daysRemaining, 9
+            TrendsViewModel.progressForLearningCard(status: learning, hasLoadedGrid: true, errorMessage: nil)?.daysRemaining, 9
         )
-        XCTAssertNil(TrendsViewModel.learningCardProgress(status: learning, hasLoadedGrid: false, errorMessage: nil))
-        XCTAssertNil(TrendsViewModel.learningCardProgress(status: learning, hasLoadedGrid: true, errorMessage: "x"))
-        XCTAssertNil(TrendsViewModel.learningCardProgress(status: .steady(period: .thirtyDays), hasLoadedGrid: true, errorMessage: nil))
+        XCTAssertNil(TrendsViewModel.progressForLearningCard(status: learning, hasLoadedGrid: false, errorMessage: nil))
+        XCTAssertNil(TrendsViewModel.progressForLearningCard(status: learning, hasLoadedGrid: true, errorMessage: "x"))
+        XCTAssertNil(TrendsViewModel.progressForLearningCard(status: .steady(period: .thirtyDays), hasLoadedGrid: true, errorMessage: nil))
     }
 
     // MARK: Connected-source lookup behind the sleep card's empty line

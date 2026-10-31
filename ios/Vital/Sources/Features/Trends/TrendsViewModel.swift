@@ -72,11 +72,11 @@ final class TrendsViewModel: ObservableObject {
     /// `nil` when the card must stay hidden: the status isn't `.learning`,
     /// no load has succeeded yet, or the latest load failed.
     var learningCardProgress: TrendsHeadline.LearningProgress? {
-        Self.learningCardProgress(status: headlineStatus, hasLoadedGrid: hasLoadedGrid, errorMessage: errorMessage)
+        Self.progressForLearningCard(status: headlineStatus, hasLoadedGrid: hasLoadedGrid, errorMessage: errorMessage)
     }
 
     /// Internal for tests.
-    static func learningCardProgress(
+    static func progressForLearningCard(
         status: TrendsHeadline.Status, hasLoadedGrid: Bool, errorMessage: String?
     ) -> TrendsHeadline.LearningProgress? {
         guard hasLoadedGrid, errorMessage == nil, case .learning(let progress) = status else { return nil }
