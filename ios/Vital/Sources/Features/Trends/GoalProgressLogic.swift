@@ -842,7 +842,7 @@ enum GoalProgressLogic {
     }
 
     /// "−0.6 kg/wk" (signed, user's unit) or `nil` without a measured rate. While the server's card
-    /// shows a RANGE (`paceRange`) this says the same range ("Down 0.37–0.59 kg/wk"), never the one
+    /// shows a RANGE (`paceRange`) this says the same range ("Down 0.4–0.6 kg/wk"), never the one
     /// rate that argues with it.
     static func rateText(_ progress: GoalProgressDTO, system: UnitSystem) -> String? {
         if let range = paceRange(progress) { return paceRangeText(range, system: system) }
@@ -860,7 +860,7 @@ enum GoalProgressLogic {
 
     /// A weight-loss week is "on pace" when two paces — now and a week earlier — land either side of the
     /// target date, and the pace now alone would land more than a week off it. The server then sends the
-    /// earlier one (`weightRead.plan.earlierPace`) and its card prints the honest range ("Down 0.37–0.59
+    /// earlier one (`weightRead.plan.earlierPace`) and its card prints the honest range ("Down 0.4–0.6
     /// kg/wk") instead of one rate that argues with "on track". Every surface that composes a weekly rate
     /// of its own (Today's hero, the Trends weight card's pill, the goal sheet's "Trend" row) says that same
     /// range (`paceRangeText`), so no single rate contradicts the card.
@@ -880,7 +880,7 @@ enum GoalProgressLogic {
         return PaceRange(slowKgPerWeek: magnitudes[0], fastKgPerWeek: magnitudes[1])
     }
 
-    /// "0.37–0.59 kg/wk" in the user's unit — the figures the server's card prints — with the en dash
+    /// "0.4–0.6 kg/wk" in the user's unit ("about 0.5 kg/wk" when both ends round the same) — the figures the server's card prints — with the en dash
     /// glued to its numbers (`nonBreaking`) so a narrow line cannot split the range.
     static func paceRangeValueText(_ range: PaceRange, system: UnitSystem) -> String {
         nonBreaking(UnitFormat.weightRateRange(
@@ -888,7 +888,7 @@ enum GoalProgressLogic {
         ))
     }
 
-    /// "Down 0.37–0.59 kg/wk": the server card's own wording, for the hero's rate line and the goal
+    /// "Down 0.4–0.6 kg/wk": the server card's own wording, for the hero's rate line and the goal
     /// sheet's "Trend" row. (The Trends pill puts the arrow "↓" before `paceRangeValueText` instead.)
     static func paceRangeText(_ range: PaceRange, system: UnitSystem) -> String {
         "Down \(paceRangeValueText(range, system: system))"

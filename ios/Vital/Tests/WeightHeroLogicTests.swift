@@ -893,12 +893,12 @@ final class WeightHeroLogicTests: XCTestCase {
 
     // MARK: Pace range
 
-    /// "On pace" rests on two paces either side of the target date: the card says "Down 0.37–0.59 kg/wk", so the hero says
+    /// "On pace" rests on two paces either side of the target date: the card says "Down 0.4–0.6 kg/wk", so the hero says
     /// that, never "−0.6 kg/wk over 4 weeks" beside it.
     func testHeroSaysTheServersRangeNotASingleRateOnAnOnPaceWeek() {
         let ranged = wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, lastWeighInDaysAgo: 0, plan: paceWeek())
-        XCTAssertEqual(wiredHeroText(ranged), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
-        XCTAssertEqual(wiredHeroText(ranged, system: .imperial), "Down 0.82\(rangeDash)1.3\u{00A0}lb/wk")
+        XCTAssertEqual(wiredHeroText(ranged), "Down 0.4\(rangeDash)0.6\u{00A0}kg/wk")
+        XCTAssertEqual(wiredHeroText(ranged, system: .imperial), "Down 0.8\(rangeDash)1.3\u{00A0}lb/wk")
         let text = wiredHeroText(ranged) ?? ""
         XCTAssertFalse(text.contains("over 4 weeks"))
         XCTAssertFalse(text.contains("\u{2212}"), "a range is not a signed single rate")
@@ -924,7 +924,7 @@ final class WeightHeroLogicTests: XCTestCase {
     func testWeeklyChangeTextRangeBeatsTheSingleRateAndYieldsToAServerRead() {
         let (trend, entries) = hero()
         let range = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.37, fastKgPerWeek: 0.59)
-        let expected = "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk"
+        let expected = "Down 0.4\(rangeDash)0.6\u{00A0}kg/wk"
         XCTAssertEqual(WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateRange: range), expected)
         XCTAssertEqual(
             WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.59, goalRateRange: range),
@@ -980,7 +980,7 @@ final class WeightHeroLogicTests: XCTestCase {
             let ranged = wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, lastWeighInDaysAgo: age, plan: paceWeek())
             XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(single), "age \(String(describing: age))")
             XCTAssertEqual(wiredHeroText(single), "\u{2212}0.4\u{00A0}kg/wk over 4 weeks", "age \(String(describing: age))")
-            XCTAssertEqual(wiredHeroText(ranged), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk", "age \(String(describing: age))")
+            XCTAssertEqual(wiredHeroText(ranged), "Down 0.4\(rangeDash)0.6\u{00A0}kg/wk", "age \(String(describing: age))")
         }
     }
 

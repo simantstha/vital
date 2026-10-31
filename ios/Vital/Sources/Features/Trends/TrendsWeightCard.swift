@@ -51,8 +51,8 @@ enum TrendsWeightCardLogic {
     /// contradict the goal card above it. Defaults to `false` (older server).
     ///
     /// `paceRange` (wave 22w): the goal card shows a RANGE for an on-pace week
-    /// (`GoalProgressLogic.paceRange`: "Down 0.37–0.59 kg/wk"), so the pill says the same
-    /// range — "↓ 0.37–0.59 kg/wk", always a loss, tinted `.positive` — rather than this
+    /// (`GoalProgressLogic.paceRange`: "Down 0.4–0.6 kg/wk"), so the pill says the same
+    /// range — "↓ 0.4–0.6 kg/wk", always a loss, tinted `.positive` — rather than this
     /// card's own single 7-day rate beside it. Behind the same gates as the single rate.
     /// Defaults to `nil` (an older server, any other week): the pill is exactly as before.
     static func ratePill(

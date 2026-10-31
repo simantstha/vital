@@ -25,7 +25,7 @@ struct WeightHeroView: View {
     /// ("over 4 weeks") so it agrees with the goal card below.
     var goalRateKgPerWeek: Double? = nil
     /// Wave 22w: the range the server's card shows for an on-pace week
-    /// (`GoalProgressLogic.paceRange`, "Down 0.37–0.59 kg/wk"); the hero then says the same
+    /// (`GoalProgressLogic.paceRange`, "Down 0.4–0.6 kg/wk"); the hero then says the same
     /// range instead of `goalRateKgPerWeek`. `nil` (an older server, any other week) keeps it.
     var goalRateRange: GoalProgressLogic.PaceRange? = nil
     /// The server is reading the scale itself (early read / welcome back /

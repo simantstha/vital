@@ -59,17 +59,32 @@ enum UnitFormat {
         return "\(sign)\(magnitude)/wk"
     }
 
-    /// A weekly-rate RANGE in the user's unit, unsigned: "0.37–0.59 kg/wk" (U+2013 between the two
-    /// numbers, a non-breaking space before the unit). Two decimals with trailing zeros dropped — the
-    /// server's own wording (`paceRangeReason` in `lib/goalProgress.ts`: "Down 0.37–0.59 kg/wk"), so
-    /// the app and the card print the same figures. The caller passes magnitudes (the slower pace
-    /// first) and says the direction ("Down", "↓"): a range only ever stands for a loss.
+    /// A weekly-rate RANGE in the user's unit, unsigned: "0.4–0.6 kg/wk" (U+2013 between the two
+    /// numbers, a non-breaking space before the unit). Wave 26w, the server's own rule
+    /// (`weeklyRateRangeText` in `lib/weightWeekPlan.ts`, behind `paceRangeReason`'s "Down 0.4–0.6 kg/wk"),
+    /// byte for byte: each end is a single rate's figure (`weightDelta`'s one decimal — the pace
+    /// rounded to the payload's two decimals first, then to one — and two decimals only for a pace
+    /// that would print 0.0), trailing zeros dropped; when both ends round to the same figure it is
+    /// that one figure, hedged like a single rate ("about 0.5 kg/wk"), never "0.5–0.5". Ties round
+    /// up on both sides (`Double.rounded()` away from zero here, `Math.round` there, on magnitudes).
+    /// The caller passes magnitudes (the slower pace first) and says the direction ("Down", "↓"): a
+    /// range only ever stands for a loss.
     static func weightRateRange(slowKgPerWeek: Double, fastKgPerWeek: Double, _ system: UnitSystem) -> String {
-        func shown(_ kgPerWeek: Double) -> String {
-            let value = abs(system == .metric ? kgPerWeek : UnitConvert.kgToLb(kgPerWeek))
-            return formatNumber((value * 100).rounded() / 100, maximumFractionDigits: 2)
+        func figure(_ kgPerWeek: Double) -> (value: Double, hedged: Bool) {
+            let kg = (abs(kgPerWeek) * 100).rounded() / 100
+            let value = system == .metric ? kg : UnitConvert.kgToLb(kg)
+            let oneDecimal = roundedToOneDecimal(value)
+            if oneDecimal == 0 { return (value: (value * 100).rounded() / 100, hedged: false) }
+            return (value: oneDecimal, hedged: true)
         }
-        return "\(shown(slowKgPerWeek))\u{2013}\(shown(fastKgPerWeek))\(nbsp)\(system.weightUnit)/wk"
+        let slow = figure(slowKgPerWeek)
+        let fast = figure(fastKgPerWeek)
+        if slow.value == fast.value {
+            return "\(slow.hedged ? "about " : "")\(formatNumber(slow.value, maximumFractionDigits: 2))\(nbsp)\(system.weightUnit)/wk"
+        }
+        let low = formatNumber(slow.value, maximumFractionDigits: 2)
+        let high = formatNumber(fast.value, maximumFractionDigits: 2)
+        return "\(low)\u{2013}\(high)\(nbsp)\(system.weightUnit)/wk"
     }
 
     /// Rounds to 1 decimal place, normalizing `-0.0` to `0.0` first — Swift's

@@ -107,6 +107,7 @@ import {
   stepHeadlineClause,
   stepRateTail,
   fmtWeekday,
+  weeklyRateRangeText,
   weeklyRateText,
   weightWeekPlan,
   type WeightPlanPace,
@@ -1683,7 +1684,7 @@ function aroundText(input: GoalProgressInput, w: WeightBlock, eta: string): stri
  * (`stepRateTail`: "your easing step covers this" to a logger the logs show taking it, "the easing step (~2,150-2,200 kcal) addresses this" to everyone else).
  * It closes every watch about the ceiling while a step is active - "above" it and "close to" it - so a warning never stands without the step beside it.
  * `other` (wave 22w): the pace a week earlier, when "on pace" rests on two paces that straddle the date - the rate is then the honest
- * range ("Down 0.37-0.58 kg/wk"), not one number that lands weeks off the date it is called on track for.
+ * range ("Down 0.4-0.6 kg/wk"), not one number that lands weeks off the date it is called on track for.
  */
 function paceReason(
   input: GoalProgressInput,
@@ -1697,7 +1698,7 @@ function paceReason(
   const band = FAT_LOSS_BAND;
   const weeks = Math.round(pace.windowDays / 7);
   // A single rate is one decimal, "about 0.9 kg/wk" (wave 25w, `weeklyRateText`): the same rule as the headline of an unconfirmed pace ("losing about 0.6 kg a week",
-  // wave 24w) and the figure the app's hero prints, never "0.85" one week and "0.9" the next. A range (below) keeps the two decimals the app recomposes.
+  // wave 24w) and the figure the app's hero prints, never "0.85" one week and "0.9" the next. A range (below) is one decimal per end too (wave 26w).
   const perWeek = weeklyRateText(input, pace.kgPerWeek);
   let text = `${dir} ${perWeek}/wk (${abs}% of bodyweight) ${paceWindowText(input, weeks, opts.endedOn)}`;
   let tone: ReasonTone = 'neutral';
@@ -1730,7 +1731,7 @@ function paceWindowText(input: GoalProgressInput, weeks: number, endedOn?: strin
   return endedOn != null ? `over the ${weeks} weeks to ${fmtDate(endedOn, input.todayKey)}` : `over the last ${weeks} weeks`;
 }
 
-/** "Down 0.37–0.58 kg/wk (0.41–0.64% of bodyweight) over the last 3 weeks": the two paces an on-pace call rests on. */
+/** "Down 0.4–0.6 kg/wk (0.41–0.64% of bodyweight) over the last 3 weeks" ("Down about 0.5 kg/wk (...)" when both ends round the same): the two paces an on-pace call rests on. */
 function paceRangeReason(
   input: GoalProgressInput,
   pace: Pick<WeightPace, 'kgPerWeek' | 'pctPerWeek' | 'windowDays'>,
@@ -1741,7 +1742,8 @@ function paceRangeReason(
   const kgs = [Math.abs(pace.kgPerWeek), Math.abs(other.kgPerWeek)].sort((a, b) => a - b);
   const pcts = [round2(Math.abs(pace.pctPerWeek)), round2(Math.abs(other.pctPerWeek))].sort((a, b) => a - b);
   const weeks = Math.round(pace.windowDays / 7);
-  let text = `Down ${weightNum(input, kgs[0], 2)}–${fmtWeight(input, kgs[1], 2)}/wk (${pcts[0]}–${pcts[1]}% of bodyweight) ${paceWindowText(input, weeks, endedOn)}`;
+  // Each end one decimal, or one "about" figure when both round the same (wave 26w, `weeklyRateRangeText`): the rule the app's range follows too.
+  let text = `Down ${weeklyRateRangeText(input, kgs[0], kgs[1])}/wk (${pcts[0]}–${pcts[1]}% of bodyweight) ${paceWindowText(input, weeks, endedOn)}`;
   let tone: ReasonTone = 'neutral';
   if (pcts[0] >= band.minPct && pcts[1] <= band.maxPct) {
     tone = 'good';

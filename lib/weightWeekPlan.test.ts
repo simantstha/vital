@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { plainSpaces } from './displayText';
 import {
-  calorieFloorKcal, isInstruction, stepDayReached, stepHeadlineClause, stepLogsShow, stepRateTail, stepVerb, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weeklyRateFigure, weeklyRateText, weightWeekPlan,
+  calorieFloorKcal, isInstruction, stepDayReached, stepHeadlineClause, stepLogsShow, stepRateTail, stepVerb, TRIM_MAX_KCAL_PER_STEP, TRIM_STEP_KCAL, weeklyRateFigure, weeklyRateRangeText, weeklyRateText, weightWeekPlan,
   type WeightPlanInput, type WeightWeekPlan,
 } from './weightWeekPlan';
 import { computeWeightTrend, type WeightReading } from './weightTrend';
@@ -902,4 +902,15 @@ test('25w item 8: a single weekly rate is one decimal, "about 0.9 kg", of the tw
   assert.equal(t(-0.04), '0.04 kg');
   assert.deepEqual(weeklyRateFigure('metric', -0.9), { value: 0.9, digits: 1 });
   assert.deepEqual(weeklyRateFigure('metric', 0.02), { value: 0.02, digits: 2 });
+});
+
+test('26w: a RANGE of two weekly paces is one decimal per end, or one "about" figure when both ends round the same (the app\'s UnitFormat.weightRateRange makes the same text)', () => {
+  const r = (a: number, b: number, unitSystem: 'metric' | 'imperial' = 'metric') => plainSpaces(weeklyRateRangeText({ unitSystem }, a, b));
+  assert.equal(r(0.37, 0.59), '0.4–0.6 kg');
+  assert.equal(r(-0.59, -0.37), '0.4–0.6 kg'); // either order, either sign
+  assert.equal(r(0.37, 0.59, 'imperial'), '0.8–1.3 lb'); // 0.82 / 1.30 lb
+  assert.equal(r(0.75, 1), '0.8–1 kg'); // 0.75 is a tie: up, as the single rate rounds it; whole numbers drop ".0"
+  assert.equal(r(0.46, 0.54), 'about 0.5 kg'); // both ends round to 0.5: one figure, hedged like a single rate
+  assert.equal(r(0.45, 0.46, 'imperial'), 'about 1 lb'); // 0.99 / 1.01 lb
+  assert.equal(r(0.04, 0.04), '0.04 kg'); // a pace that would print 0.0 keeps its second decimal, unhedged
 });

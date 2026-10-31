@@ -1863,21 +1863,31 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertNil(GoalProgressLogic.paceRange(GoalProgressDTO(goal: "weight_loss", verdict: .onTrack)), "no weightRead at all")
     }
 
-    /// The same figures and format as the server's card ("Down 0.37–0.58 kg/wk": two decimals, trailing zeros dropped).
+    /// The same figures and format as the server's card (wave 26w, `weeklyRateRangeText`): each end one decimal, trailing zeros dropped;
+    /// ends that round the same are one "about" figure, like a single rate.
     func testPaceRangeTextIsTheServersFormatInTheUsersUnit() {
         let range = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.37, fastKgPerWeek: 0.59)
-        XCTAssertEqual(GoalProgressLogic.paceRangeText(range, system: .metric), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
-        XCTAssertEqual(GoalProgressLogic.paceRangeValueText(range, system: .metric), "0.37\(rangeDash)0.59\u{00A0}kg/wk")
-        // 0.37 kg = 0.82 lb, 0.59 kg = 1.30 lb -> "1.3".
-        XCTAssertEqual(GoalProgressLogic.paceRangeText(range, system: .imperial), "Down 0.82\(rangeDash)1.3\u{00A0}lb/wk")
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(range, system: .metric), "Down 0.4\(rangeDash)0.6\u{00A0}kg/wk")
+        XCTAssertEqual(GoalProgressLogic.paceRangeValueText(range, system: .metric), "0.4\(rangeDash)0.6\u{00A0}kg/wk")
+        // 0.37 kg = 0.82 lb -> "0.8", 0.59 kg = 1.30 lb -> "1.3".
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(range, system: .imperial), "Down 0.8\(rangeDash)1.3\u{00A0}lb/wk")
         let round = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.5, fastKgPerWeek: 0.6)
         XCTAssertEqual(GoalProgressLogic.paceRangeText(round, system: .metric), "Down 0.5\(rangeDash)0.6\u{00A0}kg/wk")
+        // 0.75 is a tie (-> 0.8, up, as the server rounds it); a whole 1 drops its ".0".
         let whole = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.75, fastKgPerWeek: 1)
-        XCTAssertEqual(GoalProgressLogic.paceRangeText(whole, system: .metric), "Down 0.75\(rangeDash)1\u{00A0}kg/wk")
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(whole, system: .metric), "Down 0.8\(rangeDash)1\u{00A0}kg/wk")
+        // Both ends round to 0.5: one hedged figure, never "0.5-0.5".
+        let equal = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.46, fastKgPerWeek: 0.54)
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(equal, system: .metric), "Down about 0.5\u{00A0}kg/wk")
+        XCTAssertEqual(GoalProgressLogic.paceRangeValueText(equal, system: .metric), "about 0.5\u{00A0}kg/wk")
+        // 0.45 / 0.46 kg = 0.99 / 1.01 lb: both "1".
+        let equalLb = GoalProgressLogic.PaceRange(slowKgPerWeek: 0.45, fastKgPerWeek: 0.46)
+        XCTAssertEqual(GoalProgressLogic.paceRangeText(equalLb, system: .imperial), "Down about 1\u{00A0}lb/wk")
         // The unit stays glued to its number and the dash to its numbers.
         for system in [UnitSystem.metric, .imperial] {
-            let text = GoalProgressLogic.paceRangeText(range, system: system)
-            assertNoBreakableUnitSpace(text)
+            for r in [range, equal] {
+                assertNoBreakableUnitSpace(GoalProgressLogic.paceRangeText(r, system: system))
+            }
         }
     }
 
@@ -1886,9 +1896,9 @@ final class GoalProgressLogicTests: XCTestCase {
         func trendRow(_ progress: GoalProgressDTO, _ system: UnitSystem = .metric) -> String? {
             GoalProgressLogic.statRows(progress, system: system).first { $0.label == "Trend" }?.value
         }
-        XCTAssertEqual(trendRow(onPace()), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
-        XCTAssertEqual(GoalProgressLogic.rateText(onPace(), system: .metric), "Down 0.37\(rangeDash)0.59\u{00A0}kg/wk")
-        XCTAssertEqual(trendRow(onPace(), .imperial), "Down 0.82\(rangeDash)1.3\u{00A0}lb/wk")
+        XCTAssertEqual(trendRow(onPace()), "Down 0.4\(rangeDash)0.6\u{00A0}kg/wk")
+        XCTAssertEqual(GoalProgressLogic.rateText(onPace(), system: .metric), "Down 0.4\(rangeDash)0.6\u{00A0}kg/wk")
+        XCTAssertEqual(trendRow(onPace(), .imperial), "Down 0.8\(rangeDash)1.3\u{00A0}lb/wk")
         // An older server (no earlierPace): the single rate, exactly as before.
         XCTAssertEqual(trendRow(onPace(earlier: nil)), "\u{2212}0.6\u{00A0}kg/wk")
         XCTAssertEqual(trendRow(onPace(earlier: nil), .imperial), "\u{2212}1.3\u{00A0}lb/wk")

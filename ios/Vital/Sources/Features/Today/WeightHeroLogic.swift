@@ -112,7 +112,7 @@ enum WeightHeroLogic {
     /// the card never disagree; without it the 7-day rate above is used.
     ///
     /// `goalRateRange` (wave 22w): when the server's card shows a RANGE for an
-    /// on-pace week (`GoalProgressLogic.paceRange`: "Down 0.37–0.59 kg/wk"), the hero
+    /// on-pace week (`GoalProgressLogic.paceRange`: "Down 0.4–0.6 kg/wk"), the hero
     /// says that same range, never the one rate ("−0.6 kg/wk over 4 weeks") that
     /// argues with it. It wins over `goalRateKgPerWeek`; `nil` (an older server, any
     /// other week) keeps today's behaviour exactly.

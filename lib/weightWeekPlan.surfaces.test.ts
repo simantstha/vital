@@ -314,15 +314,15 @@ test('P2-5: an on-pace call that rests on two paces either side of the date show
   assert.equal(plan?.call, 'on_pace');
   assert.ok(plan?.earlierPace != null, 'the pace a week earlier is carried');
   const rate = card.reasons.find(r => r.kind === 'rate')?.text ?? '';
-  assert.match(plainSpaces(rate), /^Down \d\.\d\d–\d\.\d\d kg\/wk \(\d\.\d+–\d\.\d+% of bodyweight\) over the last 3 weeks/);
+  assert.match(plainSpaces(rate), /^Down \d\.\d–\d(?:\.\d)? kg\/wk \(\d\.\d+–\d\.\d+% of bodyweight\) over the last 3 weeks/);
   const coach = formatGoalProgressLines(card, 'metric').join('\n');
   assert.doesNotMatch(coach, /ETA/);
-  assert.match(coach, /rate -\d\.\d\d to -\d\.\d\d kg\/wk over the last 3 weeks of weigh-ins \(two weekly reads either side of the target date\)/);
+  assert.match(coach, /rate -\d\.\d to -\d(?:\.\d)? kg\/wk over the last 3 weeks of weigh-ins \(two weekly reads either side of the target date\)/);
   assert.match(coach, /on pace for target date/);
   // A pace that supports the call on its own stays a single number.
   const steady = cardAt(readings(range(0, 130), n => 92 - 0.08 * n + wobble(n)), [], 35, { target: { weightKg: 84, date: D(126), weeklySessions: 3 } });
   assert.equal(steady.weightRead?.plan?.earlierPace ?? null, null);
-  assert.doesNotMatch(steady.reasons.find(r => r.kind === 'rate')?.text ?? '', /–\d\.\d\d/);
+  assert.doesNotMatch(steady.reasons.find(r => r.kind === 'rate')?.text ?? '', /\d–[\d.]+\skg\/wk/);
 });
 
 test('P3: with the newest weigh-in a week old the rate names the window it was read over, and the coach says so', () => {

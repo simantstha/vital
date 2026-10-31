@@ -2659,7 +2659,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             let pace: Pace?
             /// Wave 22w, an on-pace week only: "on pace" rests on two paces that land either side of the
             /// target date, and `pace` alone would land more than a week off it, so this is the pace a
-            /// week earlier — the card then shows the range ("Down 0.37–0.59 kg/wk"), and so must the
+            /// week earlier — the card then shows the range ("Down 0.4–0.6 kg/wk"), and so must the
             /// app (`GoalProgressLogic.paceRange`). `nil` otherwise and from an older server.
             let earlierPace: Pace?
             /// Wave 22w: the week began with no weigh-in for 7+ days, so this is the plan from the day of

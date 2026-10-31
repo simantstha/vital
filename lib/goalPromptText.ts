@@ -299,13 +299,18 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
       : '';
     if (earlierKg != null && plan?.earlierPaceStraddles === true) {
       // The two paces really land on opposite sides of the target date (wave 22w): the range, so the rate does not argue with the call.
-      const slow = signedWt(Math.max(gp.ratePerWeek.kg, earlierKg), units, 2).replace(/ (kg|lb)$/, '');
-      nowBits.push(`rate ${slow} to ${signedWt(Math.min(gp.ratePerWeek.kg, earlierKg), units, 2)}/wk${overWeeks} (two weekly reads either side of the target date)`);
+      // Wave 26w: each end one decimal, the card's own figures ("rate -0.4 to -0.6 kg/wk"); ends that round the same are one figure ("rate -0.5 kg/wk").
+      const slowKg = Math.max(gp.ratePerWeek.kg, earlierKg);
+      const fastKg = Math.min(gp.ratePerWeek.kg, earlierKg);
+      const slow = signedRate(slowKg, units);
+      const fast = signedRate(fastKg, units);
+      nowBits.push(slow === fast ? `rate ${slow}/wk${overWeeks} (two weekly reads either side of the target date)` : `rate ${slow.replace(/ (kg|lb)$/, '')} to ${fast}/wk${overWeeks} (two weekly reads either side of the target date)`);
     } else {
       // Both paces land on the same side of the date (wave 23w): the pace is the current one, and the earlier one is said as what it was.
-      const was = earlierKg != null ? ` (a week ago the pace was ${wt(Math.abs(earlierKg), units, 2)}/wk)` : '';
-      // One decimal for a single weight-loss rate (wave 25w); a range, and the pace "a week ago" beside the current one, keep the two decimals the card's range shows.
-      const single = gp.goal === 'weight_loss' && earlierKg == null ? signedRate(gp.ratePerWeek.kg, units) : signedWt(gp.ratePerWeek.kg, units, 2);
+      // The pace "a week ago" is one decimal like every weight-loss rate (wave 26w).
+      const was = earlierKg != null ? ` (a week ago the pace was ${signedRate(earlierKg, units).replace(/^-/, '')}/wk)` : '';
+      // One decimal for a weight-loss rate (wave 25w); another goal's rate keeps its two.
+      const single = gp.goal === 'weight_loss' ? signedRate(gp.ratePerWeek.kg, units) : signedWt(gp.ratePerWeek.kg, units, 2);
       nowBits.push(`rate ${single}/wk${pct}${overWeeks}${was}`);
     }
   }

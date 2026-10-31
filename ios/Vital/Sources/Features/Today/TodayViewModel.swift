@@ -469,7 +469,7 @@ final class TodayViewModel: ObservableObject {
         goalProgress.map(GoalProgressLogic.withholdsWeeklyRate) ?? false
     }
 
-    /// Wave 22w: the range ("Down 0.37–0.59 kg/wk") the server's card shows for an on-pace week
+    /// Wave 22w: the range ("Down 0.4–0.6 kg/wk") the server's card shows for an on-pace week
     /// whose two paces land either side of the target date, so the hero says the same range instead
     /// of one rate that argues with it (`GoalProgressLogic.paceRange`); `nil` otherwise and from an
     /// older server — the hero then keeps `heroGoalRateKgPerWeek` exactly as before.

@@ -911,7 +911,8 @@ invariant(WEIGHT, "an on-pace call whose single rate would land more than a week
     if (Math.abs(dayDiff(finish, card.target.date)) <= 7) continue;
     straddling++;
     const rate = card.reasons.find(r => r.kind === 'rate');
-    if (rate == null || !RATE_RANGE.test(plain(rate.text))) {
+    // (Wave 26w: a range whose two ends round the same is one "about" figure - still the range line, told by its two percentages: "Down about 0.5 kg/wk (0.51–0.61% of bodyweight)".)
+    if (rate == null || !(RATE_RANGE.test(plain(rate.text)) || /^Down about [\d.]+ (?:kg|lb)\/wk \([\d.]+–[\d.]+% of bodyweight\)/.test(plain(rate.text)))) {
       out.push({ snap, detail: `"${visible(card.headline)}" over a single rate that lands on ${finish}, ${dayDiff(finish, card.target.date)} days from ${card.target.date}: "${visible(rate?.text ?? '(no rate reason)')}"` });
     }
   }
@@ -5395,7 +5396,7 @@ invariant(WEIGHT, 'item 8: a SINGLE weekly rate on the card is one decimal and t
     const kg = snap.card?.ratePerWeek.kg;
     for (const r of snap.card?.reasons ?? []) {
       const text = plain(r.text);
-      if (r.kind !== 'rate' || !/^(?:Down|Up) /.test(text) || /^(?:Down|Up) [\d.]+–[\d.]+ kg\/wk/.test(text)) continue; // (a range keeps two decimals: see the block header)
+      if (r.kind !== 'rate' || !/^(?:Down|Up) /.test(text) || /^(?:Down|Up) [\d.]+–[\d.]+ kg\/wk/.test(text)) continue; // (a range is the next invariant's: both ends one decimal, or one "about" figure)
       seen++;
       const m = /^(Down|Up) about (\d+\.\d) kg\/wk \(/.exec(text);
       // (iOS: UnitFormat.weightDelta rounds the payload's two-decimal ratePerWeek.kg to one decimal.)
@@ -5425,21 +5426,43 @@ invariant(WEIGHT, 'item 8: the coach\'s single weekly rate is one decimal too ("
   return out;
 });
 
-invariant(WEIGHT, 'item 8 (parity): a RANGE on the card ("Down 0.37–0.59 kg/wk") shows exactly the two-decimal figures the iOS hero recomposes from plan.pace and plan.earlierPace, until iOS moves with it', (snaps, name) => {
+invariant(WEIGHT, 'item 8 (parity, wave 26w): a RANGE on the card is one decimal per end ("Down 0.4–0.6 kg/wk"), or one "about" figure when both ends round the same ("Down about 0.5 kg/wk") - exactly what the iOS rule (UnitFormat.weightRateRange) makes of plan.pace and plan.earlierPace', (snaps, name) => {
   const out: Violation[] = [];
   let seen = 0;
   for (const snap of snaps) {
     const plan = snap.card?.weightRead?.plan;
     for (const r of snap.card?.reasons ?? []) {
-      const m = r.kind === 'rate' ? /^Down ([\d.]+)–([\d.]+) kg\/wk/.exec(plain(r.text)) : null;
+      const m = r.kind === 'rate' ? /^Down (about [\d.]+|[\d.]+–[\d.]+) kg\/wk \([\d.]+–[\d.]+% of bodyweight\)/.exec(plain(r.text)) : null;
       if (m == null) continue;
       seen++;
-      const fmt = (kg: number): string => String(Math.round(Math.abs(kg) * 100) / 100);
-      const want = [plan?.pace?.kgPerWeek, plan?.earlierPace?.kgPerWeek].filter((x): x is number => x != null).map(fmt).sort((a, b) => Number(a) - Number(b));
-      if (want.length !== 2 || m[1] !== want[0] || m[2] !== want[1]) out.push({ snap, detail: `[rate] "${visible(r.text)}" but plan.pace / plan.earlierPace give ${want.join('–')}` });
+      // The iOS rule, worked out here from the payload's own two-decimal paces: round to two places, then to one (two only when one would print 0.0).
+      const fig = (kg: number): string => {
+        const v = Math.round(Math.abs(kg) * 100) / 100;
+        const one = Math.round(v * 10) / 10;
+        return String(one === 0 ? v : one);
+      };
+      const mags = [plan?.pace?.kgPerWeek, plan?.earlierPace?.kgPerWeek].filter((x): x is number => x != null).map(Math.abs).sort((a, b) => a - b);
+      const [lo, hi] = mags.map(fig);
+      const want = mags.length !== 2 ? '' : lo === hi ? `about ${lo}` : `${lo}–${hi}`;
+      if (want === '' || m[1] !== want) out.push({ snap, detail: `[rate] "${visible(r.text)}" but plan.pace / plan.earlierPace give "${want}"` });
     }
   }
   assert.ok(seen > 0, `${name}: no range line appeared, so this invariant checked nothing`);
+  return out;
+});
+
+invariant(WEIGHT, 'item 8 (wave 26w): no weight rate or range anywhere (card, coach, review) is shown with two decimals ("0.37–0.59 kg/wk", "0.46 kg/wk"); a rate under 0.05 that would print 0.0 is the one exception', (snaps, name) => {
+  const out: Violation[] = [];
+  // "0.37 kg/wk", "0.37–0.59 kg/wk", "-0.46 to -0.54 kg/wk", "the pace was 0.46 kg/wk": any figure with two decimals right before a per-week unit.
+  const twoDecimals = /(\d+\.\d\d)(?=[ ](?:kg|lb)\/wk|–\d+\.\d+[ ](?:kg|lb)\/wk|[ ]to[ ]-?\d+\.\d+[ ](?:kg|lb)\/wk)/g;
+  for (const snap of snaps) {
+    for (const t of allTexts(snap)) {
+      for (const m of plain(t.text).matchAll(twoDecimals)) {
+        if (Math.abs(Number(m[1])) < 0.05) continue;
+        out.push({ snap, detail: `${t.where}: "${visible(t.text)}" has the two-decimal figure ${m[1]}` });
+      }
+    }
+  }
   return out;
 });
 

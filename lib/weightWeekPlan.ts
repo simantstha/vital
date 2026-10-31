@@ -402,12 +402,26 @@ export function planWeightText(input: Pick<WeightPlanInput, 'unitSystem'>, kg: n
  * Wave 25w: ONE rule for a SINGLE weekly rate in text, on every surface: one decimal, "about 0.9 kg" ("Down about 0.9 kg/wk"), never "0.85 kg/wk" in one week and
  * "0.9" the next. The figure is the payload's two-decimal `ratePerWeek.kg` rounded to one place - exactly what the app's own hero prints for it
  * (`UnitFormat.weightDelta`) - so the card and the hero never disagree. A rate that would print as 0.0 keeps its second decimal, unhedged ("0.04 kg").
- * A RANGE of two paces is NOT rounded this way: the app recomposes the range itself from `plan.pace` / `plan.earlierPace` at two decimals
- * (`UnitFormat.weightRateRange`), so the card's range keeps them until the app moves with it.
+ * Wave 26w: a RANGE of two paces follows the same rule (`weeklyRateRangeText`): each end one decimal ("0.4-0.6 kg"), and ends that round the same are one
+ * "about" figure ("about 0.5 kg"), never "0.37-0.59" - the app composes its range with the same rule (`UnitFormat.weightRateRange`).
  */
 export function weeklyRateText(input: Pick<WeightPlanInput, 'unitSystem'>, kgPerWeek: number): string {
   const { value, digits } = weeklyRateFigure(isImperial(input) ? 'imperial' : 'metric', kgPerWeek);
   return `${digits === 1 ? 'about ' : ''}${withUnit(value, isImperial(input) ? 'lb' : 'kg')}`;
+}
+
+/**
+ * Wave 26w: the text of a RANGE of two weekly paces (magnitudes, either order) - the one rule for a range on every surface. Each end is `weeklyRateFigure`'s
+ * one-decimal figure, slower first, "0.4–0.6 kg" with an en dash and a non-breaking space before the unit; when both ends round to the same figure it is that
+ * one figure, hedged like a single rate ("about 0.5 kg"), never "0.5–0.5 kg". The app's `UnitFormat.weightRateRange` makes the same text from the same two paces.
+ */
+export function weeklyRateRangeText(input: Pick<WeightPlanInput, 'unitSystem'>, aKgPerWeek: number, bKgPerWeek: number): string {
+  const units = isImperial(input) ? 'imperial' : 'metric';
+  const [slow, fast] = [Math.abs(aKgPerWeek), Math.abs(bKgPerWeek)].sort((a, b) => a - b);
+  const lo = weeklyRateFigure(units, slow);
+  const hi = weeklyRateFigure(units, fast);
+  if (lo.value === hi.value) return weeklyRateText(input, slow);
+  return `${lo.value}–${withUnit(hi.value, isImperial(input) ? 'lb' : 'kg')}`;
 }
 
 /** The figure behind `weeklyRateText`: the magnitude in the display unit and how many decimals it is shown with (1; 2 only when one would print 0.0). */
