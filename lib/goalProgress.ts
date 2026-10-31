@@ -72,7 +72,7 @@
  *    Wave 21e, still the one plan: a LIGHT week (4+ days without a run in the week,
  *    or from Friday well behind the runner's own pace) is 'holding' - "don't make it
  *    up", long run capped - never 'on track for the half'; every 4th calendar week of
- *    building is a CUTBACK (~80% of the week it replaces, graded as its own target);
+ *    building is a CUTBACK (75% of the smaller of last week's target and actual, graded as its own target, a spike measured against the week it replaces);
  *    a careful comeback's target is a ceiling ("up to ~18 km") graded against the
  *    week before; the race eve carries no km of the week at all (`thisWeekKm` null,
  *    `distance.text` "Race tomorrow"); the last day of a taper week says the week is
@@ -343,8 +343,10 @@ export interface GoalWeekPlan {
   /** Additive (wave 23e): a taper week that holds last week's volume instead of cutting it ("hold ~22 km, 75% of your ~29 km peak"); `taperPeakKm` is that peak. */
   taperHold?: boolean;
   taperPeakKm?: number;
-  /** Additive: a cutback week (every 4th plain build / maintain week): `targetKm` is ~80% of the week it replaces, the long run is held. */
+  /** Additive: a cutback week (every 4th plain build / maintain week): `targetKm` is 75% of the smaller of last week's target and actual, the long run is eased by the same fraction. */
   cutback?: boolean;
+  /** Additive (wave 26e group D): in a cutback week, the week it replaced (the target a normal week would have had): the jump guard is measured against it, and a cutback run in full is "a normal week". */
+  cutbackNormalKm?: number;
   /** Additive: a light week - 4+ days without a run, or well behind the week's pace from Thursday with the rest of the target out of reach: don't make it up (`longRunKm` is the cap). */
   lightWeek?: boolean;
   /**
@@ -2948,7 +2950,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             goalReachedBefore: plan.goalReachedBefore,
             lastAtGoal: plan.lastAtGoal,
             ...(plan.taperHold && plan.wind != null ? { taperHold: true, taperPeakKm: round1(plan.wind.peakKm) } : {}),
-            ...(plan.cutback != null ? { cutback: true } : {}),
+            ...(plan.cutback != null ? { cutback: true, cutbackNormalKm: plan.cutback.normalKm } : {}),
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.last != null ? { lastKm: plan.last.km } : {}),
             ...(plan.last?.cutback === true ? { lastCutback: true } : {}),

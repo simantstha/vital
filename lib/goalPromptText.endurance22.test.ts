@@ -78,12 +78,12 @@ test('skipped cutback (22e, wave 23e: no guilt): the coach is told to hold at th
   assert.match(targetLine(coach(gp)), /^- This week's target: hold ~25\.0 km — last week's cutback ran as a normal week \(fine, not a failure\); do not build 10% on it, and do not scold/);
 });
 
-test('cutback coach line (22e): a long run the lowered week cannot carry is "eased to N km (half the week)", not "held"', () => {
-  const monday = '2026-10-19'; // the calendar's cutback week: ~20 km after 15 .. 23
-  // The last long run was 14 km (a 28 km week would carry it; the 24 km cutback carries 12 km at most).
+test('cutback coach line (22e): a long run the lowered week cannot carry is "eased to N km (eased for the cutback)", not "held"', () => {
+  const monday = '2026-10-19'; // the calendar's cutback week: ~17 km after 15 .. 23
+  // The last long run was 14 km (75% of it is 10.5 km, but the 17 km cutback carries 8.5 km at most: half the week).
   const hist = [[], [[1, 5], [3, 5], [5, 5], [6, 14]], wk(21), wk(19), wk(17), wk(15)] as Array<Array<[number, number]>>;
   const eased = targetLine(coach(computeGoalProgress(input(weeks(monday, hist), { todayKey: monday }))));
-  assert.match(eased, /^- This week's target: a cutback week, ~24\.0 km; long run eased to 12 km \(half the week\)/);
+  assert.match(eased, /^- This week's target: a cutback week, ~17\.0 km; long run eased to 8\.5 km \(eased for the cutback\)/);
   assert.doesNotMatch(eased, /held/);
 });
 

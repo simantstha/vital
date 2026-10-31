@@ -8,17 +8,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  CUTBACK_FRACTION,
   LONG_RUN_MAX_WEEK_SHARE,
   NO_RACE_LONG_RUN_MAX_KM,
   TAPER_LATE_LONG_RUN_SHARE,
   addDayKey,
   enduranceWeekPlan,
   floorLongRunKm,
+  gradeEnduranceWeek,
   longRunPeakReachedOn,
   longRunStepKm,
   noRaceLongRunMaxKm,
   peakWeekKmBeforeTaper,
   roundLongRunKm,
+  roundWeekTargetKm,
   weekShareKm,
   type EnduranceWeekPlan,
   type PlanRun,
@@ -452,4 +455,209 @@ test('Sunday morning, before the run: an easy run within 10% of the long run is 
   // The long run really run on Saturday (the week at its number) is still done.
   const done = enduranceWeekPlan({ runs: [...runs.filter(r => r.day < addDayKey(monday, 5)), { day: addDayKey(monday, 1), km: 6 }, { day: addDayKey(monday, 3), km: 6 }, { day: addDayKey(monday, 5), km: 12 }], weekStart: monday, goalKm: 40, race: null, today: sunday, unitsPerKm: 1, goalStartDay: D0 });
   assert.equal(done.longRunAhead, false, `${done.purpose}`);
+});
+
+// ── Group D: the cutback is a real down week ────────────────────────────────────────────────────────────────────────
+// 0.75 x min(last week's target, last week's actual), rounded like every weekly target; the long run is 0.75 x the one held; a spike in a cutback week is read against
+// the week the cutback replaced; an obedient runner is never called "Light week" on a cutback. Every test here was written BEFORE the rule it locks in.
+
+/**
+ * Calendar weeks 0.. of `kms` (4 runs a week, Tue / Thu / Sat / Sun, a `longShare` Sunday), then the plan for the week after them: with 5 weeks of history that is the
+ * 6th calendar week, the first cutback of a goal that started on D0. `prev` is the plan of the last week of the history (its target is what that week was asked for).
+ */
+function cutbackSetup(
+  kms: number[],
+  opts: { units?: number; goalKm?: number; longShare?: number; shape?: { days: number[]; weights: number[] }; today?: (monday: string) => string; extra?: (monday: string) => PlanRun[] } = {},
+): { plan: EnduranceWeekPlan; monday: string; prev: EnduranceWeekPlan } {
+  const runs: PlanRun[] = [];
+  kms.forEach((km, i) => {
+    const mon = addDayKey(D0, i * 7);
+    if (opts.shape) {
+      // (A weekday shape of the runner's own: the km split by weights over the run days.)
+      const sum = opts.shape.weights.reduce((a, b) => a + b, 0);
+      opts.shape.days.forEach((d, j) => runs.push({ day: addDayKey(mon, d), km: Math.round(((km * opts.shape!.weights[j]) / sum) * 10) / 10 }));
+      return;
+    }
+    const long = Math.round(km * (opts.longShare ?? 0.4) * 10) / 10;
+    const rest = Math.round(((km - long) / 3) * 10) / 10;
+    [1, 3, 5].forEach(d => runs.push({ day: addDayKey(mon, d), km: rest }));
+    runs.push({ day: addDayKey(mon, 6), km: long });
+  });
+  const monday = addDayKey(D0, kms.length * 7);
+  runs.push(...(opts.extra?.(monday) ?? []));
+  const common = { runs, goalKm: opts.goalKm ?? 30, race: null, unitsPerKm: opts.units ?? 1, goalStartDay: D0 };
+  const prev = enduranceWeekPlan({ ...common, weekStart: addDayKey(monday, -7), today: addDayKey(monday, -7) });
+  const plan = enduranceWeekPlan({ ...common, weekStart: monday, today: opts.today?.(monday) ?? monday });
+  return { plan, monday, prev };
+}
+
+const round1Test = (n: number): number => Math.round(n * 10) / 10;
+
+test('CUTBACK_FRACTION is 0.75', () => {
+  assert.equal(CUTBACK_FRACTION, 0.75);
+});
+
+test('the cutback after a 20 km week (asked 20, ran 20) is 15 km', () => {
+  const { plan, prev } = cutbackSetup([15, 16, 17, 18, 20]);
+  assert.equal(prev.targetKm, 20, 'last week asked for 20');
+  assert.ok(plan.cutback != null, `a cutback week: ${plan.kind} ${plan.purpose}`);
+  assert.equal(plan.targetKm, 15);
+  assert.equal(plan.targetKm, roundWeekTargetKm(CUTBACK_FRACTION * 20));
+});
+
+test('the cutback is 0.75 x the SMALLER of last week\'s target and actual: asked 24, ran 23 -> 17 km', () => {
+  const { plan, prev } = cutbackSetup([15, 17, 19, 22, 23]);
+  assert.equal(prev.targetKm, 24, 'last week asked for 24');
+  assert.ok(plan.cutback != null, plan.purpose);
+  assert.equal(plan.cutback.normalKm, 25, 'the week it replaces is the 10% step on the 23 km actually run');
+  assert.equal(plan.targetKm, roundWeekTargetKm(CUTBACK_FRACTION * 23));
+  assert.equal(plan.targetKm, 17);
+});
+
+test('a cutback never rewards an overshoot (asked 22, ran 25 -> 0.75 x 22) and never asks for more than was run after a short week (asked 24, ran 18 -> 0.75 x 18)', () => {
+  const over = cutbackSetup([15, 17, 19, 20, 25]);
+  assert.equal(over.prev.targetKm, 22);
+  assert.ok(over.plan.cutback != null, over.plan.purpose);
+  assert.equal(over.plan.targetKm, roundWeekTargetKm(CUTBACK_FRACTION * 22));
+  const short = cutbackSetup([15, 17, 19, 22, 18]);
+  assert.equal(short.prev.targetKm, 24);
+  assert.ok(short.plan.cutback != null, short.plan.purpose);
+  assert.equal(short.plan.targetKm, roundWeekTargetKm(CUTBACK_FRACTION * 18));
+  assert.ok((short.plan.targetKm as number) < 18, 'a cutback right after a short week is below that week, never above it');
+});
+
+test('imperial: the cutback after a 15 mi week is 11.5 mi (rounded to the half mile like every weekly target)', () => {
+  const kms = [8, 10, 11, 13.5, 15].map(mi => mi / MI);
+  const { plan, prev } = cutbackSetup(kms, { units: MI, goalKm: 40 });
+  assert.ok(plan.cutback != null, `a cutback week: ${plan.kind} ${plan.purpose}`);
+  assert.ok(Math.abs((prev.targetKm as number) * MI - 15) < 0.06, `asked ${(prev.targetKm as number) * MI} mi`);
+  const b = Math.min(prev.targetKm as number, kms[4]);
+  assert.equal(plan.targetKm, roundWeekTargetKm(weekShareKm(b, CUTBACK_FRACTION, MI) + 1e-6, MI));
+  assert.ok(Math.abs((plan.targetKm as number) * MI - 11.5) < 0.06, `${(plan.targetKm as number) * MI} mi`);
+});
+
+test('low volume: an 8 km week gives a 6 km cutback, and a base under the compare minimum (5 km) gives no cutback at all', () => {
+  const low = cutbackSetup([5, 5.5, 6, 7, 8], { goalKm: 20 });
+  assert.equal(low.prev.targetKm, 8);
+  assert.ok(low.plan.cutback != null, low.plan.purpose);
+  assert.equal(low.plan.targetKm, 6);
+  const tiny = cutbackSetup([2, 2.5, 3, 3.5, 4], { goalKm: 20 });
+  assert.equal(tiny.plan.cutback, null, `under 5 km there is nothing to cut back from: ${tiny.plan.purpose}`);
+});
+
+test('the cutback long run is 0.75 x the held long run, within the half-week cap, rounded to the half km', () => {
+  const { plan } = cutbackSetup([15, 17, 19, 21, 23]);
+  assert.ok(plan.cutback != null && plan.longRunKm != null);
+  const lr = plan.longRun;
+  const held = roundLongRunKm(lr.targetPeakKm != null ? Math.min(lr.lastKm as number, lr.targetPeakKm) : (lr.lastKm as number));
+  const cap = weekShareKm(plan.targetKm as number, LONG_RUN_MAX_WEEK_SHARE);
+  assert.equal(plan.longRunKm, floorLongRunKm(Math.min(roundLongRunKm(CUTBACK_FRACTION * held), cap)));
+  assert.ok((plan.longRunKm as number) < held, `eased: ${plan.longRunKm} < held ${held}`);
+  assert.ok((plan.longRunKm as number) <= (plan.targetKm as number) * LONG_RUN_MAX_WEEK_SHARE + 1e-9);
+});
+
+test('the obedient runner: week 6 is 17 km with a 7.5 km long run (was 20 / 10), and every cutback long run is 0.75 x the held one', () => {
+  const { plans } = simulate({ goalKm: 30, baseKm: 15, baseLong: 6, days: [1, 3, 5, 6], weeks: 14 });
+  const cuts = plans.filter(p => p.cutback != null);
+  assert.ok(cuts.length >= 2, cuts.length + ' cutback weeks');
+  assert.equal(cuts[0].targetKm, 17);
+  assert.equal(cuts[0].longRunKm, 7.5);
+  for (const c of cuts) {
+    const held = roundLongRunKm(c.longRun.targetPeakKm != null ? Math.min(c.longRun.lastKm as number, c.longRun.targetPeakKm) : (c.longRun.lastKm as number));
+    assert.equal(c.longRunKm, floorLongRunKm(Math.min(roundLongRunKm(CUTBACK_FRACTION * held), weekShareKm(c.targetKm as number, LONG_RUN_MAX_WEEK_SHARE))));
+    assert.ok((c.longRunKm as number) < held, `eased: ${c.longRunKm} < ${held}`);
+  }
+});
+
+test('a cutback long run does not fall under 5 km when the held one was 6 km or more (unless the half-week cap says so)', () => {
+  const { plan } = cutbackSetup([10, 11, 12, 13, 15], { goalKm: 30 });
+  assert.ok(plan.cutback != null, plan.purpose);
+  const held = roundLongRunKm(Math.min(plan.longRun.lastKm as number, plan.longRun.targetPeakKm ?? Infinity));
+  assert.ok(held >= 6 && held < 6.7, `a ${held} km held long run`);
+  assert.equal(plan.longRunKm, Math.min(5, weekShareKm(plan.targetKm as number, LONG_RUN_MAX_WEEK_SHARE)));
+});
+
+test('the plan line, the coach and the structured plan all say the cutback week is eased, from the same long run', () => {
+  const monday = '2026-10-19';
+  const runs: Run[] = [];
+  // Five weeks of build; the calendar week of 2026-10-19 is the 4th of its cycle, three plain build weeks before it.
+  [15, 17, 19, 21, 23].forEach((km, i) => {
+    const mon = addDayKey(monday, -7 * (5 - i));
+    [[1, km * 0.2], [3, km * 0.2], [5, km * 0.2], [6, km * 0.4]].forEach(([d, k]) => runs.push(run(addDayKey(mon, d), Math.round(k * 10) / 10)));
+  });
+  const gp = computeGoalProgress({ ...noRaceInput(runs), todayKey: monday, target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 } });
+  const plan = gp.distance?.plan;
+  assert.ok(plan?.cutback === true, `a cutback week: ${plan?.purpose}`);
+  assert.match(plan.purpose, /^Cutback week: ~\d+ km, long run [\d.]+ km \(eased for the cutback\) — absorb the last three weeks/);
+  const text = formatGoalProgressLines(gp, 'metric').join('\n');
+  const target = text.split('\n').find(l => l.startsWith("- This week's target")) ?? '';
+  assert.match(target, /a cutback week, ~[\d.]+ km; long run eased to [\d.]+ km \(eased for the cutback\)/);
+  assert.doesNotMatch(target, /half the week/);
+  assert.ok(plan.cutbackNormalKm != null && plan.cutbackNormalKm > (plan.targetKm as number), `cutbackNormalKm ${plan.cutbackNormalKm} (additive field)`);
+});
+
+test('a cutback week run as the normal week it replaced is graded against that week, not the lowered target (no spike up to 30% over it)', () => {
+  const { plan } = cutbackSetup([15, 17, 19, 21, 23]);
+  assert.ok(plan.cutback != null);
+  const normal = plan.cutback.normalKm;
+  const cut = plan.targetKm as number;
+  assert.ok(normal > cut * 1.3, 'the replaced week is more than 30% above the cut, so the old edge called it a spike');
+  assert.equal(plan.band.overKm, round1Test(Math.max(normal * 1.3, normal + 3)));
+  // The week it replaced, run in full: a normal week (the skipped cutback), never a spike.
+  assert.deepEqual(gradeEnduranceWeek(plan, normal), { level: 'good', gap: 'over' });
+  // Up to the spike edge over the normal week: still a skipped cutback. Past it: a spike.
+  const edge = plan.band.overKm as number;
+  assert.deepEqual(gradeEnduranceWeek(plan, edge - 0.1), { level: 'good', gap: 'over' });
+  assert.equal(gradeEnduranceWeek(plan, edge + 0.5).gap, 'spike');
+  // The cut itself and a bit over it (10%) stay a good, planned cutback.
+  assert.deepEqual(gradeEnduranceWeek(plan, cut), { level: 'good', gap: null });
+  assert.deepEqual(gradeEnduranceWeek(plan, cut * 1.1), { level: 'good', gap: null });
+});
+
+test('an obedient runner is never called "Light week" in a cutback week, on any day, before or after that day\'s run (a front-loaded runner too)', () => {
+  const kms = [15, 17, 19, 21, 23];
+  const shapes: Array<{ name: string; shape?: { days: number[]; weights: number[] } }> = [
+    { name: 'Tue / Thu / Sat / long Sun' },
+    // Mon / Wed heavy, Fri / Sun light: the runner's usual rest-of-week after Wednesday is small, so a cutback at 75% reads "behind" unless it is scaled to the lowered week.
+    { name: 'front-loaded Mon / Wed / Fri / Sun 2:2:1:1', shape: { days: [0, 2, 4, 6], weights: [2, 2, 1, 1] } },
+  ];
+  for (const { name, shape } of shapes) {
+    const base = cutbackSetup(kms, { shape });
+    assert.ok(base.plan.cutback != null, `${name}: ${base.plan.purpose}`);
+    const cut = base.plan.targetKm as number;
+    const long = base.plan.longRunKm as number;
+    const days = shape?.days ?? [1, 3, 5, 6];
+    const others = (cut - long) / (days.length - 1);
+    const weekRuns: Array<[number, number]> = days.map((d, j) => [d, j === days.length - 1 ? long : others]);
+    for (let dow = 0; dow <= 6; dow++) {
+      for (const through of [dow - 1, dow]) {
+        const extra = (mon: string): PlanRun[] => weekRuns.filter(([d]) => d <= through).map(([d, km]) => ({ day: addDayKey(mon, d), km: Math.round(km * 10) / 10 }));
+        const { plan } = cutbackSetup(kms, { shape, today: mon => addDayKey(mon, dow), extra });
+        assert.equal(plan.lightWeek, null, `${name}, day ${dow}, runs through ${through}: ${plan.purpose}`);
+      }
+    }
+  }
+});
+
+test('a deeper cutback does not break the re-read of a past week: the obedient runner\'s 15 km peak is never "longer than the 10 km plan" (the chain cut-off keeps the cutback cycle)', async () => {
+  const { buildScenario } = await import('./timeline/scenarios');
+  const scn = buildScenario('runner_on_plan_obedient');
+  const runs: PlanRun[] = scn.workouts.filter(w => w.type === 'Running' && w.distanceM).map(w => ({ day: w.day, km: (w.distanceM as number) / 1000 }));
+  const race = { date: scn.user.raceDate as string, distanceKm: scn.user.raceDistanceKm as number };
+  const monday = '2026-05-18'; // the Monday after the 15 km peak week; its chain reaches back no further than 2026-03-23 (the week-6 cutback is 3 weeks after that)
+  const plan = enduranceWeekPlan({ runs: runs.filter(r => r.day <= monday), weekStart: monday, goalKm: 30, race, today: monday, racePeakWeekKm: 30, goalStartDay: scn.user.goalStartedDay });
+  assert.equal(plan.longRun.peakPlan?.plannedKm, 15);
+  assert.equal(plan.longRun.peakPlan?.within, true);
+  assert.equal(plan.longRun.peakPlan?.brokenKm, null);
+});
+
+test('the peak date read in a cutback week steps from the long run before the cutback (the cutback week\'s eased long run is not the base)', () => {
+  const { plan } = cutbackSetup([15, 17, 19, 21, 23], { goalKm: 30 });
+  assert.ok(plan.cutback != null && plan.longRunKm != null);
+  const lastKm = plan.longRun.lastKm as number;
+  const sunday = addDayKey(plan.weekStart, 6);
+  const fromCutback = longRunPeakReachedOn({ ...plan, longRunAhead: true }, lastKm, 15, addDayKey(sunday, 7 * 14), null);
+  const fromNextWeek = longRunPeakReachedOn({ ...plan, cutback: null, longRunKm: lastKm, longRunAhead: false, buildWeeks: 0 }, lastKm, 15, addDayKey(sunday, 7 * 14), null);
+  assert.ok(fromCutback != null && fromNextWeek != null);
+  assert.equal(fromCutback, fromNextWeek, 'the climb carries on from the pre-cutback long run, one cutback week later');
 });

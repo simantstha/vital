@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
+import { CUTBACK_EASED_COPY, RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, cutbackLongRunEased, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -161,13 +161,12 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
     const line = plainSpaces(plan.purpose);
     return `- This week's target: ${line.charAt(0).toLowerCase()}${line.slice(1)}; no catch-up volume, and do not call the week behind`;
   }
-  // Every 4th plain build / maintain week: ~80% of the week it replaces, the long run held.
+  // Every 4th plain build / maintain week: 75% of the smaller of last week's target and actual, the long run eased by the same fraction (wave 26e group D).
   if (plan.cutback) {
-    // The long run is held where it was - unless the lowered week cannot carry it (never more than half of it): then it is "eased".
-    const last = gp.longRun?.lastKm;
+    // The long run is eased to a fraction of the one held (and never past half of the lowered week): "eased for the cutback" - the plan line's own reading, `cutbackLongRunEased`.
     const unitsPerKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
-    const eased = plan.longRunKm != null && last != null && (last - plan.longRunKm) * unitsPerKm >= 0.5 - 1e-9;
-    const longPart = plan.longRunKm == null || trimmed ? '' : eased ? `; long run eased to ${longRunText(plan.longRunKm, units)} (half the week)` : `; ${lr} held`;
+    const eased = cutbackLongRunEased(plan.longRunKm, gp.longRun?.lastKm, unitsPerKm);
+    const longPart = plan.longRunKm == null || trimmed ? '' : eased ? `; long run eased to ${longRunText(plan.longRunKm, units)} (${CUTBACK_EASED_COPY})` : `; ${lr} held`;
     return `- This week's target: a cutback week, ~${t}${longPart} — absorb the last three weeks; do not push past it${strides}`;
   }
   switch (plan.kind) {

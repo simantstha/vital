@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  CUTBACK_FRACTION,
   CAP_NOTE_EVERY_WEEKS,
   RACE_EVE_CONSERVATIVE_LINE,
   RACE_EVE_LINE,
@@ -377,10 +378,9 @@ test('the growth number is only quoted against a real week: under 5 km (3 mi) th
 });
 
 test('spike -> hold -> held: a jump is graded mixed, the next week holds one step up from the STEP, then it builds again', () => {
-  // Weeks 2-5 on plan (15..21), week 6 the calendar's cutback week run as planned (18 km), week 7 a 40 km spike over a ~23 km step, week 8
-  // held at 25, week 9 back on the build. (Week 6 is a cutback week of the calendar, see the cutback tests: running it at 23 km would be a
-  // skipped cutback, wave 22e.)
-  const runs = runsFor([15, 17, 19, 21, 18, 40, 28, 28], 2);
+  // Weeks 2-5 on plan (15..21), week 6 the calendar's cutback week run as planned (CUTBACK_FRACTION x the 21 km just run = 16 km), week 7 a 40 km spike over a ~23 km step,
+  // week 8 held at 25, week 9 back on the build. (Week 6 is a cutback week of the calendar, see the cutback tests: running it at 23 km would be a skipped cutback, wave 22e.)
+  const runs = runsFor([15, 17, 19, 21, roundWeekTargetKm(CUTBACK_FRACTION * 21), 40, 28, 28], 2);
   const spikeWeek = planFor(runs, 7);
   assert.equal(spikeWeek.kind, 'build');
   assert.equal(spikeWeek.targetKm, 23); // from the 21 km week before the cutback
@@ -847,40 +847,42 @@ test('race eve copy: rest or a shakeout, and one neutral line for a week that ra
   assert.equal(hasBreakingUnitSpace(`${RACE_EVE_LINE} ${RACE_EVE_CONSERVATIVE_LINE}`), false);
 });
 
-test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of the week it replaces with the long run held', () => {
+test('cutback: every 4th calendar week, after 3 plain build weeks, is 75% of the smaller of last week\'s target and actual, with the long run eased by the same fraction', () => {
   // Weeks 1 (baseline) and 2-5 build; week 6 is the calendar's cutback week.
   for (const w of [2, 3, 4, 5]) assert.equal(planFor(runsFor([15, 17, 19, 21, 23].slice(0, w - 1)), w).cutback, null, `week ${w}`);
   const cut = planFor(runsFor([15, 17, 19, 21, 23]), 6);
   assert.equal(cut.kind, 'build');
   assert.deepEqual(cut.cutback, { normalKm: 25 });
-  assert.equal(cut.targetKm, 20); // 80% of the 25 km step
-  assert.equal(cut.longRunKm, 9); // the long run just run (40% of 23, rounded), held - not stepped up
+  assert.equal(cut.targetKm, 17); // 75% of the 23 km just run (and asked): 17.25
+  assert.equal(cut.targetKm, roundWeekTargetKm(CUTBACK_FRACTION * 23));
+  assert.equal(cut.longRunKm, 7); // 75% of the long run just run (40% of 23, rounded to 9): 6.75, to the half km - not stepped up
   assert.equal(cut.longRun.held, true);
-  assert.equal(nbsp(cut.purpose), 'Cutback week: ~20~km, long run 9~km — absorb the last three weeks');
+  assert.equal(nbsp(cut.purpose), 'Cutback week: ~17~km, long run 7~km (eased for the cutback) — absorb the last three weeks');
   assert.equal(cut.buildWeeks, 0);
-  // Graded as its own target and never "short": any running is a good cutback. The week's target is the cutback number, so a jump is
-  // measured against it (30% and 3 km over ~20 km); the normal 25 km week it replaced is 25% over it, no spike. A week with no run is a rest week.
+  // Graded as its own target and never "short": any running is a good cutback. Wave 26e group D: a JUMP is measured against the week the cutback replaced (30% and 3 km over
+  // the 25 km normal week = 32.5 km), not the lowered number: the normal week itself (1.47x the cut) is "a normal week", never a spike. A week with no run is a rest week.
   assert.deepEqual(gradeEnduranceWeek(cut, 8), { level: 'good', gap: null });
-  assert.deepEqual(gradeEnduranceWeek(cut, 22), { level: 'good', gap: null }); // inside the 10% ceiling slack
+  assert.deepEqual(gradeEnduranceWeek(cut, 18.7), { level: 'good', gap: null }); // inside the 10% ceiling slack
   // More than 10% over the lowered number is a cutback that became a normal week (wave 22e "skipped": mixed; wave 23e: a good week, no failure, but the gap 'over'
   // stays so the next week holds and the cutback is still owed).
-  assert.deepEqual(gradeEnduranceWeek(cut, 22.1), { level: 'good', gap: 'over' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 18.8), { level: 'good', gap: 'over' });
   assert.deepEqual(gradeEnduranceWeek(cut, 25), { level: 'good', gap: 'over' });
-  assert.deepEqual(gradeEnduranceWeek(cut, 26), { level: 'good', gap: 'over' });
-  assert.deepEqual(gradeEnduranceWeek(cut, 27), { level: 'mixed', gap: 'spike' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 27), { level: 'good', gap: 'over' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 32.4), { level: 'good', gap: 'over' });
+  assert.deepEqual(gradeEnduranceWeek(cut, 33), { level: 'mixed', gap: 'spike' });
   assert.deepEqual(gradeEnduranceWeek(cut, 40), { level: 'mixed', gap: 'spike' });
   assert.equal(gradeEnduranceWeek(cut, 0).level, 'light');
-  // The hold after a jump in a cutback week: the target that week's cards showed (~20 km) is what it was graded against, and the
+  // The hold after a jump in a cutback week: the target that week's cards showed (~17 km) is the number they quote, and the
   // hold steps up from the 25 km week the cutback replaced (28 km), not from the cutback's own low or the jump.
   const spiked = planFor(runsFor([15, 17, 19, 21, 23, 40]), 7);
   assert.equal(spiked.kind, 'hold');
-  assert.deepEqual(spiked.hold, { spikeKm: 40, spikeStepKm: 20 });
+  assert.deepEqual(spiked.hold, { spikeKm: 40, spikeStepKm: 17 });
   assert.equal(spiked.targetKm, 28);
-  // A skipped cutback (25 km run against ~20): no +10% build on the skip - the next week holds at the 25 km week the cutback replaced.
+  // A skipped cutback (25 km run against ~17): no +10% build on the skip - the next week holds at the 25 km week the cutback replaced.
   const skipped = planFor(runsFor([15, 17, 19, 21, 23, 25]), 7);
   assert.equal(skipped.kind, 'hold');
   assert.equal(skipped.targetKm, 25);
-  assert.deepEqual(skipped.hold, { spikeKm: 25, spikeStepKm: 20, skippedCutback: true });
+  assert.deepEqual(skipped.hold, { spikeKm: 25, spikeStepKm: 17, skippedCutback: true });
   assert.equal(nbsp(skipped.purpose), 'Your cutback became a normal week. Hold ~25~km this week, long run 10~km — no 10% step on top of it');
   assert.equal(skipped.last?.cutback, true);
   assert.equal(skipped.last?.grade?.gap, 'over'); // (wave 23e: a good week - no failure - that still owes the cutback)
@@ -890,13 +892,13 @@ test('cutback: every 4th calendar week, after 3 plain build weeks, is ~80% of th
   // A cutback week that ended in days off short of its lowered number is a rest week, not a good cutback.
   assert.equal(gradeEnduranceWeek({ ...cut, endedOff: true }, 5).level, 'light');
   // The week after returns to the progression: ~10% over the bigger of the two weeks before the cutback, never over the cutback's own low.
-  const after = planFor(runsFor([15, 17, 19, 21, 23, 20]), 7);
+  const after = planFor(runsFor([15, 17, 19, 21, 23, 17]), 7);
   assert.equal(after.cutback, null);
-  assert.equal(after.targetKm, 25); // 23 x 1.10, not 20 x 1.10
+  assert.equal(after.targetKm, 25); // 23 x 1.10, not 17 x 1.10
   assert.equal(after.buildWeeks, 1);
-  assert.equal(after.stepPct, 9); // against the 23 km base, not the 20 km cutback
+  assert.equal(after.stepPct, 9); // against the 23 km base, not the 17 km cutback
   // The next cutback is 4 weeks later (weeks 7, 8, 9 plain first).
-  const next = runsFor([15, 17, 19, 21, 23, 20, 25, 28, 30, 30]);
+  const next = runsFor([15, 17, 19, 21, 23, 17, 25, 28, 30, 30]);
   assert.equal(planFor(next, 10).cutback?.normalKm, 30);
   assert.equal(planFor(next, 9).cutback, null);
 });
@@ -905,13 +907,13 @@ test('cutback at the weekly goal: ~24 km of 30, long run held at what it was (ne
   const race = { date: addDayKey(MON, 7 * 30), distanceKm: 21.1 };
   const atGoal = planFor(runsFor([30, 30, 30, 30, 30]), 6, { race });
   assert.equal(atGoal.kind, 'maintain');
-  assert.equal(atGoal.targetKm, 24);
+  assert.equal(atGoal.targetKm, 23); // 75% of the 30 km just run: 22.5, up
   assert.deepEqual(atGoal.cutback, { normalKm: 30 });
-  assert.equal(atGoal.longRunKm, 12);
-  // A long run already past the peak target is held at the target, not at the oversized one - and a cutback never
-  // carries a long run past half of its lowered week (15 km of a 24 km week would be 62%): 12 km, the half.
+  assert.equal(atGoal.longRunKm, 9); // 75% of the 12 km long run just run
+  // A long run already past the peak target is eased from the target, not from the oversized one: 75% of the 15 km peak target = 11.25, to the half km 11.5 - which is the half
+  // of the 23 km week, so the share cap (a cutback never carries a long run past half of its lowered week) holds it there.
   const big: PlanRun[] = [...runsFor([30, 30, 30, 30]), { day: addDayKey(weekOf(5), 1), km: 4 }, { day: addDayKey(weekOf(5), 3), km: 4 }, { day: addDayKey(weekOf(5), 5), km: 4 }, { day: addDayKey(weekOf(5), 6), km: 18 }];
-  assert.equal(planFor(big, 6, { race }).longRunKm, 12); // peak target 15 km at a 30 km goal, capped at 50% of the 24 km cutback
+  assert.equal(planFor(big, 6, { race }).longRunKm, 11.5); // peak target 15 km at a 30 km goal, eased to 75% (11.25 -> 11.5), within 50% of the 23 km cutback
   // Three plain weeks must precede it: a restart in week 4 pushes the cutback out (week 6 is a rung of the comeback).
   const afterBreak = planFor(runsFor([15, 17, 19, 0, 0, 14]), 6);
   assert.equal(afterBreak.cutback, null);
@@ -931,7 +933,7 @@ test('strides: the last 2 build weeks before a taper carry "plus 4–6 strides a
   assert.equal(at(7).strides, true);
   assert.equal(at(8).strides, false); // the taper itself
   assert.match(nbsp(at(7).purpose), new RegExp(`${STRIDES_COPY}$`));
-  assert.match(nbsp(at(6).purpose), /Cutback week: ~\d+~km, long run [\d.]+~km — absorb the last three weeks; plus 4–6 strides after one easy run$/);
+  assert.match(nbsp(at(6).purpose), /Cutback week: ~\d+~km, long run [\d.]+~km \(eased for the cutback\) — absorb the last three weeks; plus 4–6 strides after one easy run$/);
   assert.equal(STRIDES_COPY, 'plus 4–6 strides after one easy run');
   // A 10K has no taper: nothing to prepare for.
   const tenK = { date: addDayKey(weekOf(9), 6), distanceKm: 10 };

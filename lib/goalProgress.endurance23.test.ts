@@ -60,40 +60,40 @@ const texts = (p: GoalProgress): string => p.reasons.map(r => r.text).join(' | '
 
 const toPlanRuns = (runs: Run[]): PlanRun[] => runs.map(r => ({ day: r.day, km: r.distanceKm }));
 
-// The calendar's cutback week: Monday 2026-10-19 (~20 km, long run 9 km held), after four plain build weeks 15 -> 23 km.
+// The calendar's cutback week: Monday 2026-10-19 (~17 km = 75% of the 23 km just run; long run 7 km = 75% of the 9 km held), after four plain build weeks 15 -> 23 km.
 const CUTBACK_HISTORY = [wk(23), wk(21), wk(19), wk(17), wk(15)];
 
 test('the plan trims the long run to what is left when done + the unrun long run is over 110% of the week (and says so once)', () => {
   const thu = '2026-10-22';
-  const runs = weeks(thu, [[[1, 7], [3, 7]], ...CUTBACK_HISTORY]);
+  const runs = weeks(thu, [[[1, 6], [3, 6]], ...CUTBACK_HISTORY]);
   const plan = enduranceWeekPlan({ runs: toPlanRuns(runs), weekStart: '2026-10-19', goalKm: 30, today: thu });
   assert.equal(plan.cutback?.normalKm, 25);
-  assert.equal(plan.targetKm, 20);
-  // 14 km in + the 9 km long run is 23 km, past 110% of 20. On the Thursday two usual run days are left (Saturday and Sunday), so what is left is a TOTAL (wave 24e):
-  // 6 km, no long run of its own planned.
-  assert.deepEqual(plan.longRunTrim, { fullKm: 9, doneKm: 14, remainingKm: 6, weekDone: false, today: false, daysLeft: 2, day: null, small: false, easyOk: false, afterRun: false, limitKm: 22 });
+  assert.equal(plan.targetKm, 17);
+  // 12 km in + the 7 km long run is 19 km, past 110% of 17 (18.7). On the Thursday two usual run days are left (Saturday and Sunday), so what is left is a TOTAL (wave 24e):
+  // 5 km, no long run of its own planned.
+  assert.deepEqual(plan.longRunTrim, { fullKm: 7, doneKm: 12, remainingKm: 5, weekDone: false, today: false, daysLeft: 2, day: null, small: false, easyOk: false, afterRun: false, limitKm: 18.7 });
   assert.equal(plan.longRunKm, null);
   assert.equal(plan.longRunAhead, true);
-  assert.equal(plan.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~20 km this week, 6 km left: one easy run of ~6 km, or two of ~3 km');
+  assert.equal(plan.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~17 km this week, 5 km left: one easy run of ~5 km, or two of ~2.5 km');
   assert.equal(plan.longRun.held, true); // a cutback week holds its long run by definition (the trim does not change that)
   // Saturday evening, Saturday's run in: ONE usual run day is left, so the day is named and the long run is cut to what is left, a number everywhere.
   const sat = '2026-10-24';
-  const named = enduranceWeekPlan({ runs: toPlanRuns(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sat });
-  assert.deepEqual(named.longRunTrim, { fullKm: 9, doneKm: 14, remainingKm: 6, weekDone: false, today: false, daysLeft: 1, day: 'Sunday', small: false, easyOk: false, afterRun: false, limitKm: 22 });
-  assert.equal(named.longRunKm, 6);
-  assert.equal(named.longRun.nextKm, 6);
-  assert.equal(named.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~20 km, long run 6 km — absorb the last three weeks');
+  const named = enduranceWeekPlan({ runs: toPlanRuns(weeks(sat, [[[1, 4], [3, 4], [5, 4]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sat });
+  assert.deepEqual(named.longRunTrim, { fullKm: 7, doneKm: 12, remainingKm: 5, weekDone: false, today: false, daysLeft: 1, day: 'Sunday', small: false, easyOk: false, afterRun: false, limitKm: 18.7 });
+  assert.equal(named.longRunKm, 5);
+  assert.equal(named.longRun.nextKm, 5);
+  assert.equal(named.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~17 km, long run 5 km — absorb the last three weeks');
 });
 
-test('Sunday keeps Saturday\'s trim: after the Sunday run the plan line still says the long run Saturday said (6 km), not the full 9 (wave 24e)', () => {
+test('Sunday keeps Saturday\'s trim: after the Sunday run the plan line still says the long run Saturday said (5 km), not the full 7 (wave 24e)', () => {
   const sat = '2026-10-24';
   const sun = '2026-10-25';
-  const satPlan = enduranceWeekPlan({ runs: toPlanRuns(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sat });
-  const morning = enduranceWeekPlan({ runs: toPlanRuns(weeks(sun, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sun });
-  const evening = enduranceWeekPlan({ runs: toPlanRuns(weeks(sun, [[[1, 5], [3, 5], [5, 4], [6, 10]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sun });
+  const satPlan = enduranceWeekPlan({ runs: toPlanRuns(weeks(sat, [[[1, 4], [3, 4], [5, 4]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sat });
+  const morning = enduranceWeekPlan({ runs: toPlanRuns(weeks(sun, [[[1, 4], [3, 4], [5, 4]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sun });
+  const evening = enduranceWeekPlan({ runs: toPlanRuns(weeks(sun, [[[1, 4], [3, 4], [5, 4], [6, 5]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: sun });
   for (const p of [satPlan, morning, evening]) {
-    assert.equal(p.longRunKm, 6);
-    assert.equal(p.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~20 km, long run 6 km — absorb the last three weeks');
+    assert.equal(p.longRunKm, 5);
+    assert.equal(p.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~17 km, long run 5 km — absorb the last three weeks');
   }
   assert.equal(satPlan.longRunTrim?.today, false);
   assert.equal(morning.longRunTrim?.today, true);
@@ -105,24 +105,24 @@ test('Sunday keeps Saturday\'s trim: after the Sunday run the plan line still sa
 
 test('under 3 km (2 mi) left: no long run is planned, the week is done', () => {
   const thu = '2026-10-22';
-  const plan = enduranceWeekPlan({ runs: toPlanRuns(weeks(thu, [[[1, 9.4], [3, 9.3]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: thu });
-  // The Tuesday / Thursday runs are 9+ km: the week's long run is behind, 1.3 km are left.
+  const plan = enduranceWeekPlan({ runs: toPlanRuns(weeks(thu, [[[1, 8], [3, 7.9]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: thu });
+  // The Tuesday / Thursday runs are 8 km: the week's long run is behind, 1.1 km are left.
   assert.equal(plan.longRunAhead, false);
   assert.equal(plan.longRunTrim?.weekDone, true);
   assert.equal(plan.longRunKm, null);
-  assert.equal(plan.purpose.replace(/ /g, ' '), 'Cutback week: ~20 km this week, done — no long run (rest or a 20-min jog)');
-  // Friday of a week with the long run ahead and 18 km in: 18 + 9 > 22 and 2 km are left: skip the long run.
+  assert.equal(plan.purpose.replace(/\u00a0/g, ' '), 'Cutback week: ~17 km this week, done — no long run (rest or a 20-min jog)');
+  // Friday of a week with the long run ahead and 15.6 km in: 15.6 + 7 > 18.7 and 1.4 km (under 10%) are left: skip the long run.
   const fri = '2026-10-23';
-  const ahead = enduranceWeekPlan({ runs: toPlanRuns(weeks(fri, [[[1, 6], [3, 6], [4, 6]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: fri });
+  const ahead = enduranceWeekPlan({ runs: toPlanRuns(weeks(fri, [[[1, 5.2], [3, 5.2], [4, 5.2]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: fri });
   assert.equal(ahead.longRunAhead, true);
-  assert.deepEqual(ahead.longRunTrim, { fullKm: 9, doneKm: 18, remainingKm: 2, weekDone: true, today: false, daysLeft: 2, day: null, small: false, easyOk: false, afterRun: false, limitKm: 22 });
+  assert.deepEqual(ahead.longRunTrim, { fullKm: 7, doneKm: 15.6, remainingKm: 1.4, weekDone: true, today: false, daysLeft: 2, day: null, small: false, easyOk: false, afterRun: false, limitKm: 18.7 });
 });
 
-test('a week whose long run still fits is untouched (done + long run <= 110% of the week: 12 + 9 = 21 of 22)', () => {
+test('a week whose long run still fits is untouched (done + long run <= 110% of the week: 11 + 7 = 18 of 18.7)', () => {
   const thu = '2026-10-22';
-  const plan = enduranceWeekPlan({ runs: toPlanRuns(weeks(thu, [[[1, 6], [3, 6]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: thu });
+  const plan = enduranceWeekPlan({ runs: toPlanRuns(weeks(thu, [[[1, 5.5], [3, 5.5]], ...CUTBACK_HISTORY])), weekStart: '2026-10-19', goalKm: 30, today: thu });
   assert.equal(plan.longRunTrim, null);
-  assert.equal(plan.longRunKm, 9);
+  assert.equal(plan.longRunKm, 7);
 });
 
 test('the trim belongs to the week being read: the review\'s read of the coming Monday (nothing run yet) has none', () => {
@@ -166,22 +166,22 @@ test('Thursday morning: a runner who did exactly the plan on Tuesday is not "Lig
 
 test('the remaining-km line and the plan line carry the same number, and so does the coach (see goalPromptText.endurance23.test.ts)', () => {
   const thu = '2026-10-22';
-  const card = computeGoalProgress(input(weeks(thu, [[[1, 7], [3, 7]], ...CUTBACK_HISTORY]), { todayKey: thu }));
-  assert.equal(card.reasons[0].text, '14 of ~20 km — 6 km left this week: one easy run of ~6 km, or two of ~3 km');
+  const card = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], ...CUTBACK_HISTORY]), { todayKey: thu }));
+  assert.equal(card.reasons[0].text, '12 of ~17 km — 5 km left this week: one easy run of ~5 km, or two of ~2.5 km');
   assert.equal(card.distance!.plan?.longRunKm, null);
-  assert.equal(card.distance!.plan?.longRunTrim?.fullKm, 9);
-  assert.equal(card.distance!.plan?.purpose, 'Cutback week: ~20 km this week, 6 km left: one easy run of ~6 km, or two of ~3 km');
+  assert.equal(card.distance!.plan?.longRunTrim?.fullKm, 7);
+  assert.equal(card.distance!.plan?.purpose, 'Cutback week: ~17 km this week, 5 km left: one easy run of ~5 km, or two of ~2.5 km');
   assert.equal(texts(card).includes('one short easy run'), false);
   // With ONE usual run day left (Saturday's run is in) the day is named and the long run is the number.
   const sat = '2026-10-24';
-  const named = computeGoalProgress(input(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat }));
-  assert.equal(named.reasons[0].text, "14 of ~20 km — keep Sunday's long run to ~6 km");
-  assert.equal(named.distance!.plan?.longRunKm, 6);
-  assert.equal(named.longRun?.nextKm, 6);
+  const named = computeGoalProgress(input(weeks(sat, [[[1, 4], [3, 4], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat }));
+  assert.equal(named.reasons[0].text, "12 of ~17 km — keep Sunday's long run to ~5 km");
+  assert.equal(named.distance!.plan?.longRunKm, 5);
+  assert.equal(named.longRun?.nextKm, 5);
   // On the long-run day itself the line is about today.
   const sun = '2026-10-25';
-  const today = computeGoalProgress(input(weeks(sun, [[[1, 6], [3, 6], [5, 3]], ...CUTBACK_HISTORY]), { todayKey: sun }));
-  assert.match(today.reasons[0].text, /^15 of ~20 km — keep today's long run to ~5 km$/);
+  const today = computeGoalProgress(input(weeks(sun, [[[1, 5], [3, 5], [5, 3]], ...CUTBACK_HISTORY]), { todayKey: sun }));
+  assert.match(today.reasons[0].text, /^13 of ~17 km — keep today's longest run to ~4 km$/);
 });
 
 test('the Sunday of a hold week he built through reads "above the hold", not "on plan"; kept, it is "on plan"; the Monday after says so too', () => {
@@ -204,15 +204,15 @@ test('the Sunday of a hold week he built through reads "above the hold", not "on
 });
 
 test('the week after a cutback quotes its % against the last full week before the cutback, and says so - card headline (23e P2-4)', () => {
-  // Cutback week Mon 2026-10-19 (20 km after 23), then 25 km. Monday 2026-11-02: last week's +25% against the cutback is +9% on the 23 km week.
+  // Cutback week Mon 2026-10-19 (17 km after 23), then 25 km. Monday 2026-11-02: last week's +47% against the cutback is +9% on the 23 km week.
   const mon = '2026-11-02';
-  const card = computeGoalProgress(input(weeks(mon, [[], [[1, 5], [3, 5], [5, 5], [6, 10]], [[1, 4], [3, 4], [5, 4], [6, 8]], ...CUTBACK_HISTORY.slice(0, 4).map((_, i) => wk([23, 21, 19, 17][i]))]), { todayKey: mon }));
+  const card = computeGoalProgress(input(weeks(mon, [[], [[1, 5], [3, 5], [5, 5], [6, 10]], [[1, 3.4], [3, 3.4], [5, 3.4], [6, 6.8]], ...CUTBACK_HISTORY.slice(0, 4).map((_, i) => wk([23, 21, 19, 17][i]))]), { todayKey: mon }));
   assert.equal(card.headline, 'Building — 25 km last week (+9% on last full week, 23 km), on plan');
   assert.equal(card.distance!.plan?.stepAfterCutback, undefined); // this week's own step is from last week now
-  // The cutback week itself keeps "−13%, as planned" against the week before it.
+  // The cutback week itself keeps "−26%, as planned" against the week before it.
   const cutMon = '2026-10-26';
-  const afterCut = computeGoalProgress(input(weeks(cutMon, [[], [[1, 4], [3, 4], [5, 4], [6, 8]], wk(23), wk(21), wk(19), wk(17)]), { todayKey: cutMon }));
-  assert.match(afterCut.headline, /^Building — 20 km last week \(−13%, as planned\), your cutback week$/);
+  const afterCut = computeGoalProgress(input(weeks(cutMon, [[], [[1, 3.4], [3, 3.4], [5, 3.4], [6, 6.8]], wk(23), wk(21), wk(19), wk(17)]), { todayKey: cutMon }));
+  assert.match(afterCut.headline, /^Building — 17 km last week \(−26%, as planned\), your cutback week$/);
   assert.equal(afterCut.distance!.plan?.stepAfterCutback, true);
   assert.equal(afterCut.distance!.plan?.stepBaseKm, 23);
 });

@@ -31,8 +31,8 @@
  * see `racePhaseTargetKm`) and the growth step above is not used in them.
  *
  * Wave 21e additions to the same plan (so the card, the review and the coach never disagree): every 4th calendar week
- * of plain building is a CUTBACK (~80% of the week it replaces, long run held but never past half of the lowered week, graded as its own target and never
- * "short"); the last 2 build weeks before a taper add a few strides; a week read DURING the week with 4+ days off (or,
+ * of plain building is a CUTBACK (wave 26e: 75% of the smaller of last week's target and actual, the long run eased to 75% of the one held and never past half of the lowered week,
+ * graded as its own target and never "short", a spike measured against the week it replaced); the last 2 build weeks before a taper add a few strides; a week read DURING the week with 4+ days off (or,
  * from Friday, well behind its own pace) is a LIGHT week (don't make it up, capped long run); a careful comeback's
  * target is a ceiling ("up to", capped at 1.25x the week just run) graded against the week before it; a restart "hold"
  * never exceeds 0.75x the pre-break median and, on the week's last day, is next week's number; recovery ceilings round
@@ -555,6 +555,19 @@ export function roundLongRunKm(km: number, unitsPerKm = 1): number {
 export function floorLongRunKm(km: number, unitsPerKm = 1): number {
   return Math.round(((Math.floor(km * unitsPerKm * 2 + 1e-9) / 2) / unitsPerKm) * 100) / 100;
 }
+
+/**
+ * Wave 26e group D: a cutback week's long run is EASED (lower than the long run the runner last ran by at least half a display unit), not held. One reading for the plan line and
+ * the coach's target line, so both say "eased for the cutback" together.
+ */
+export function cutbackLongRunEased(longRunKm: number | null | undefined, lastLongRunKm: number | null | undefined, unitsPerKm = 1): boolean {
+  if (longRunKm == null || lastLongRunKm == null) return false;
+  const units = Number.isFinite(unitsPerKm) && unitsPerKm > 0 ? unitsPerKm : 1;
+  return (lastLongRunKm - longRunKm) * units >= 0.5 - 1e-9;
+}
+
+/** The words that say it on the plan line and in the coach's target line (no number in them: the long run's own figure is derived from the plan). */
+export const CUTBACK_EASED_COPY = 'eased for the cutback';
 
 /** A race time from minutes: "2:01" from one hour on, else "45 min". Null when unknown. */
 export function formatRaceTime(durationMin: number | null | undefined): string | null {
@@ -1088,9 +1101,16 @@ export const LONG_RUN_RESTART_WEEK_SHARE = 0.4;
 const TAPER_LONG_RUN_SHARE = 0.65;
 /** Wave 26e: the late marathon taper's long run (8-13 days out, the Sunday a week before the race) is this share of the peak long run. */
 export const TAPER_LATE_LONG_RUN_SHARE = 0.45;
-/** Every 4th plain build / maintain week is a cutback at ~80% of the week it replaces (long run held). */
+/** Every 4th plain build / maintain week is a cutback: a real down week, 25% under the week just run (and a long run eased by the same fraction). */
 export const CUTBACK_EVERY_WEEKS = 4;
-export const CUTBACK_FRACTION = 0.8;
+/**
+ * Wave 26e group D: the cutback week is `CUTBACK_FRACTION` x the smaller of last week's target and last week's actual (never rewards an overshoot, never asks for more than the
+ * runner ran), rounded like every weekly target; the cutback long run is `CUTBACK_FRACTION` x the long run held. (It was 0.8 x the ~10% step the week would have had: -13%.)
+ */
+export const CUTBACK_FRACTION = 0.75;
+/** A held long run of this much or more (6 km / 4 mi) is not eased below the long-run minimum (5 km / 3 mi) in a cutback week. */
+export const CUTBACK_LONG_RUN_FLOOR_FROM_KM = 6;
+export const CUTBACK_LONG_RUN_FLOOR_FROM_MI = 4;
 /** Wave 23e: an owed cutback (the last one was skipped) comes after this many build weeks, the skip-hold counting as one. */
 export const OWED_CUTBACK_AFTER_BUILD_WEEKS = 2;
 /** A cutback week that ran more than this multiple of its lowered number skipped the cutback (the shared 10% ceiling slack). */
@@ -1388,11 +1408,11 @@ function bandFor(
     }
     return { goodFromKm: 0, mixedFromKm: 0, overKm: round1(targetKm * PHASE_CEILING_TOLERANCE) };
   }
-  // A cutback is graded as its own target and never "short": any running is a good cutback week. Its target is the week's one
-  // target, so the jump guard is measured against it too (the 30% margin keeps the normal week it replaced, 25% above it, from
-  // being a spike) - the card, the distance line and the review never quote two "safe steps" for the same week.
+  // A cutback is graded as its own target and never "short": any running is a good cutback week. Wave 26e group D: the jump guard is measured against the week the
+  // cutback REPLACED (`normalKm`), not the lowered number - at -25% the normal week is 1.47x the cut, and running it is "a normal week, not the cutback" (no guilt), never
+  // a spike. (A week at the goal itself has nothing to spike past: no edge.)
   if (opts.cutbackNormalKm != null) {
-    return { goodFromKm: 0, mixedFromKm: 0, overKm: targetKm < ctx.goalKm ? spikeEdgeKm(targetKm, ctx.units) : null };
+    return { goodFromKm: 0, mixedFromKm: 0, overKm: opts.cutbackNormalKm < ctx.goalKm ? spikeEdgeKm(opts.cutbackNormalKm, ctx.units) : null };
   }
   const good = mode === 'restart' ? RESTART_GOOD_FRACTION : mode === 'gentle' ? REBUILD_GOOD_FRACTION : GOOD_FRACTION;
   const mixed = mode === 'restart' ? RESTART_MIXED_FRACTION : mode === 'gentle' ? REBUILD_MIXED_FRACTION : MIXED_FRACTION;
@@ -1494,12 +1514,17 @@ function nextLongRun(
     }
     default: {
       if (lr.lastKm == null || targetKm == null) return null;
-      // A cutback week keeps the long run where it is (it is the week's volume that comes down), never past the peak
-      // target and never past half of the LOWERED week: a long run held at 14 km in a 24 km cutback would be 58% of it.
+      // Wave 26e group D: a cutback week EASES the long run too, to CUTBACK_FRACTION of the one held (the peak target caps what is held), within half of the LOWERED
+      // week, rounded down to the half unit. A held long run of 6 km (4 mi) or more is not eased under the 5 km (3 mi) long-run minimum - the share cap still wins.
       if (cutback) {
         const held = roundLongRunKm(lr.targetPeakKm != null ? Math.min(lr.lastKm, lr.targetPeakKm) : lr.lastKm, ctx.units);
         const cutCap = weekShareKm(targetKm, LONG_RUN_MAX_WEEK_SHARE, ctx.units);
-        return held > cutCap + 1e-9 ? floorLongRunKm(cutCap, ctx.units) : held;
+        const imperial = ctx.units < 1;
+        const minRunKm = imperial ? LONG_RUN_MIN_KM_IMPERIAL : LONG_RUN_MIN_KM;
+        const floorFromKm = (imperial ? CUTBACK_LONG_RUN_FLOOR_FROM_MI * KM_PER_MILE : CUTBACK_LONG_RUN_FLOOR_FROM_KM);
+        let eased = roundLongRunKm(CUTBACK_FRACTION * held, ctx.units);
+        if (held >= floorFromKm - 1e-9) eased = Math.max(eased, roundLongRunKm(minRunKm, ctx.units));
+        return floorLongRunKm(Math.min(eased, cutCap), ctx.units);
       }
       if (heldKm != null && !restarting) return roundLongRunKm(heldKm, ctx.units);
       // Wave 26e: without a race there is no peak to build to - the long run stops at the ceiling (21 km / 13 mi), held there when it is already above it.
@@ -1678,6 +1703,9 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const held = plan.longRunJump != null ? " (held after last week's jump)" : '';
   const lrPart = lr != null ? `${lrWord} ${formatTargetLongRun(lr, u)}${held}` : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
+  // Wave 26e group D: a cutback week's long run is eased, and the plan line says so (the coach's target line reads the same `cutbackLongRunEased`).
+  // (Not once the rest-of-week budget has trimmed it to the km left: that long run is the trim's number, and the coach's target line says nothing of the cutback's easing then either.)
+  const cutbackLrPart = lrPart == null ? 'easy runs' : plan.longRunTrim == null && cutbackLongRunEased(lr, plan.longRun.lastKm, u) ? `${lrPart} (${CUTBACK_EASED_COPY})` : lrPart;
   if (plan.lightWeek != null) return lightWeekLine(plan.lightWeek, u);
   // Wave 23e: the week's km are run before its long run: no long run is planned, the plan line says so (the card's remaining-km line has the rest).
   if (plan.longRunTrim?.weekDone) {
@@ -1698,7 +1726,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       return "Baseline week: run as you normally would; next week's step is built from this week";
     case 'build': {
       if (plan.cutback != null) {
-        return `Cutback week: ~${formatKm(t ?? plan.goalKm, u)}, ${lrPart ?? 'easy runs'} — absorb the last three weeks${strides}`;
+        return `Cutback week: ~${formatKm(t ?? plan.goalKm, u)}, ${cutbackLrPart} — absorb the last three weeks${strides}`;
       }
       // Still climbing back toward the pre-break level (not once the target has reached it).
       const back = plan.comeback != null && t != null && t < plan.comeback.medianKm - 0.5
@@ -1712,7 +1740,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
     }
     case 'maintain': {
       if (plan.cutback != null) {
-        return `Cutback week: ~${formatKm(t ?? plan.goalKm, u)}, ${lrPart ?? 'easy runs'} — absorb the last three weeks${strides}`;
+        return `Cutback week: ~${formatKm(t ?? plan.goalKm, u)}, ${cutbackLrPart} — absorb the last three weeks${strides}`;
       }
       // A runner who has never run the weekly goal is still building to it, not holding it - and (wave 23e P3-c) neither is one whose last week fell short of it.
       const verb = plan.goalReachedBefore && plan.lastAtGoal ? 'Hold' : 'Build to';
@@ -2044,8 +2072,15 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   let mode: BandMode = 'normal';
   // The base the week's ~10% step is taken from: last week, or after a cutback the larger of the two weeks before it.
   let stepBaseKm = prev.km;
-  // Plain build / maintain weeks in a row ending last week; the walk back is cut off after `MAX_PLAN_DEPTH` weeks (0 there).
-  const prevBuildWeeks = prevPlan != null ? prevPlan.buildWeeks : 0;
+  // Plain build / maintain weeks in a row ending last week; the walk back is cut off after `MAX_PLAN_DEPTH` weeks. Wave 26e group D: where it is cut off the count is not "0" (that
+  // loses the cutback cycle's phase: a real 17 km cutback in the oldest weeks read as a 25 km plain week, and the obedient runner who ran it as short and then spiked) but 3 when the
+  // three weeks before it were all running weeks outside the race lifecycle - the steady build the calendar's cutbacks assume - and 0 otherwise (a break, a wind-down, a new goal).
+  const chainCutOff = prevPlan == null && hasPrior && depth >= ctx.maxDepth;
+  const steadyBefore = chainCutOff && [7, 14, 21].every(back => {
+    const earlier = addDayKey(w, -back);
+    return !isWindWeek(ctx, earlier) && weekRuns(ctx, earlier).km >= compareMin;
+  });
+  const prevBuildWeeks = prevPlan != null ? prevPlan.buildWeeks : steadyBefore ? CUTBACK_EVERY_WEEKS - 1 : 0;
   // Cutback weeks fall on every 4th CALENDAR week - the same weeks for the card and the review, whatever window of
   // history either was handed - once 3 plain build / maintain weeks precede one.
   const cutbackWeek = ((absoluteWeek(w) % CUTBACK_EVERY_WEEKS) + CUTBACK_EVERY_WEEKS) % CUTBACK_EVERY_WEEKS === CUTBACK_EVERY_WEEKS - 1;
@@ -2194,7 +2229,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       if (rebuild || comeback != null) mode = 'gentle';
       targetKm = target;
       kind = rebuild ? 'rebuild' : target >= ctx.goalKm ? 'maintain' : 'build';
-      // Every 4th plain build / maintain week is a cutback: ~80% of the week it replaces, the long run held.
+      // Every 4th plain build / maintain week is a cutback: CUTBACK_FRACTION of the smaller of last week's target and last week's actual, the long run eased by the same fraction.
       // Not in the last build week before a taper / race week: the taper is the easing off, and the peak long run belongs there.
       const beforeWindDown = isWindDownPhase(phaseAt(ctx, addDayKey(w, 7))?.phase);
       // Wave 23e: the calendar's 4th week still carries the cutback, after 3 build weeks - or after 2 when one is OWED (the last was skipped; the
@@ -2202,8 +2237,12 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       // cut off after `MAX_PLAN_DEPTH` weeks) is the plan that week showed.
       const owed = prevPlan?.cutbackOwed === true && prevIsTraining;
       const cutbackDue = cutbackWeek && prevBuildWeeks >= (owed ? OWED_CUTBACK_AFTER_BUILD_WEEKS : CUTBACK_EVERY_WEEKS - 1);
-      if ((kind === 'build' || kind === 'maintain') && comeback == null && cutbackDue && target >= compareMin && !beforeWindDown) {
-        const cut = roundWeekTargetKm(target * CUTBACK_FRACTION, ctx.units);
+      // (Wave 26e group D: the base is fixed on Monday - last week's target or its actual, whichever is LOWER - so the card, the coach and the review agree; a cutback is only
+      // taken from a base of at least the compare minimum, and it applies only when it is below the week it replaces.)
+      const cutbackBaseKm = prevPlan?.targetKm != null ? Math.min(prevPlan.targetKm, prev.km) : prev.km;
+      if ((kind === 'build' || kind === 'maintain') && comeback == null && cutbackDue && target >= compareMin && cutbackBaseKm >= compareMin && !beforeWindDown) {
+        // (Worked out on the number the runner SEES, like a share of the week: a 15 mi week is stored as 24.1 km = 14.98 mi, and 75% of it must round as 11.25 mi, to 11.5.)
+        const cut = roundWeekTargetKm(weekShareKm(cutbackBaseKm, CUTBACK_FRACTION, ctx.units) + 1e-6, ctx.units);
         if (cut < target - 1e-9) {
           cutback = { normalKm: target, ...(owed ? { owed: true } : {}) };
           targetKm = cut;
@@ -2287,8 +2326,10 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
       // Thursday morning). Once today's run is in, today counts as done.
       const ranToday = ctx.runs.some(r => r.day === ctx.today && r.day !== ctx.raceDate);
       const through = ranToday ? dow : dow - 1;
-      const usualKm = median(profiles.map(p => p.slice(0, through + 1).reduce((a, b) => a + b, 0))) as number;
-      const usualLeft = profiles.reduce((a, p) => a + p.slice(through + 1).reduce((x, y) => x + y, 0), 0) / profiles.length;
+      // Wave 26e group D: in a cutback week the runner's own usual weeks are scaled to the lowered week (cut / the week it replaced): an obedient runner at -25% is on pace.
+      const usualScale = cutback != null && cutback.normalKm > 0 ? Math.min(1, targetKm / cutback.normalKm) : 1;
+      const usualKm = (median(profiles.map(p => p.slice(0, through + 1).reduce((a, b) => a + b, 0))) as number) * usualScale;
+      const usualLeft = (profiles.reduce((a, p) => a + p.slice(through + 1).reduce((x, y) => x + y, 0), 0) / profiles.length) * usualScale;
       const behindUsual = doneKm < usualKm * LIGHT_WEEK_PACE_FRACTION;
       const behindTarget = doneKm < LIGHT_WEEK_LATE_SHARE * (targetKm - (longRunAhead && plannedNextKm != null ? plannedNextKm : 0));
       const fits = targetKm - doneKm <= usualLeft * LIGHT_WEEK_FIT_SLACK + 1e-9;
@@ -2556,7 +2597,9 @@ export function longRunPeakReachedOn(
       if (plan.longRunAhead !== false) {
         const planned = plan.longRunKm ?? 0;
         if (planned >= targetPeakKm - 1e-9) return sunday;
-        km = Math.max(planned, 0) > 0 ? planned : km;
+        // (Wave 26e group D: not in a cutback week - its long run is EASED to 75% of the one held, but the Monday after it still steps from the longest run of the last 14 days,
+        // which has the pre-cutback long run in it: the climb carries on from `lastKm`, the cutback costs it nothing.)
+        if (plan.cutback == null) km = Math.max(planned, 0) > 0 ? planned : km;
       }
     } else {
       const cutbackWeek = ((absoluteWeek(monday) % CUTBACK_EVERY_WEEKS) + CUTBACK_EVERY_WEEKS) % CUTBACK_EVERY_WEEKS === CUTBACK_EVERY_WEEKS - 1;
@@ -2644,8 +2687,8 @@ export function gradeEnduranceWeek(
   if (plan.upTo === true && plan.comeback != null && comebackCapRead({ upTo: true, targetKm: target, goalKm: plan.goalKm, comeback: plan.comeback }, km, units) === 'well') {
     return { level: 'mixed', gap: 'spike' };
   }
-  // A cutback week's target is the cutback number: it is the step a jump is measured against, like any other week's.
-  if (plan.band.overKm != null && isSpikeWeek(km, target, plan.goalKm, units) && km > medianGuard) {
+  // A cutback week's jump is measured against the week it replaced (wave 26e group D), the number its band's edge is built on; any other week's, against its own target.
+  if (plan.band.overKm != null && isSpikeWeek(km, plan.cutback?.normalKm ?? target, plan.goalKm, units) && km > medianGuard) {
     return { level: 'mixed', gap: 'spike' };
   }
   // A cutback week that ran more than 10% over its lowered number became a normal week (wave 22e: the cutback was "skipped"). Wave 23e: that is no failure - a

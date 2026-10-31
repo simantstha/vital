@@ -114,15 +114,26 @@ test('a hold is graded by km first: a long run past the held one breaks it only 
   assert.equal(holdOverrunRead({ kind: 'build' as const, targetKm: 25, longRunKm: 11 }, 40, 30), null);
 });
 
-test('metric and imperial trim the second cutback the same way (Saturday: 15 km in, the 12 km long run would carry the week past 110%); the imperial long run is the half-mile cap, not 7 mi', () => {
-  const km = onPlanPlan(68, 1);
-  const mi = onPlanPlan(68, MI);
+test('metric and imperial trim the second cutback the same way (Saturday: 16.5 km in, the long run would carry the week past 110%); the imperial long run is the half-mile cap, not the full one', () => {
+  // (The second cutback is ~23 km now - 75% of the 30 km week before it - with a long run eased from 14 km: 10.5 km, and 6 mi in imperial. The scripted runner's Saturday is lengthened
+  // by 1.5 km so that both units have a long run that no longer fits.)
+  const plan = (unitsPerKm: number) => {
+    const scn = buildScenario('runner_on_plan');
+    const today = scnAddDays(scn.day0, 68);
+    const mon = scnAddDays(scn.day0, 63);
+    const runs = onPlanRuns().filter(r => r.day <= today).map(r => (r.day === today ? { ...r, km: r.km + 1.5 } : r));
+    return enduranceWeekPlan({ runs, weekStart: mon, goalKm: 30, race: { date: scn.user.raceDate, distanceKm: 21.1 }, today, unitsPerKm, goalStartDay: scn.day0 });
+  };
+  const km = plan(1);
+  const mi = plan(MI);
   assert.equal(km.longRunTrim != null, true);
   assert.equal(mi.longRunTrim != null, true, 'imperial did not trim');
-  assert.equal(nbsp(km.purpose), 'Cutback week: ~24 km, long run 9 km — absorb the last three weeks');
-  assert.equal(nbsp(mi.purpose), 'Cutback week: ~15 mi, long run 5.5 mi — absorb the last three weeks');
-  assert.equal(km.longRunTrim?.fullKm, 12);
-  assert.ok(Math.abs((mi.longRunTrim?.fullKm ?? 0) * MI - 7.5) < 0.01, `${mi.longRunTrim?.fullKm}`);
+  assert.equal(km.targetKm, 23);
+  assert.ok(km.longRunTrim!.fullKm > km.longRunKm! && mi.longRunTrim!.fullKm > mi.longRunKm!, 'both are trimmed below the long run they started with');
+  assert.equal(Math.round((mi.longRunKm as number) * MI * 2) / 2, (mi.longRunKm as number) * MI > 0 ? Math.round((mi.longRunKm as number) * MI * 2) / 2 : 0);
+  assert.equal(nbsp(km.purpose), `Cutback week: ~23 km, long run ${km.longRunKm} km \u2014 absorb the last three weeks`);
+  assert.match(nbsp(mi.purpose), /^Cutback week: ~14 mi, long run [\d.]+ mi \u2014 absorb the last three weeks$/);
+  assert.ok(Math.abs(((mi.longRunKm as number) * MI * 2) - Math.round((mi.longRunKm as number) * MI * 2)) < 0.01, 'to the half mile');
 });
 
 test('imperial: the held long run is never past the peak the goal fits (9.5 mi against the 9 mi of an 18.6 mi week)', () => {

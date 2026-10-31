@@ -59,7 +59,7 @@ const wk = (km: number): Array<[number, number]> => [[1, km * 0.2], [3, km * 0.2
 const toPlanRuns = (runs: Run[]): PlanRun[] => runs.map(r => ({ day: r.day, km: r.distanceKm }));
 const nbsp = (s: string): string => s.replace(/ /g, ' ');
 
-// The calendar's cutback week is Monday 2026-10-19 (~20 km after 15..23); skipped (25 km) it brings a hold week from Monday 2026-10-26.
+// The calendar's cutback week is Monday 2026-10-19 (~17 km after 15..23); skipped (25 km) it brings a hold week from Monday 2026-10-26.
 const CUTBACK_HISTORY = [wk(23), wk(21), wk(19), wk(17), wk(15)];
 const HOLD_HISTORY = [wk(25), wk(23), wk(21), wk(19), wk(17), wk(15)];
 
@@ -106,21 +106,21 @@ test('"done" is the review\'s band: the km left are at most 10% of the week\'s n
   assert.ok(done20 > 3);
 });
 
-test('the headline carries the budget: "Cutback week - 18.7 of ~20 km, this week\'s km are done" (it used to read last week\'s "Building - 23 km last week (+10%), on plan")', () => {
+test('the headline carries the budget: "Cutback week - 15.9 of ~17 km, this week\'s km are done" (it used to read last week\'s "Building - 23 km last week (+10%), on plan")', () => {
   const thu = '2026-10-22';
-  const card = computeGoalProgress(input(weeks(thu, [[[1, 9.4], [3, 9.3]], ...CUTBACK_HISTORY]), { todayKey: thu }));
-  assert.equal(card.headline, "Cutback week — 18.7 of ~20 km, this week's km are done");
-  assert.equal(card.reasons.find(r => r.kind === 'volume')?.text, "18.7 of ~20 km — this week's km are done; rest or an easy 20-min jog");
+  const card = computeGoalProgress(input(weeks(thu, [[[1, 8], [3, 7.9]], ...CUTBACK_HISTORY]), { todayKey: thu }));
+  assert.equal(card.headline, "Cutback week — 15.9 of ~17 km, this week's km are done");
+  assert.equal(card.reasons.find(r => r.kind === 'volume')?.text, "15.9 of ~17 km — this week's km are done; rest or an easy 20-min jog");
   assert.equal(card.verdict, 'building');
   // The coach's lines say the same (the opener is built from the headline).
   const text = formatGoalProgressLines(card, 'metric').join('\n');
-  assert.match(text, /Verdict: building — "Cutback week — 18\.7 of ~20 km, this week's km are done"/);
+  assert.match(text, /Verdict: building — "Cutback week — 15\.9 of ~17 km, this week's km are done"/);
   assert.match(text, /the week's km are done: rest or an easy 20-min jog, no catch-up volume/);
   // Several usual run days left: the total, in the headline too.
-  const total = computeGoalProgress(input(weeks(thu, [[[1, 7], [3, 7]], ...CUTBACK_HISTORY]), { todayKey: thu }));
-  assert.equal(total.headline, 'Cutback week — 14 of ~20 km, 6 km left this week');
+  const total = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], ...CUTBACK_HISTORY]), { todayKey: thu }));
+  assert.equal(total.headline, 'Cutback week — 12 of ~17 km, 5 km left this week');
   // Nothing to budget (the long run fits): last week's read stands.
-  const fits = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], ...CUTBACK_HISTORY]), { todayKey: thu }));
+  const fits = computeGoalProgress(input(weeks(thu, [[[1, 5.5], [3, 5.5]], ...CUTBACK_HISTORY]), { todayKey: thu }));
   assert.match(fits.headline, /^Building — 23 km last week/);
 });
 
@@ -137,11 +137,11 @@ test('"~2 km left" is one short easy run, and "or rest, either is fine" only whe
 test('the coach says the same rest of the week as the card (total, named day, small, done)', () => {
   const coachOf = (gp: GoalProgress): string => formatGoalProgressLines(gp, 'metric').join('\n');
   const thu = '2026-10-22';
-  const total = coachOf(computeGoalProgress(input(weeks(thu, [[[1, 7], [3, 7]], ...CUTBACK_HISTORY]), { todayKey: thu })));
-  assert.match(total, /6 km left this week: one easy run of ~6 km, or two of ~3 km, so the week stays at ~20 km/);
+  const total = coachOf(computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], ...CUTBACK_HISTORY]), { todayKey: thu })));
+  assert.match(total, /5 km left this week: one easy run of ~5 km, or two of ~2.5 km, so the week stays at ~17 km/);
   const sat = '2026-10-24';
-  const named = coachOf(computeGoalProgress(input(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat })));
-  assert.match(named, /keep Sunday's long run to ~6 km so the week stays at ~20 km/);
+  const named = coachOf(computeGoalProgress(input(weeks(sat, [[[1, 4], [3, 4], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat })));
+  assert.match(named, /keep Sunday's long run to ~5 km so the week stays at ~17 km/);
 });
 
 // ── group 6 (round 7) ───────────────────────────────────────────────────────────────────────────────────────────────

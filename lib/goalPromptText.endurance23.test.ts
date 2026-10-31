@@ -56,18 +56,18 @@ const targetLine = (text: string): string => text.split('\n').find(l => l.starts
 
 test('trimmed long run: the coach target line, the long-run line and the card say the same number', () => {
   const sat = '2026-10-24';
-  const gp = computeGoalProgress(input(weeks(sat, [[[1, 5], [3, 5], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat }));
+  const gp = computeGoalProgress(input(weeks(sat, [[[1, 4], [3, 4], [5, 4]], ...CUTBACK_HISTORY]), { todayKey: sat }));
   const text = coach(gp);
-  assert.match(targetLine(text), /^- This week's target: a cutback week, ~20\.0 km — absorb the last three weeks; do not push past it — keep Sunday's long run to ~6 km so the week stays at ~20 km$/);
-  assert.match(text, /next long run ~6 km/);
-  assert.doesNotMatch(text, /long run 10 km|one short easy run/);
+  assert.match(targetLine(text), /^- This week's target: a cutback week, ~17\.0 km — absorb the last three weeks; do not push past it — keep Sunday's long run to ~5 km so the week stays at ~17 km$/);
+  assert.match(text, /next long run ~5 km/);
+  assert.doesNotMatch(text, /long run 7 km|one short easy run/);
 });
 
 test('several usual run days left: the coach gives the TOTAL, one easy run or two (wave 24e), and no long run of its own', () => {
   const thu = '2026-10-22';
-  const gp = computeGoalProgress(input(weeks(thu, [[[1, 7], [3, 7]], ...CUTBACK_HISTORY]), { todayKey: thu }));
+  const gp = computeGoalProgress(input(weeks(thu, [[[1, 6], [3, 6]], ...CUTBACK_HISTORY]), { todayKey: thu }));
   const text = coach(gp);
-  assert.match(targetLine(text), /^- This week's target: a cutback week, ~20\.0 km — absorb the last three weeks; do not push past it — 6 km left this week: one easy run of ~6 km, or two of ~3 km, so the week stays at ~20 km$/);
+  assert.match(targetLine(text), /^- This week's target: a cutback week, ~17\.0 km — absorb the last three weeks; do not push past it — 5 km left this week: one easy run of ~5 km, or two of ~2.5 km, so the week stays at ~17 km$/);
   assert.doesNotMatch(text, /next long run/);
 });
 
@@ -97,7 +97,7 @@ test('the trimmed taper long run: the race-phase line and the card keep one numb
 
 test('the week after a cutback: the coach quotes the step against the last full week and says so (23e P2-4)', () => {
   const mon = '2026-10-26';
-  const gp = computeGoalProgress(input(weeks(mon, [[], [[1, 4], [3, 4], [5, 4], [6, 8]], wk(23), wk(21), wk(19), wk(17)]), { todayKey: mon }));
+  const gp = computeGoalProgress(input(weeks(mon, [[], [[1, 3.4], [3, 3.4], [5, 3.4], [6, 6.8]], wk(23), wk(21), wk(19), wk(17)]), { todayKey: mon }));
   assert.match(targetLine(coach(gp)), /^- This week's target: build to ~25\.0 km \(a \+9% step on your last full week \(23\.0 km\), back on the build after the cutback; long run [\d.]+ km\)/);
   // A week that did not follow a cutback keeps "on last week".
   const plain = computeGoalProgress(input(weeks('2026-10-12', [[], wk(21), wk(19), wk(17), wk(15)]), { todayKey: '2026-10-12' }));

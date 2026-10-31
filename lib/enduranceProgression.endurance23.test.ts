@@ -44,7 +44,7 @@ test('a skipped cutback is OWED: the skip-hold counts as a build week, the cutba
 });
 
 test('a cutback run as planned is not owed, and a hold after a spike is a build week that owes nothing', () => {
-  const kept = runsFor([15, 17, 19, 21, 23, 20, 25]);
+  const kept = runsFor([15, 17, 19, 21, 23, 17, 25]);
   const w7 = planOf(kept, 7);
   assert.equal(w7.cutbackOwed, false);
   // A spike in week 5; the hold lands on the calendar's cutback week (week 6) after 3+ build weeks: it takes the cutback's place (the cut after the jump).

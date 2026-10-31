@@ -60,11 +60,11 @@ const allText = (r: WeeklyReview): string => [r.headline, r.win, r.slip, r.nextW
 test('cutback: "Next week" names it, the cutback week itself is graded as its own target and never short', () => {
   // Reviewing Mon 2026-10-12: the coming week (10-19) is the calendar's cutback week after three plain build weeks.
   const before = computeWeeklyReview(planReview([15, 17, 19, 21, 23], { weekStart: '2026-10-12' }));
-  assert.equal(before.nextWeek, 'Cutback week: ~20 km, long run 9 km — absorb the last three weeks.');
-  // Reviewing the cutback week: 20 km of a ~20 km cutback is done, and says so.
-  const done = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20], { weekStart: '2026-10-19' }));
+  assert.equal(before.nextWeek, 'Cutback week: ~17 km, long run 7 km (eased for the cutback) — absorb the last three weeks.');
+  // Reviewing the cutback week: 17 km of a ~17 km cutback is done, and says so.
+  const done = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 17], { weekStart: '2026-10-19' }));
   assert.equal(done.weekRating, 'good');
-  assert.equal(done.win, 'Cutback week done: 20 km — the last three weeks have time to settle in.');
+  assert.equal(done.win, 'Cutback week done: 17 km — the last three weeks have time to settle in.');
   assert.equal(done.slip, null);
   // ... and the week after goes back to the progression (~10% over the 23 km before the cutback), not 10% of the cutback.
   assert.match(done.nextWeek, /^Build to ~25 km: /);
@@ -81,7 +81,7 @@ test('cutback: "Next week" names it, the cutback week itself is graded as its ow
   // Wave 24e: no WIN slot (it is fine, not an achievement), a neutral Volume stat, and the neutral note opens "Next week".
   assert.equal(normal.win, null);
   assert.equal(normal.slip, null);
-  assert.match(normal.headline, /^4 sessions, 25 of ~20 km — a normal week, not the cutback · goal 30 km/);
+  assert.match(normal.headline, /^4 sessions, 25 of ~17 km — a normal week, not the cutback · goal 30 km/);
   assert.equal(normal.stats.find(st => st.label === 'Volume')!.tone, 'neutral');
   assert.equal(normal.nextWeek, 'Ran the cutback as a normal week — hold ~25 km next week; long run 10 km, no 10% step on top of it.');
 });
@@ -126,7 +126,7 @@ test('the taper plan copy joins "3×1 km" / "3×0.5 mi" with U+00A0 in the card-
   assert.equal(BREAKING_UNIT_SPACE.test(allText(strides)), false, allText(strides));
   assert.ok(strides.nextWeek.includes('plus 4–6 strides after one easy run'));
   const cutback = raw(planReview([15, 17, 19, 21, 23], { weekStart: '2026-10-12' }));
-  assert.match(cutback.nextWeek, /^Cutback week: ~20 km, long run 9 km — absorb the last three weeks\.$/);
+  assert.match(cutback.nextWeek, /^Cutback week: ~17 km, long run 7 km \(eased for the cutback\) — absorb the last three weeks\.$/);
   assert.equal(BREAKING_UNIT_SPACE.test(allText(cutback)), false, allText(cutback));
 });
 
@@ -144,12 +144,12 @@ test('the cap note in "Next week" follows the plan\'s cadence, not every Monday'
   assert.deepEqual(texts, [false, false, false, true, false]);
 });
 
-test('a jump in a cutback week is read against the cutback number the card showed that week (~20 km), and the hold next week still steps up from the 25 km week it replaced', () => {
+test('a jump in a cutback week is read against the cutback number the card showed that week (~17 km), and the hold next week still steps up from the 25 km week it replaced', () => {
   const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 40], { weekStart: '2026-10-19' }));
   assert.equal(r.weekRating, 'mixed');
-  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 20, targetKm: 30, cutback: true });
-  assert.equal(r.headline, '4 sessions, 40 of ~20 km — well above the cutback · goal 30 km'); // (wave 24e: a cutback week's number is the cutback, on every surface)
-  assert.equal(r.slip, "Jumped 20 km over this week's cutback — big jumps raise injury risk");
+  assert.deepEqual(r.weekGap, { kind: 'spike', doneKm: 40, stepKm: 17, targetKm: 30, cutback: true });
+  assert.equal(r.headline, '4 sessions, 40 of ~17 km — well above the cutback · goal 30 km'); // (wave 24e: a cutback week's number is the cutback, on every surface)
+  assert.equal(r.slip, "Jumped 23 km over this week's cutback — big jumps raise injury risk");
   assert.equal(r.nextWeek, 'Hold around ~28 km next week, then build ~10% a week toward 30 km.');
 });
 

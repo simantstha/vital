@@ -16,7 +16,7 @@
  *                                                //   target (== targetKm when no step applies, and in a baseline week); avg4wKm = mean of the last 4 FINISHED
  *                                                //   training weeks (race and recovery weeks left out); plan? (additive) = { kind: baseline | build | hold |
  *                                                //   restart | maintain | taper | race_week | recovery | rebuild, targetKm | null, longRunKm | null, purpose,
- *                                                //   and, only when true (additive): cutback, lightWeek, strides, longRunHeld, upTo; wave 22e: easingOff + taperLongRunKm
+ *                                                //   and, only when true (additive): cutback (+ cutbackNormalKm, wave 26e: the week it replaced), lightWeek, strides, longRunHeld, upTo; wave 22e: easingOff + taperLongRunKm
  *                                                //   (the week before a taper is behind its target: "Easing off before your taper"), preTaper ('taper' | 'race_week'),
  *                                                //   skippedCutback (a cutback ran >10% over: this week holds at the week it replaced), restartKm (on a break: the number
  *                                                //   "if you restart tomorrow", when it differs from targetKm), overCap + overCapRead ('touch' | 'well'): last week ran over

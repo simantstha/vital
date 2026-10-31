@@ -57,15 +57,15 @@ function planReview(weeks: number[], over: Partial<WeeklyReviewInput> = {}): Wee
 // ── P1-C: the skipped cutback ───────────────────────────────────────────────
 
 test('a cutback week that ran far past its lowered number reads "a normal week, not the cutback" in the headline - not "30 of 30 km"', () => {
-  // The cutback week is Mon 2026-10-19 (20 km after 15 17 19 21 23). 24 km is 20% over it and under the spike line.
+  // The cutback week is Mon 2026-10-19 (17 km after 15 17 19 21 23). 24 km is 41% over it, 4% under the 25 km week it replaced: a normal week, no spike.
   const skipped = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 24], { weekStart: '2026-10-19' }));
-  assert.match(skipped.headline, /^4 sessions, 24 of ~20 km — a normal week, not the cutback · goal 30 km/);
+  assert.match(skipped.headline, /^4 sessions, 24 of ~17 km — a normal week, not the cutback · goal 30 km/);
   // Even a week that reached the weekly goal itself in a cutback week is read against the cutback (the goal is not the bar that week).
   const atGoal = computeWeeklyReview(planReview([15, 17, 19, 21, 25, 30], { weekStart: '2026-10-19' }));
   assert.doesNotMatch(atGoal.headline, /30 of 30/);
   // A cutback kept is unchanged.
-  const kept = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20], { weekStart: '2026-10-19' }));
-  assert.match(kept.headline, /20 of ~20 km — on plan · goal 30 km/);
+  const kept = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 17], { weekStart: '2026-10-19' }));
+  assert.match(kept.headline, /17 of ~17 km — on plan · goal 30 km/);
 });
 
 // ── P2.3: "30 km the week after" when the week after is the taper ──────────
@@ -101,12 +101,12 @@ test('recovery week 1\'s Volume stat says the week before held the race (22e)', 
 // ── wave 22e follow-up: a planned cutback is not a drop ─────────────────────
 
 test('a cutback week kept as planned says "as planned (cutback)" next to its negative change, in the Volume stat and the headline', () => {
-  // 15 17 19 21 23 then the calendar's cutback week 2026-10-19 (~20 km): 20 km is -13% on 23, as planned.
-  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 20], { weekStart: '2026-10-19' }));
+  // 15 17 19 21 23 then the calendar's cutback week 2026-10-19 (~17 km): 17 km is -26% on 23, as planned.
+  const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 17], { weekStart: '2026-10-19' }));
   const volume = r.stats.find(s => s.label === 'Volume')!;
-  assert.equal(volume.comparison, '−13% vs last week, as planned (cutback)');
+  assert.equal(volume.comparison, '−26% vs last week, as planned (cutback)');
   assert.notEqual(volume.tone, 'watch');
-  assert.match(r.headline, /20 of ~20 km — on plan · goal 30 km, −13%, as planned \(cutback\)$/);
+  assert.match(r.headline, /17 of ~17 km — on plan · goal 30 km, −26%, as planned \(cutback\)$/);
   // The same drop in a plain build week is not "as planned".
   const plain = computeWeeklyReview(planReview([15, 17, 19, 21, 25, 20], { weekStart: '2026-10-12' }));
   assert.doesNotMatch(JSON.stringify(plain), /as planned/);

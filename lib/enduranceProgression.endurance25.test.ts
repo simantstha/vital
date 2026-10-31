@@ -39,27 +39,27 @@ const snap = (name: ScenarioName, idx: number) => {
 
 // ── group 1 / item 1 ─────────────────────────────────────────────────────────
 
-test('item 1: the cutback week of runner_on_plan quotes the 9 km Saturday gave on every later day, not the 12 km it started with', () => {
-  // The week of May 4 (days 63-69): Monday's plan is a 12 km long run, Saturday trims it to 9 km ("keep Sunday's long run to ~9 km"), the runner runs 15 km on Sunday.
-  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-04').longRun.planKm, 12);
-  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-09').longRun.planKm, 9);
-  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-10').longRun.planKm, 9);
-  // Sunday: "longer than the 9 km plan" (it always was) ...
-  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-10').longRun.peakPlan?.plannedKm, 9);
-  // ... and on Monday and every day of the week after it the same 9 km, never the 12 km (day 70 read "longer than the 12 km plan").
+test('item 1: the cutback week of runner_on_plan quotes the 8 km Saturday gave on every later day, not the 10.5 km it started with', () => {
+  // The week of May 4 (days 63-69): Monday's plan is a 10.5 km long run (75% of the 14 km held), Saturday trims it to 8 km ("keep Sunday's long run to ~8 km"), the runner runs 15 km on Sunday.
+  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-04').longRun.planKm, 10.5);
+  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-09').longRun.planKm, 8);
+  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-10').longRun.planKm, 8);
+  // Sunday: "longer than the 8 km plan" (it always was) ...
+  assert.equal(planOf('runner_on_plan', '2026-05-04', '2026-05-10').longRun.peakPlan?.plannedKm, 8);
+  // ... and on Monday and every day of the week after it the same 8 km, never the 10.5 km (day 70 read "longer than the 10.5 km plan").
   for (const today of ['2026-05-11', '2026-05-12', '2026-05-14', '2026-05-16']) {
     const p = planOf('runner_on_plan', '2026-05-11', today);
-    assert.equal(p.longRun.peakPlan?.plannedKm, 9, today);
-    assert.equal(p.longRun.peakPlan?.brokenKm, 9, today);
+    assert.equal(p.longRun.peakPlan?.plannedKm, 8, today);
+    assert.equal(p.longRun.peakPlan?.brokenKm, 8, today);
   }
   const monday = snap('runner_on_plan', 70).card?.reasons.find(r => r.kind === 'long_run');
-  assert.equal(nbsp(monday?.text ?? ''), 'Long run peak 15 km — longer than the 9 km plan');
+  assert.equal(nbsp(monday?.text ?? ''), 'Long run peak 15 km — longer than the 8 km plan');
   const sunday = snap('runner_on_plan', 69).card?.reasons.find(r => r.kind === 'long_run');
-  assert.equal(nbsp(sunday?.text ?? ''), 'Long run peak 15 km — longer than the 9 km plan');
+  assert.equal(nbsp(sunday?.text ?? ''), 'Long run peak 15 km — longer than the 8 km plan');
 });
 
 test('item 1: the long-run JUMP detection still reads the plan the week started with (the figure the chain keeps), so the hold it asks for is unchanged', () => {
-  // The cutback week ran its 15 km long run against a 9 km trim: 15 km is not a jump over the 14 km before it (+1), so Monday plans no hold - as before the fix.
+  // The cutback week ran its 15 km long run against an 8 km trim: 15 km is not a jump over the 14 km before it (+1), so Monday plans no hold - as before the fix.
   const monday = planOf('runner_on_plan', '2026-05-11', '2026-05-11');
   assert.equal(monday.longRunJump, null);
   assert.equal(monday.longRunKm, 15);
@@ -79,10 +79,10 @@ test('item 2: on a Sunday after the long run the coach\'s "next long run" is the
   const d41 = snap('runner_on_plan', 41);
   assert.equal(d41.card?.longRun?.nextKm, snap('runner_on_plan', 42).card?.distance?.plan?.longRunKm);
   assert.match(nbsp(d41.coach?.find(l => l.startsWith('- Long run')) ?? ''), /next long run ~11 km/);
-  // Day 69 (Sun May 10): 15 km run, Monday holds the 15 km long run - not "~9 km".
+  // Day 69 (Sun May 10): 15 km run, Monday holds the 15 km long run - not "~8 km".
   assert.equal(snap('runner_on_plan', 69).card?.longRun?.nextKm, 15);
   // Before the long run is run (Saturday), "next long run" is still this week's figure.
-  assert.equal(snap('runner_on_plan', 68).card?.longRun?.nextKm, 9);
+  assert.equal(snap('runner_on_plan', 68).card?.longRun?.nextKm, 8);
 });
 
 test('item 2: the Sunday before race week has no "next long run" (race week plans none)', () => {

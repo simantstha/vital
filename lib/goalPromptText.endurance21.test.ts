@@ -67,8 +67,8 @@ test('light week: the coach is told not to make it up and where the long run sto
 test('cutback and strides: the coach line says so, with the same numbers as the card', () => {
   const todayKey = '2026-10-20'; // the calendar's cutback week
   const gp = computeGoalProgress(input(weeks(todayKey, [[], wk(23), wk(21), wk(19), wk(17), wk(15)]), { todayKey }));
-  assert.match(targetLine(coach(gp)), /^- This week's target: a cutback week, ~20\.0 km; long run [\d.]+ km held — absorb the last three weeks; do not push past it$/);
-  assert.equal(gp.distance!.stepTargetKm, 20);
+  assert.match(targetLine(coach(gp)), /^- This week's target: a cutback week, ~17\.0 km; long run eased to [\d.]+ km \(eased for the cutback\) — absorb the last three weeks; do not push past it$/);
+  assert.equal(gp.distance!.stepTargetKm, 17);
   // Strides in the last 2 build weeks before the taper.
   const race = { date: '2026-11-08', distanceKm: 21.1 };
   const strides = computeGoalProgress(input(weeks('2026-10-13', [[], wk(30), wk(30), wk(30), wk(30)]), { todayKey: '2026-10-13', race }));

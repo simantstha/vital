@@ -117,10 +117,10 @@ test('"an easier week" is said only when the hold really is easier than the week
 });
 
 test('the SECOND cutback in a row run as a normal week gets a factual slip; still rated good', () => {
-  // Weeks 1-6 build with the week-6 cutback run as 25 km, hold 25, build 27, 30, then the owed cutback (calendar week of 2026-11-16, ~24 km) run as 30 km.
+  // Weeks 1-6 build with the week-6 cutback run as 25 km, hold 25, build 27, 30, then the owed cutback (calendar week of 2026-11-16, ~23 km: 75% of the 30 km before it) run as 30 km.
   const r = review(weeksFrom([15, 17, 19, 21, 23, 25, 25, 27, 30, 30], '2026-11-16'), { weekStart: '2026-11-16' });
   assert.equal(r.weekRating, 'good');
-  assert.match(r.slip ?? '', /^Second cutback run as a normal week: 30 km vs ~24 km planned$/);
+  assert.match(r.slip ?? '', /^Second cutback run as a normal week: 30 km vs ~23 km planned$/);
   assert.equal(r.win, null);
   assert.equal(r.weekGap, null);
 });

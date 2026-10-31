@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { TAPER_GOOD_MIN_FRACTION, longRunStepKm, racePhaseInfo } from '../enduranceProgression';
+import { CUTBACK_FRACTION, TAPER_GOOD_MIN_FRACTION, longRunStepKm, racePhaseInfo } from '../enduranceProgression';
 import { weekFitsSessionTarget, type GoalLiftReturn } from '../goalProgress';
 import { easedLoad, liftLapseMinDays, liftReturnDisplay, liftShortName, nextWorkingLoad } from '../liftChange';
 import { KM_PER_MILE } from '../metricFormat';
@@ -1974,12 +1974,17 @@ invariant(['runner_comeback_spike'], 'a "Stay at ~N next week" headline is the t
 const ANY_OF_FIGURE = /(\d+(?:\.\d+)?)(?:\s?(?:km|mi))?\s+of\s+(?:up to\s+)?~?(\d+(?:\.\d+)?)\s?(km|mi)\b/g;
 
 /** Mondays of the weeks whose Sunday card says "cutback", with that week's lowered target (km) and the km run. */
-function cutbackWeeks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> {
-  const out: Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> = [];
+// (`normalKm` is the week the cutback replaced: the plan's own `cutbackNormalKm`, wave 26e group D - the cutback is no longer a fixed fraction of it, so it cannot be derived from the cutback number.)
+function cutbackWeeks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; normalKm: number; ranKm: number; sunday: DaySnapshot }> {
+  const out: Array<{ monday: string; targetKm: number; normalKm: number; ranKm: number; sunday: DaySnapshot }> = [];
   for (const s of snaps) {
     const d = s.card?.distance;
     if (weekdayOf(s.date) !== 'Sun' || !d?.plan?.cutback || d.thisWeekKm == null) continue;
-    out.push({ monday: mondayOfDate(s.date), targetKm: d.stepTargetKm, ranKm: d.thisWeekKm, sunday: s });
+    const normalKm = d.plan.cutbackNormalKm;
+    assert.ok(normalKm != null, `${s.date}: a cutback week's plan names the week it replaced (cutbackNormalKm)`);
+    // The cutback is a real down week: at most CUTBACK_FRACTION of the week it replaced (+ the km / half-mile rounding), never more.
+    assert.ok(d.stepTargetKm <= normalKm * CUTBACK_FRACTION + 1, `${s.date}: cutback ${d.stepTargetKm} km of a replaced ${normalKm} km week is not a ${CUTBACK_FRACTION} cutback`);
+    out.push({ monday: mondayOfDate(s.date), targetKm: d.stepTargetKm, normalKm, ranKm: d.thisWeekKm, sunday: s });
   }
   return out;
 }
@@ -2026,7 +2031,7 @@ invariant(RUNNERS, 'a cutback week that ran more than 15% over its lowered targe
 // ── wave 22e / P2.1: a skipped cutback is not rewarded ──────────────────────
 
 /** A cutback week more than 10% over its lowered target that is not a spike (a spike has its own read): the cutback was skipped. */
-function skippedCutbacks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; ranKm: number; sunday: DaySnapshot }> {
+function skippedCutbacks(snaps: DaySnapshot[]): Array<{ monday: string; targetKm: number; normalKm: number; ranKm: number; sunday: DaySnapshot }> {
   return cutbackWeeks(snaps).filter(w => w.ranKm > w.targetKm * 1.1 + 1e-9 && !/Over the (?:safe step|cutback)\b/i.test(plain(w.sunday.card?.headline ?? '')));
 }
 
@@ -2040,7 +2045,7 @@ invariant(RUNNERS, 'a cutback that became a normal week (more than 10% over its 
     skipped++;
     const nextMonday = byDate.get(addDays(w.monday, 7));
     const plan = nextMonday?.card?.distance?.plan;
-    const normalKm = w.targetKm / 0.8;
+    const normalKm = w.normalKm;
     const goalKm = nextMonday?.card?.distance?.targetKm ?? 30;
     const atGoal = normalKm >= goalKm - 0.5;
     if (nextMonday && plan?.kind !== (atGoal ? 'maintain' : 'hold')) out.push({ snap: nextMonday, detail: `plan kind ${plan?.kind} after ${w.ranKm} of ~${w.targetKm} km (a cutback that became a normal week): "${visible(nextMonday.card?.headline ?? '')}"` });
@@ -3587,7 +3592,7 @@ invariant(['runner_on_plan', 'runner_on_plan_half', 'runner_no_race'], 'P2-6: a 
       const volume = rv.stats.find(st => st.label === 'Volume');
       if (volume?.tone !== 'neutral') out.push({ snap: monday, detail: `Volume stat is ${volume?.tone}: "${visible(volume?.value ?? '')} ${visible(volume?.comparison ?? '')}"` });
       const goalKm = monday.card?.distance?.targetKm ?? 30;
-      const atGoal = w.targetKm / 0.8 >= goalKm - 0.5;
+      const atGoal = w.normalKm >= goalKm - 0.5;
       if (!atGoal && !/^Ran the cutback as a normal week — (?:hold ~[\d.]+ (?:km|mi) next week.*no 10% step on top of it|next week's hold \(~[\d.]+ (?:km|mi)\) is your easier week)/.test(plain(rv.nextWeek))) out.push({ snap: monday, detail: `next week "${visible(rv.nextWeek)}" does not open with the neutral note` });
       if (atGoal && !/^Hold [\d.]+ (?:km|mi);/.test(plain(rv.nextWeek))) out.push({ snap: monday, detail: `next week "${visible(rv.nextWeek)}" is not the maintain week's "Hold N"` });
       if (rv.stats.some(st => st.tone === 'watch')) out.push({ snap: monday, detail: `a watch-toned stat: ${rv.stats.filter(st => st.tone === 'watch').map(st => `${st.label} ${visible(st.value)}`).join(', ')}` });
