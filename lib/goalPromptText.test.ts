@@ -170,13 +170,18 @@ test('week plan: the coach is told the week\'s ONE target for every plan kind', 
   assert.doesNotMatch(lines(d({ kind: 'build', targetKm: 27, longRunKm: 14, stepPct: 13 }, 27)), /safe ~10%/);
   // At the goal: no growth clause unless the long run is still climbing to a peak it has not reached; unit-aware, gone at the peak.
   assert.match(lines(d({ kind: 'maintain', targetKm: 30, longRunKm: 15 }, 30)), /- This week's target: hold the 30\.0 km\/week goal; long run 15 km, the rest easy — the runner is at the goal, do not add volume/);
-  const climbing = (units: 'metric' | 'imperial', peakKm: number) => formatGoalProgressLines(gp({
-    goal: 'endurance', distance: d({ kind: 'maintain', targetKm: 30, longRunKm: 15 }, 30), longRun: { lastKm: 12, peakKm, targetPeakKm: 15, nextKm: 14 },
+  const climbing = (units: 'metric' | 'imperial', peakKm: number, longRunKm = 12) => formatGoalProgressLines(gp({
+    goal: 'endurance', distance: d({ kind: 'maintain', targetKm: 30, longRunKm }, 30), longRun: { lastKm: 12, peakKm, targetPeakKm: 15, nextKm: 14 },
   }), units).join('\n');
-  // (Wave 26e group B: the step quoted is the plan's graded one from this week's long run - 15 km: +1.5 km, 9.3 mi: +1 mi - not a literal.)
-  assert.match(climbing('metric', 12), /long run 15 km \(the long run keeps growing ~1\.5 km a week toward its peak\)/);
+  // (Wave 26e group B: the step quoted is the plan's graded one from this week's long run - 12 km: +1.5 km, 7.5 mi: +1 mi - not a literal.)
+  assert.match(climbing('metric', 12), /long run 12 km \(the long run keeps growing ~1\.5 km a week toward its peak\)/);
   assert.match(climbing('imperial', 12), /\(the long run keeps growing ~1 mi a week toward its peak\)/);
   assert.doesNotMatch(climbing('imperial', 12), /~2 km|~1\.5 km/);
+  // (Wave 26e round 8, P3-1: never by more than the room left to the peak - 14.5 km of a 15 km peak: ~0.5 km - and not at all in the week the long run IS the peak.)
+  assert.match(climbing('metric', 12, 14.5), /long run 14\.5 km \(the long run keeps growing ~0\.5 km a week toward its peak\)/);
+  assert.doesNotMatch(climbing('metric', 12, 15), /keeps growing|toward its peak/);
+  assert.match(climbing('metric', 12, 15), /long run 15 km, the rest easy/);
+  assert.doesNotMatch(climbing('imperial', 12, 15), /keeps growing/);
   const growsBy = (units: 'metric' | 'imperial', longRunKm: number): string => formatGoalProgressLines(gp({
     goal: 'endurance', distance: d({ kind: 'maintain', targetKm: 30, longRunKm }, 30), longRun: { lastKm: longRunKm - 1, peakKm: longRunKm - 1, targetPeakKm: 30, nextKm: longRunKm },
   }), units).join('\n');

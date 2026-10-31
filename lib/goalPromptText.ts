@@ -205,8 +205,13 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
         && roundLongRunKm(lrc.peakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1) < roundLongRunKm(lrc.targetPeakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1);
       // Wave 26e group B: the step the NEXT week takes from this week's long run - the plan's graded `longRunStepKm`, in the runner's unit - not a literal.
       const stepBase = plan.longRunKm ?? lrc?.lastKm ?? 0;
+      // Wave 26e (round 8, P3-1): never more than the room left to the peak from THIS week's long run (14.5 km of a 15 km peak: ~0.5 km), and not at all once it is there (15 km of 15 km).
+      const peakRoomUnits = lrc?.targetPeakKm != null && plan.longRunKm != null
+        ? Math.round((roundLongRunKm(lrc.targetPeakKm, perKm) - roundLongRunKm(plan.longRunKm, perKm)) * perKm * 2) / 2
+        : null;
       const stepUnits = Math.round(longRunStepAmountKm(stepBase, perKm) * perKm * 2) / 2;
-      const grow = growing ? ` (the long run keeps growing ~${stepUnits} ${units === 'imperial' ? 'mi' : 'km'} a week toward its peak)` : '';
+      const growUnits = peakRoomUnits != null ? Math.min(stepUnits, peakRoomUnits) : stepUnits;
+      const grow = growing && growUnits > 1e-9 ? ` (the long run keeps growing ~${growUnits} ${units === 'imperial' ? 'mi' : 'km'} a week toward its peak)` : '';
       if (plan.goalReachedBefore === false) {
         return `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${atNoRaceCeiling ? ceilingNote : plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the first week at the goal, do not go past it${strides}`;
       }

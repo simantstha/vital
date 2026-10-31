@@ -5818,3 +5818,28 @@ invariant(RUNNERS, 'item 10: the hold-week card says "Your cutback became a norm
   });
 }
 
+// ── P3-1: "the long run keeps growing ~1.5 km a week toward its peak" is not said in the week the long run reaches its peak ──────────────────────
+{
+  const GROWING = /the long run keeps growing ~(\d+(?:\.\d+)?) (km|mi) a week toward its peak/;
+  invariant(RUNNERS, 'wave 26e P3-1: the coach says the long run "keeps growing ~S a week toward its peak" only while this week\'s long run is under the peak, and never by more than the room left', (snaps, name) => {
+    const out: Violation[] = [];
+    const perKm = buildScenario(name).profile.units === 'imperial' ? 1 / KM_PER_MILE : 1;
+    let seen = 0;
+    for (const snap of snaps) {
+      const plan = snap.card?.distance?.plan;
+      const peak = snap.card?.longRun?.targetPeakKm;
+      for (const t of snap.coach ?? []) {
+        const m = GROWING.exec(plain(t));
+        if (!m) continue;
+        seen++;
+        if (plan?.longRunKm == null || peak == null) { out.push({ snap, detail: `"${visible(t)}" with no long run or peak to grow toward` }); continue; }
+        const room = Math.round((peak - plan.longRunKm) * perKm * 2) / 2;
+        if (room <= 1e-9) out.push({ snap, detail: `"${visible(t)}" but this week's long run (${plan.longRunKm} km) is already at the ${peak} km peak` });
+        else if (Number(m[1]) > room + 1e-9) out.push({ snap, detail: `"${visible(t)}" but only ${room} ${m[2]} are left to the peak` });
+      }
+    }
+    if (name === 'runner_on_plan_obedient') assert.ok(seen > 0, `${name}: the "keeps growing" line was never said, so this invariant checked nothing`);
+    return out;
+  });
+}
+
