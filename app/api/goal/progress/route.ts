@@ -48,7 +48,7 @@
  *   headline: string,                            // plain English, <= 70 chars; reached: "Goal reached — 72 kg (Sep 20)"
  *   reasons: [{ kind, text, tone: 'good' | 'watch' | 'neutral' }],   // max 3; kinds include 'next_step'
  *                                                //   ("Set a new target or switch to maintenance", neutral, last when reached),
- *                                                //   'reached', 'position' and 'weigh_in_age' ("Based on a weigh-in N days ago")
+ *                                                //   'reached', 'position', 'weigh_in_age' ("Based on a weigh-in N days ago") and 'injury' (wave 27, first, neutral)
  *   reachedAt: 'YYYY-MM-DD' | null,              // weight goals only: day of the first trend point that crossed the target
  *                                                //   since the goal began; null when not reached, the weigh-in is stale or unknown
  *   lastWeighInDaysAgo: number | null,           // staleness: > 14 -> verdict 'insufficient_data' ("Last weigh-in N days ago —
@@ -57,6 +57,11 @@
  *   lastSessionDaysAgo: number | null,           // newest session in the trailing 28 days (strength sessions for muscle); null if none
  *   headlineLift?: string | null,                // muscle only: canonical key of the lift the card leads with ("squat"); sticky (another lift
  *                                                //   takes it only by out-training it by 2+ sessions for 2 weeks running). Clients prefer it to ranking lifts themselves.
+ *   injuryCheckIn?: { text, since } | null,       // ADDITIVE (wave 27), present only while the card carries the injury check-in: the user's most recent ACTIVE
+ *                                                //   Injury fact (the same nodes the chat coach obeys), logged within the last 28 days and not resolved. text = the body
+ *                                                //   part, lower-case ("knee pain"); since = the local day it was logged. Endurance and muscle goals always, general only
+ *                                                //   when the user trains, never weight_loss. The same sentence is reasons[0] (kind 'injury', tone 'neutral'; the other
+ *                                                //   reasons shift down, the cap of 3 holds) - it changes no plan number. Absent otherwise.
  *   adherence: { done, planned, weeklyTarget, pct, windowDays } | null,   // muscle + weekly sessions target only; the window is
  *                                                //   28 days, or the goal's age (min 7) while it is newer: planned = weeklyTarget x windowDays / 7
  *   dataSufficiency: { weighIns, needed, sessionsLast28d }

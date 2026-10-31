@@ -98,6 +98,7 @@ import {
   type RacePhaseInfo,
 } from './enduranceProgression';
 import { KM_PER_MILE } from './metricFormat';
+import { appendInjuryCheckIn, injuryCheckInApplies, injuryCheckInLine, stripInjuryCheckIn, type InjuryCheckIn } from './injuryCheckIn';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -357,6 +358,12 @@ export interface WeeklyReviewInput {
    * first review's day counts. Omitted -> every day counts.
    */
   signupDay?: string | null;
+  /**
+   * Additive, wave 27: the user's most recent ACTIVE Injury fact within the check-in window, read when the review is
+   * computed (lib/injuryCheckIn.ts; the loader supplies it). With it "Next week" ends with the goal card's own check-in
+   * sentence (same words), after the plan. Absent / null: no injury, no line.
+   */
+  activeInjury?: InjuryCheckIn | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -3183,7 +3190,22 @@ function emptyReview(input: WeeklyReviewInput, week: Week, prevWeek: Week, daysW
   };
 }
 
+/**
+ * Wave 27: the review, with the goal card's injury check-in sentence closing "Next week" when the user has a recent active
+ * Injury fact (endurance and strength; general health when the user trains; never weight loss — see lib/injuryCheckIn.ts).
+ * The plan text before it is the review the injury-free path produces, unchanged; last week's stored text is compared with
+ * the check-in sentence taken off, so a tip is still never repeated two weeks running.
+ */
 export function computeWeeklyReview(rawInput: WeeklyReviewInput): WeeklyReview {
+  const input = rawInput.previousNextWeek ? { ...rawInput, previousNextWeek: stripInjuryCheckIn(rawInput.previousNextWeek) } : rawInput;
+  const review = computeWeeklyReviewPlan(input);
+  const injury = input.activeInjury;
+  const hasTrainingCues = input.weeklySessionsTarget != null || input.trainingDays.length > 0;
+  if (!injury || !injuryCheckInApplies(input.goal, { hasTrainingCues })) return review;
+  return { ...review, nextWeek: appendInjuryCheckIn(review.nextWeek, injuryCheckInLine(input.goal, injury)) };
+}
+
+function computeWeeklyReviewPlan(rawInput: WeeklyReviewInput): WeeklyReview {
   const week = makeWeek(rawInput.weekStart, rawInput.signupDay);
   // A session logged on the review's own Monday (the loader reads relative to the real clock; the review is recomputed when opened) is kept apart
   // for "You're already back", and the lift data is cut at the reviewed week so that Monday never moves the review's lift comparisons (wave 23s).

@@ -12,6 +12,7 @@
 import type { GoalKind, GoalProgress } from '../goalProgress';
 import { liftLapseMinDays } from '../liftChange';
 import { withUnit } from '../displayText';
+import { injuryCheckInLine } from '../injuryCheckIn';
 import { KM_PER_MILE, LB_PER_KG } from '../metricFormat';
 import { PACE_SETTLE_DAYS, relationForDays, weeksForDays } from '../weightPace';
 import { REACHED_ASK_DAYS, stepVerb } from '../weightWeekPlan';
@@ -452,17 +453,28 @@ export function newUserGoalOpener(goal: unknown, gp?: GoalProgress | null, units
   return `${g.lead} ${tail} — ${g.ask}`;
 }
 
+/**
+ * Wave 27: the card's injury check-in sentence (lib/injuryCheckIn.ts, the very words the goal card shows), or null. It joins
+ * the opener's goal line: before a goal line that ends in a question (so the opener still ends by asking it), after any other.
+ */
+function withInjuryCheckIn(goalLine: string | null, gp: GoalProgress | null | undefined): string | null {
+  if (!gp?.injuryCheckIn) return goalLine;
+  const line = injuryCheckInLine(gp.goal, gp.injuryCheckIn);
+  if (goalLine == null) return line;
+  return goalLine.endsWith('?') ? `${line} ${goalLine}` : `${goalLine} ${line}`;
+}
+
 /** The required first sentence(s) of the opener, or null when nothing goal-specific is known. */
 export function requiredOpenerLine(gp: GoalProgress | null | undefined, goal: unknown, units: UnitSystem): string | null {
-  return returningUserOpener(gp) ?? goalOpenerLine(gp, units) ?? newUserGoalOpener(gp?.goal ?? goal, gp, units);
+  return withInjuryCheckIn(returningUserOpener(gp) ?? goalOpenerLine(gp, units) ?? newUserGoalOpener(gp?.goal ?? goal, gp, units), gp);
 }
 
 /** Deterministic opener used when the model call fails. Null means the caller keeps its generic fallback. */
 export function goalFallbackOpener(gp: GoalProgress | null | undefined, goal: unknown, units: UnitSystem): string | null {
   // These two already end in their own question (a reached goal's only while it still asks); no second invitation.
   const own = returningUserOpener(gp) ?? (reachedAsks(gp) || lapseAsks(gp) ? goalOpenerLine(gp, units) : null);
-  if (own) return own;
+  if (own) return withInjuryCheckIn(own, gp);
   const line = goalOpenerLine(gp, units);
-  if (line) return `${line} ${OPENER_INVITE}`;
-  return newUserGoalOpener(gp?.goal ?? goal, gp, units);
+  if (line) return `${withInjuryCheckIn(line, gp)} ${OPENER_INVITE}`;
+  return withInjuryCheckIn(newUserGoalOpener(gp?.goal ?? goal, gp, units), gp);
 }

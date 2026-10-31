@@ -27,6 +27,7 @@ import {
   type WeeklyReviewInput,
 } from '../weeklyReview';
 import { formatGoalProgressLines } from '../goalPromptText';
+import { pickInjuryCheckIn, type InjuryCheckIn } from '../injuryCheckIn';
 import { goalFallbackOpener, requiredOpenerLine } from '../brain/openerText';
 import {
   isWindDownPhase,
@@ -50,6 +51,15 @@ const TZ = 'UTC'; // EMULATION: every scenario user is in UTC (no DST / tz edge 
 
 /** MIRRORS lib/goalProgressLoader.ts INTAKE_HISTORY_DAYS (wave 21w; the loader module imports @/db so it is copied): weight_loss reads 70 days of intake for the plateau cause. */
 const INTAKE_HISTORY_DAYS = 70;
+
+/**
+ * MIRRORS lib/injuryCheckInLoader.ts: the Injury facts that are ACTIVE on `day` (logged by then, not yet resolved) go through the real
+ * picker (window, most recent, text). Both loaders ask it as of the day they compute for.
+ */
+export function injuryAsOf(scn: Scenario, day: string): InjuryCheckIn | null {
+  const active = (scn.injuries ?? []).filter(f => f.loggedDay <= day && (f.resolvedDay == null || day < f.resolvedDay));
+  return pickInjuryCheckIn(active, day);
+}
 
 function trailingDayKeys(todayKey: string, n: number): string[] {
   // verbatim from lib/goalProgressLoader.ts
@@ -219,6 +229,8 @@ export function computeProgressFor(scn: Scenario, todayKey: string): GoalProgres
     sleepMinutes: [],
     sleepGoalMinutes: scn.user.sleepGoalMinutes,
     unitSystem: scn.profile.units,
+    // MIRRORS lib/goalProgressLoader.ts (wave 27): the active injury within the check-in window (not for weight loss: no query there).
+    activeInjury: scn.goal === 'weight_loss' ? null : injuryAsOf(scn, todayKey),
   };
   return computeGoalProgress(input);
 }
@@ -333,6 +345,8 @@ function computeReviewForUncached(scn: Scenario, runDay: string): ReviewResult {
     unitSystem: scn.profile.units,
     exerciseDisplay: buildExerciseDisplay(displayRows),
     signupDay: signupLocalDay(new Date(`${scn.user.createdDay}T10:00:00.000Z`), TZ),
+    // MIRRORS lib/weeklyReviewLoader.ts (wave 27): the injury as of the day the review runs (not the reviewed Sunday).
+    activeInjury: scn.goal === 'weight_loss' ? null : injuryAsOf(scn, runDay),
   };
   const review = computeWeeklyReview(input);
   return { weekStart, runDay, verdictAsOf, progress, racePeakWeekKm, review, alert: weeklyReviewAlert(review) };

@@ -11,6 +11,7 @@ import type { GoalKind, GoalProgress } from './goalProgress';
 import { CUTBACK_EASED_COPY, MEDIUM_WEEK_COPY, RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, cutbackLongRunEased, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, raceWeekShapeClause, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
+import { INJURY_REASON_KIND, injuryCheckInLine } from './injuryCheckIn';
 import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
 import { KM_PER_MILE, LB_PER_KG } from './metricFormat';
@@ -408,8 +409,14 @@ export function formatGoalProgressLines(gp: GoalProgress, units: UnitSystem): st
   }
 
   lines.push(`- Verdict: ${gp.verdict} — "${plainSpaces(gp.headline)}"`);
-  for (const r of gp.reasons.slice(0, MAX_REASONS)) {
+  // (The injury check-in has its own line below, so it is not listed twice.)
+  for (const r of gp.reasons.filter(x => x.kind !== INJURY_REASON_KIND).slice(0, MAX_REASONS)) {
     lines.push(`  - ${plainSpaces(r.text)}${r.tone === 'watch' ? ' (watch)' : ''}`);
+  }
+  // Wave 27: the card's injury check-in, in its own words, so the coach brief says what the app shows. The coach does not
+  // know the injury still hurts, and it changes no plan number.
+  if (gp.injuryCheckIn) {
+    lines.push(`- Injury check-in (the app shows this exact line on the goal card; when training comes up, say it in these words and do not claim it still hurts): "${plainSpaces(injuryCheckInLine(gp.goal, gp.injuryCheckIn))}"`);
   }
   if (read?.state === 'early') {
     lines.push('- Early read: the pace is not settled yet — quote the weekly average against the start (say "on the scale" only for a single latest reading), but no weekly rate, no projected date and no "weeks ahead/behind". Daily swings of ±1 kg are normal.');

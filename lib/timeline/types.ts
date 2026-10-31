@@ -44,6 +44,12 @@ export interface Scenario {
   inputNotes: string[];
   /** Only these day indexes are stepped (the imperial variant). Default: all. */
   dayFilter?: (idx: number, date: string) => boolean;
+  /**
+   * Wave 27: Injury facts the user logged (nodes of type Injury): the label as stored, the local day it was logged (nodes.created_at)
+   * and, when the user later retired it (resolve_fact), the local day it stopped being active. engine.ts feeds the real picker
+   * (lib/injuryCheckIn.ts) the facts that are active on the day it steps. Absent: no injury facts.
+   */
+  injuries?: Array<{ label: string; loggedDay: string; resolvedDay?: string }>;
 }
 
 /** One Monday weekly review as the loader would produce it (plus the push alert text). */

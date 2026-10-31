@@ -813,6 +813,8 @@ export const SCENARIO_NAMES = [
   'runner_comeback_spike',
   'runner_comeback_obedient',
   'runner_skip_then_obedient',
+  'runner_on_plan_injured',
+  'lifter_injured',
 ] as const;
 
 export type ScenarioName = (typeof SCENARIO_NAMES)[number];
@@ -849,7 +851,46 @@ export function buildScenario(name: ScenarioName): Scenario {
     case 'runner_comeback_spike': return runnerComebackSpike();
     case 'runner_comeback_obedient': return runnerComebackObedient();
     case 'runner_skip_then_obedient': return runnerSkipThenObedient();
+    case 'runner_on_plan_injured': return runnerOnPlanInjured();
+    case 'lifter_injured': return lifterInjured();
   }
+}
+
+// ═══ wave 27: injured users ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The plan-perfect runner (`runner_on_plan`, rows untouched) who tells the coach about a sore knee twice: "Knee pain since ..." on day 40
+ * (never resolved: the check-in lasts 28 days from the day it was logged, then stops) and "Sore left Achilles" on day 90, retired on day 96
+ * (resolve_fact: the check-in stops that day). The card, the coach lines, the opener and the Monday reviews must carry the one check-in
+ * line on exactly those days and change nothing else (see the wave 27 invariants in timelineInvariants.test.ts).
+ */
+export function runnerOnPlanInjured(): Scenario {
+  const base = runnerOnPlan();
+  return {
+    ...base,
+    name: 'runner_on_plan_injured',
+    title: 'runner_on_plan, with a knee-pain fact logged on day 40 (left active) and an Achilles fact logged on day 90 and resolved on day 96',
+    injuries: [
+      { label: `Knee pain since ${addDays(DAY0, 38)}`, loggedDay: addDays(DAY0, 40) },
+      { label: 'Sore left Achilles', loggedDay: addDays(DAY0, 90), resolvedDay: addDays(DAY0, 96) },
+    ],
+    inputNotes: [...base.inputNotes, 'Wave 27: Injury facts "Knee pain since ..." (logged day 40, never resolved) and "Sore left Achilles" (logged day 90, resolved day 96).'],
+  };
+}
+
+/** `lifter` (rows untouched) with a shoulder fact logged on day 30 (left active) and a back fact logged on day 70 and resolved on day 75. */
+export function lifterInjured(): Scenario {
+  const base = lifter();
+  return {
+    ...base,
+    name: 'lifter_injured',
+    title: 'lifter, with a shoulder-pain fact logged on day 30 (left active) and a lower-back fact logged on day 70 and resolved on day 75',
+    injuries: [
+      { label: 'Shoulder pain', loggedDay: addDays(DAY0, 30) },
+      { label: 'Lower back strain', loggedDay: addDays(DAY0, 70), resolvedDay: addDays(DAY0, 75) },
+    ],
+    inputNotes: [...base.inputNotes, 'Wave 27: Injury facts "Shoulder pain" (logged day 30, never resolved) and "Lower back strain" (logged day 70, resolved day 75).'],
+  };
 }
 
 // ═══ wave 23w: an obedient weight-loss user (G-W) ═══════════════════════════════════════════════════════════════════

@@ -12,7 +12,8 @@ import { easedLoad, liftLapseMinDays, liftReturnDisplay, liftShortName, nextWork
 import { KM_PER_MILE } from '../metricFormat';
 import { estimateOneRepMax } from '../progressionMath';
 import { calorieFloorKcal, isInstruction, TRIM_MAX_KCAL_PER_STEP } from '../weightWeekPlan';
-import { runTimeline, stepDay } from './engine';
+import { injuryCheckInLine, stripInjuryCheckIn } from '../injuryCheckIn';
+import { injuryAsOf, runTimeline, stepDay } from './engine';
 import { extractInstructions, instructionTexts } from './instructions';
 import { COMEBACK_OBEDIENT_ILL_DAYS, OBEDIENT_SHORT_WEEK, SCENARIO_NAMES, SKIP_THEN_OBEDIENT_SCRIPTED_WEEKS, buildScenario, type ScenarioName } from './scenarios';
 import { addDays, dayDiff, weekdayOf, type DaySnapshot } from './types';
@@ -5856,5 +5857,73 @@ invariant(RUNNERS, 'wave 26e P3-2: the coach\'s race-week line says "rest or a 1
     if (/rest 1–2 days before race day/.test(line) || !/rest or a 15-min shakeout the day before/.test(line)) out.push({ snap, detail: `"${line}"` });
   }
   if (!['runner_no_race', 'runner_comeback_spike', 'runner_comeback_obedient'].includes(name)) assert.ok(checked > 0, `${name}: no race-week coach line was checked`);
+  return out;
+});
+
+// ═══ wave 27: a logged injury is asked about on every plan surface, in one wording, and changes no plan number ═══════════════════════
+// (A review of the shipped screens found "Knee pain since Oct 20" on Memory while the card still said "Intervals 6x800 m" and the review "long run 13.5 km".)
+const INJURED = ['runner_on_plan_injured', 'lifter_injured'] as const;
+const INJURY_BASE: Record<(typeof INJURED)[number], ScenarioName> = { runner_on_plan_injured: 'runner_on_plan', lifter_injured: 'lifter' };
+const NOTED = /You noted/;
+
+invariant(INJURED, 'wave 27: the injury check-in is on the card (first reason + injuryCheckIn), the coach lines, the opener and the Monday review exactly while an Injury fact is active inside the 28-day window, in the one wording', (snaps, name) => {
+  const scn = buildScenario(name);
+  const out: Violation[] = [];
+  let withLine = 0;
+  let withoutLine = 0;
+  for (const snap of snaps) {
+    const gp = snap.card;
+    if (!gp) continue;
+    const injury = injuryAsOf(scn, snap.date);
+    const surfaces = [...cardTexts(snap), ...coachTexts(snap)];
+    if (injury == null) {
+      withoutLine++;
+      if (gp.injuryCheckIn != null || gp.reasons.some(r => r.kind === 'injury')) out.push({ snap, detail: 'the card carries an injury check-in with no active injury in the window' });
+      for (const t of surfaces) if (NOTED.test(t.text)) out.push({ snap, detail: `${t.where}: "${visible(t.text)}" with no active injury in the window` });
+    } else {
+      withLine++;
+      const line = injuryCheckInLine(gp.goal, injury);
+      const first = gp.reasons[0];
+      if (first?.kind !== 'injury' || first.text !== line || first.tone !== 'neutral') out.push({ snap, detail: `card.reasons[0] is ${JSON.stringify(first)}, not the check-in "${line}"` });
+      if (JSON.stringify(gp.injuryCheckIn) !== JSON.stringify(injury)) out.push({ snap, detail: `card.injuryCheckIn ${JSON.stringify(gp.injuryCheckIn)} != ${JSON.stringify(injury)}` });
+      const coachHits = (snap.coach ?? []).filter(t => plain(t).includes(line)).length;
+      if (coachHits !== 1) out.push({ snap, detail: `the coach lines say the check-in ${coachHits} times (want 1)` });
+      if (!plain(snap.opener?.required ?? '').includes(line)) out.push({ snap, detail: `opener.required lacks the check-in: "${visible(snap.opener?.required ?? '')}"` });
+      if (!plain(snap.opener?.fallback ?? '').includes(line)) out.push({ snap, detail: `opener.fallback lacks the check-in: "${visible(snap.opener?.fallback ?? '')}"` });
+      if (gp.reasons.length > 3) out.push({ snap, detail: `${gp.reasons.length} reasons` });
+    }
+    if (snap.review) {
+      const reviewInjury = injuryAsOf(scn, snap.review.runDay);
+      const next = snap.review.review.nextWeek;
+      if (reviewInjury == null && NOTED.test(next)) out.push({ snap, detail: `review.nextWeek has a check-in with no active injury on the review day: "${visible(next)}"` });
+      if (reviewInjury != null && !next.endsWith(injuryCheckInLine(gp.goal, reviewInjury))) out.push({ snap, detail: `review.nextWeek does not end with the check-in: "${visible(next)}"` });
+    }
+  }
+  assert.ok(withLine > 20 && withoutLine > 20, `${name}: the scenario must cover days with (${withLine}) and without (${withoutLine}) an active injury`);
+  return out;
+});
+
+invariant(INJURED, 'wave 27: the check-in sits beside the plan - headline, distance line, race, the other reasons, the review (stats, win, slip, headline, the plan in "Next week") are exactly the injury-free scenario\'s', (snaps, name) => {
+  const base = runTimeline(INJURY_BASE[name as (typeof INJURED)[number]]);
+  const out: Violation[] = [];
+  assert.equal(snaps.length, base.length, `${name}: same days as its injury-free scenario`);
+  snaps.forEach((snap, i) => {
+    const b = base[i];
+    const gp = snap.card;
+    const bg = b.card;
+    if (!gp || !bg) return;
+    if (gp.headline !== bg.headline) out.push({ snap, detail: `headline "${visible(gp.headline)}" != "${visible(bg.headline)}"` });
+    if (snap.distanceText !== b.distanceText) out.push({ snap, detail: `distance text "${snap.distanceText}" != "${b.distanceText}"` });
+    if (JSON.stringify(gp.race) !== JSON.stringify(bg.race) || JSON.stringify(gp.distance) !== JSON.stringify(bg.distance) || gp.verdict !== bg.verdict) out.push({ snap, detail: 'verdict, distance or race moved' });
+    const rest = gp.reasons.filter(r => r.kind !== 'injury');
+    if (JSON.stringify(rest) !== JSON.stringify(bg.reasons.slice(0, rest.length))) out.push({ snap, detail: `the other reasons moved: ${JSON.stringify(rest.map(r => r.text))} vs ${JSON.stringify(bg.reasons.map(r => r.text))}` });
+    if (!gp.reasons.some(r => r.kind === 'injury') && JSON.stringify(rest) !== JSON.stringify(bg.reasons)) out.push({ snap, detail: 'reasons moved without an injury' });
+    const review = snap.review?.review;
+    const bReview = b.review?.review;
+    if (review && bReview) {
+      if (review.headline !== bReview.headline || review.win !== bReview.win || review.slip !== bReview.slip || JSON.stringify(review.stats) !== JSON.stringify(bReview.stats)) out.push({ snap, detail: 'the review (headline, win, slip or stats) moved' });
+      if (stripInjuryCheckIn(review.nextWeek) !== bReview.nextWeek) out.push({ snap, detail: `the plan in "Next week" moved: "${visible(stripInjuryCheckIn(review.nextWeek))}" vs "${visible(bReview.nextWeek)}"` });
+    }
+  });
   return out;
 });
