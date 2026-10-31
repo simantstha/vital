@@ -871,6 +871,14 @@ export interface EnduranceWeekPlanInput {
   longRun?: { lastKm: number; peakKm?: number | null; targetPeakKm?: number | null } | null;
 }
 
+/** Wave 26e group E: the early race week's shape (see `EnduranceWeekPlan.raceWeekShape`). `perRunCapKm` is in km, rounded DOWN to a whole km (0.5 mi). */
+export interface RaceWeekShape {
+  runs: number;
+  /** Set for a runner with no weeks to read a rhythm from ("2–3 short easy runs"): the fewest runs; the cap fits either. */
+  runsFrom?: number;
+  perRunCapKm: number;
+}
+
 export interface EnduranceWeekPlan {
   kind: EnduranceWeekKind;
   weekStart: string;
@@ -959,8 +967,14 @@ export interface EnduranceWeekPlan {
    * cutback fires at the first eligible week after 2 build weeks (the skip-hold counts as one), not at the end of the 4-week cycle.
    */
   cutbackOwed: boolean;
-  /** One of the last 2 build weeks before a taper: the plan copy adds `STRIDES_COPY` so race-pace work is not new in the taper. */
+  /** One of the last 2 build weeks before a taper (or, for a 5K / 10K, before race week): the plan copy adds `STRIDES_COPY` so race-pace work is not new in the taper. */
   strides: boolean;
+  /**
+   * Wave 26e group E: the shape of the early race week (race 3+ days out, under half of the budget run): how many short easy runs, and the most any one of them is. Absent
+   * otherwise (and in a week too small to shape: under 3 km / 2 mi). `runs` is the most runs (`runsFrom`, when set, the fewest: a runner with no weeks to read a rhythm from).
+   * The card, the coach, the review and the obedient reader all say these two figures.
+   */
+  raceWeekShape?: RaceWeekShape;
   /**
    * A week read DURING the week with 4+ days without a run (or, from Thursday, well behind the runner's own pace with the
    * rest of the target out of reach of the runs still to come): don't make it up. `longRunCapKm` is the most the week's long
@@ -1118,6 +1132,16 @@ export const CUTBACK_SKIPPED_FRACTION = PHASE_CEILING_TOLERANCE;
 /** The last 2 build weeks before a taper carry a few strides, so race-pace work is not brand new in the taper. */
 export const STRIDES_COPY = 'plus 4–6 strides after one easy run';
 export const STRIDES_WEEKS_BEFORE_TAPER = 2;
+/**
+ * Wave 26e group E: the early race week has a shape. It is told while the race is at least this many days out (from 2 days out the day's own line - "keep tomorrow's run <= ..." -
+ * takes over) and the runner has run under this share of the week's budget (then the existing mid-week lines do). At most 3 runs; no run is capped under this share of the budget.
+ */
+export const RACE_WEEK_SHAPE_FROM_DAYS = 3;
+export const RACE_WEEK_SHAPE_UNTIL_SHARE = 0.5;
+export const RACE_WEEK_SHAPE_MAX_RUNS = 3;
+export const RACE_WEEK_PER_RUN_MIN_SHARE = 0.4;
+/** ... and with no weeks to read a rhythm from the week is "2-3 short easy runs". */
+export const RACE_WEEK_SHAPE_NO_HISTORY_MIN_RUNS = 2;
 /** A comeback rung never asks for more than this multiple of the week just run (and still at least the normal 10% step). */
 export const COMEBACK_MAX_GROWTH = 1.25;
 /** Light week: this many days without a run in the current week, or Thursday and later with under half the target and no way to fit the rest. */
@@ -1694,6 +1718,50 @@ export function restOfWeekKind(trim: RestOfWeekWording, longRunKm: number | null
   return daysLeft === 1 && day != null && longRunKm != null && longRunKm > 0 ? 'named' : 'total';
 }
 
+/**
+ * Wave 26e group E: the most any one race-week run is (km): the larger of an equal share of the week's budget over its runs and `RACE_WEEK_PER_RUN_MIN_SHARE` of it, rounded DOWN
+ * to a whole km (0.5 mi), at least one such step. Worked out on the number the runner sees ("12.5 mi", not 12.49).
+ */
+export function raceWeekPerRunCapKm(targetKm: number, runs: number, unitsPerKm = 1): number {
+  const units = Number.isFinite(unitsPerKm) && unitsPerKm > 0 ? unitsPerKm : 1;
+  const step = units < 1 ? 0.5 : 1;
+  const shown = Math.round(targetKm * units * 10) / 10;
+  const raw = Math.max(shown / Math.max(1, runs), shown * RACE_WEEK_PER_RUN_MIN_SHARE);
+  const cap = Math.max(step, Math.floor(raw / step + 1e-9) * step);
+  return Math.round((cap / units) * 100) / 100;
+}
+
+/**
+ * Wave 26e group E: the shape of the early race week, or null: only from `RACE_WEEK_SHAPE_FROM_DAYS` out, under `RACE_WEEK_SHAPE_UNTIL_SHARE` of the budget run, and in a week of at
+ * least 3 km (2 mi). The runs are the runner's usual run days of the week through the day before the race (the race-eve slot counts: it is a short run too, and a Tue + Sat runner
+ * has two), counted from Monday so the figures stand all week, at most `RACE_WEEK_SHAPE_MAX_RUNS`. Read from the weeks before this one only (taper and race weeks left out), so it stands all week for the card, the coach and the review.
+ */
+function raceWeekShapeFor(ctx: PlanCtx, w: string, targetKm: number, daysToGo: number): RaceWeekShape | null {
+  const units = ctx.units;
+  if (daysToGo < RACE_WEEK_SHAPE_FROM_DAYS) return null;
+  if (Math.round(targetKm * units * 10) / 10 < (units < 1 ? LONG_RUN_TRIM_MIN_MI : LONG_RUN_TRIM_MIN_KM) - 1e-9) return null;
+  const done = ctx.runs.filter(r => r.day >= w && r.day <= ctx.today && r.day !== ctx.raceDate).reduce((a, r) => a + r.km, 0);
+  if (done >= targetKm * RACE_WEEK_SHAPE_UNTIL_SHARE - 1e-9) return null;
+  // (The WEEK's runs, counted from Monday whatever day it is read on: the cap does not creep up on Thursday because Tuesday's run is in. The rhythm reads the weeks before this one.)
+  const lastDow = Math.min(6, dayIndex(ctx.today) - dayIndex(w) + daysToGo - 1);
+  const usual = usualRunDaysLeft(ctx, w, 0, false).filter(d => d <= lastDow).length;
+  if (usual <= 0) {
+    return { runs: RACE_WEEK_SHAPE_MAX_RUNS, runsFrom: RACE_WEEK_SHAPE_NO_HISTORY_MIN_RUNS, perRunCapKm: raceWeekPerRunCapKm(targetKm, RACE_WEEK_SHAPE_NO_HISTORY_MIN_RUNS, units) };
+  }
+  const runs = Math.min(RACE_WEEK_SHAPE_MAX_RUNS, usual);
+  return { runs, perRunCapKm: raceWeekPerRunCapKm(targetKm, runs, units) };
+}
+
+/**
+ * Wave 26e group E: "3 short easy runs, each ≤ ~6 km; 4–6 strides after the first; rest or a 15-min shakeout the day before" - the race-week shape, in ONE wording for the card, the
+ * coach and the review (so they cannot disagree on the runs or the cap). One run: "1 short easy run, ≤ ~10 km; 4–6 strides after it".
+ */
+export function raceWeekShapeClause(shape: RaceWeekShape, unitsPerKm = 1): string {
+  const many = shape.runs > 1;
+  const runs = shape.runsFrom != null && shape.runsFrom < shape.runs ? `${shape.runsFrom}–${shape.runs}` : String(shape.runs);
+  return `${runs} short easy ${many ? 'runs' : 'run'}, ${many ? 'each ' : ''}≤ ~${formatKm(shape.perRunCapKm, unitsPerKm)}; 4–6 strides after ${many ? 'the first' : 'it'}; rest or a 15-min shakeout the day before`;
+}
+
 /** One line of "what this week is for" (units-aware, U+00A0 between a number and its unit). */
 function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const u = plan.unitsPerKm;
@@ -1778,6 +1846,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       if (toGo === 0) return 'Race day: warm up easy and start relaxed';
       if (toGo === 1) return RACE_EVE_LINE;
       if (toGo != null && toGo < 0) return `Recovery: easy only this week (~${formatKm(t ?? plan.goalKm, u)} max)`;
+      if (plan.raceWeekShape != null && t != null) return `Race week: ~${formatKm(t, u)} before the race — ${raceWeekShapeClause(plan.raceWeekShape, u)}`;
       return 'Race week: short easy runs, rest 1–2 days before the race';
     }
     case 'recovery':
@@ -2277,8 +2346,9 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   // A skipped cutback is owed until a cutback is taken (or a restart, wind-down or rebuild week rests the runner anyway).
   const cutbackOwed = cutback == null && (hold?.skippedCutback === true || skippedLast || (prevPlan?.cutbackOwed === true && (kind === 'build' || kind === 'maintain' || kind === 'hold') && comeback == null));
 
-  // The last 2 build weeks before a taper carry a few strides: race-pace work must not be brand new in the taper.
-  const strides = buildLike && comeback == null && info != null && info.phase === 'build' && raceClass(ctx.raceKm) !== 'short'
+  // The last 2 build weeks before a taper carry a few strides: race-pace work must not be brand new in the taper. (Wave 26e group E: a 5K / 10K has no taper, so the weeks
+  // before RACE WEEK carry them; race week's own shape has the strides.)
+  const strides = buildLike && comeback == null && info != null && info.phase === 'build'
     && [7, 14].some(d => isWindDownPhase(phaseAt(ctx, addDayKey(w, d))?.phase));
 
   // The long run the week would plan without a light-week cap (the light-week read and the easing-off read both quote it).
@@ -2507,6 +2577,10 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   const stepPct = targetKm != null && hasPrior && stepBaseKm >= compareMin && !wind && cutback == null && hold?.ceiling !== true
     ? Math.round(((targetKm - stepBaseKm) / stepBaseKm) * 100)
     : null;
+  // Wave 26e group E: the early race week's shape (the plan read today, not a past week's).
+  const raceWeekShape = kind === 'race_week' && depth === 0 && targetKm != null && raceDaysToGo != null && ctx.today >= w && ctx.today <= weekEnd
+    ? raceWeekShapeFor(ctx, w, targetKm, raceDaysToGo)
+    : null;
   const base: Omit<EnduranceWeekPlan, 'purpose'> = {
     kind,
     weekStart: w,
@@ -2544,6 +2618,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     buildWeeks,
     cutbackOwed,
     strides,
+    ...(raceWeekShape != null ? { raceWeekShape } : {}),
     lightWeek,
     preTaper,
     easingOff,

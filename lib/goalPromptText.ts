@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { CUTBACK_EASED_COPY, RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, cutbackLongRunEased, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
+import { CUTBACK_EASED_COPY, RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, cutbackLongRunEased, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, raceWeekShapeClause, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -87,6 +87,10 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
       }
       if (race.daysToGo === 1) {
         return `- Race phase: race tomorrow — ${plainSpaces(RACE_EVE_LINE.replace(/^Race tomorrow — /, ''))}; no training advice, no volume talk, no remarks about this week's distance`;
+      }
+      // Wave 26e group E: the early race week has a shape (the plan line says the same runs and cap, from the same clause).
+      if (gp.distance?.plan?.raceWeekShape != null) {
+        return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; ${plainSpaces(raceWeekShapeClause(gp.distance.plan.raceWeekShape, units === 'imperial' ? 1 / KM_PER_MILE : 1))} — no new volume or hard sessions`;
       }
       return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; short easy runs, rest 1–2 days before race day — no new volume or hard sessions`;
     case 'recovery': {

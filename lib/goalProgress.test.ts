@@ -1177,7 +1177,9 @@ test('race phase (half): race week targets x0.5 of the peak week (race excluded)
   assert.equal(p.race?.phase, 'race_week');
   assert.equal(p.race?.weeksToGo, 0);
   assert.equal(p.distance!.stepTargetKm, 20); // round(40 x 0.5)
-  assert.equal(reasonOf(p, 'race_phase'), 'Race week: short easy runs, rest 1–2 days before the race');
+  // (Wave 26e group E: 5 days out and under half of the week run: the early race week's shape. This runner has no weeks of history to read a rhythm from: "2-3 runs".)
+  assert.equal(reasonOf(p, 'race_phase'), 'Race week: ~20 km before the race — 2–3 short easy runs, each ≤ ~10 km; 4–6 strides after the first; rest or a 15-min shakeout the day before');
+  assert.equal(p.distance?.plan?.raceWeekShape?.perRunCapKm, 10);
   assert.equal(computeGoalProgress(phaseInput(6)).race?.phase, 'race_week'); // Monday 7 out
   assert.equal(computeGoalProgress(phaseInput(7)).race?.phase, 'taper'); // Monday 8 out
 });

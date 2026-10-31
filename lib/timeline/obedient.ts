@@ -73,13 +73,15 @@ function kmForDay(scn: Scenario, idx: number, dow: number): { km: number; why: s
   if (raceEveDow != null && raceEveDow > dow && raceEveDow <= 6 && ahead.includes(raceEveDow)) reserved += SHAKEOUT_KM;
   // "skip the long run".
   const skipLong = instructions.some(i => i.kind === 'done');
+  // Wave 26e group E: "3 short easy runs, each <= ~6 km": no single run goes over it (the week's total is still the plan's number, spread over what is left).
+  const runCaps = instructions.filter(i => i.kind === 'per_run_cap').map(i => i.hi);
   if (dow === longDay) {
-    const km = Math.min(longRunKm as number, budget, ...longCaps);
+    const km = Math.min(longRunKm as number, budget, ...longCaps, ...runCaps);
     return { km: skipLong ? 0 : round1(km), why: `long run (plan ${longRunKm}, budget ${round1(budget)})` };
   }
   const daysLeft = runDows.filter(d => d >= dow && d !== longDay && d !== raceEveDow).length || 1;
-  const share = (budget - Math.min(reserved, budget)) / daysLeft;
-  return { km: round1(share), why: `share of ${round1(budget)} km over ${daysLeft} day(s), ${round1(reserved)} km kept for later` };
+  const share = Math.min((budget - Math.min(reserved, budget)) / daysLeft, ...runCaps);
+  return { km: round1(share), why: `share of ${round1(budget)} km over ${daysLeft} day(s), ${round1(reserved)} km kept for later${runCaps.length > 0 ? `, each run at most ${round1(Math.min(...runCaps))} km` : ''}` };
 }
 
 const cache = new Map<string, { workouts: WorkoutRow[]; kinds: string[] }>();

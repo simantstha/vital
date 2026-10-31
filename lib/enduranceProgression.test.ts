@@ -648,7 +648,9 @@ test('taper, race week and recovery targets come from the peak week; a half tape
   const raceWeek = planFor(runs, 9, { race, racePeakWeekKm: 40 });
   assert.equal(raceWeek.kind, 'race_week');
   assert.equal(raceWeek.targetKm, 20);
-  assert.equal(raceWeek.purpose, 'Race week: short easy runs, rest 1–2 days before the race');
+  // (Wave 26e group E: the early race week has a shape - 3 runs of the 4-day week that lead up to the race, none over 40% of the ~20 km.)
+  assert.equal(nbsp(raceWeek.purpose), 'Race week: ~20~km before the race — 3 short easy runs, each ≤ ~8~km; 4–6 strides after the first; rest or a 15-min shakeout the day before');
+  assert.deepEqual(raceWeek.raceWeekShape, { runs: 3, perRunCapKm: 8 });
   assert.equal(planFor(runs, 10, { race, racePeakWeekKm: 40 }).targetKm, 16);
   assert.equal(planFor(runs, 11, { race, racePeakWeekKm: 40 }).targetKm, 28);
   // Without a measured peak the weekly goal stands in.
@@ -786,7 +788,9 @@ test('race eve and race day: the purpose follows TODAY\'s distance to the race, 
   const monday = '2026-06-15';
   const runs: PlanRun[] = [{ day: '2026-06-02', km: 12 }, { day: '2026-06-04', km: 12 }, { day: '2026-06-06', km: 12 }, { day: '2026-06-09', km: 10 }, { day: '2026-06-11', km: 10 }];
   const at = (today: string) => enduranceWeekPlan({ runs, weekStart: monday, goalKm: 30, today, race, racePeakWeekKm: 30 });
-  assert.equal(at('2026-06-17').purpose, 'Race week: short easy runs, rest 1–2 days before the race');
+  // (Wave 26e group E: Wednesday, 4 days out and nothing run this week: the early race week's shape.)
+  assert.equal(at('2026-06-17').purpose.replace(/\u00a0/g, ' '), 'Race week: ~15 km before the race — 3 short easy runs, each ≤ ~6 km; 4–6 strides after the first; rest or a 15-min shakeout the day before');
+  assert.equal(at('2026-06-19').purpose, 'Race week: short easy runs, rest 1–2 days before the race'); // 2 days out: the shape is for the early week
   assert.equal(at('2026-06-20').purpose, RACE_EVE_LINE);
   assert.equal(at('2026-06-20').raceDaysToGo, 1);
   assert.equal(at('2026-06-21').purpose, 'Race day: warm up easy and start relaxed');
@@ -935,9 +939,12 @@ test('strides: the last 2 build weeks before a taper carry "plus 4–6 strides a
   assert.match(nbsp(at(7).purpose), new RegExp(`${STRIDES_COPY}$`));
   assert.match(nbsp(at(6).purpose), /Cutback week: ~\d+~km, long run [\d.]+~km \(eased for the cutback\) — absorb the last three weeks; plus 4–6 strides after one easy run$/);
   assert.equal(STRIDES_COPY, 'plus 4–6 strides after one easy run');
-  // A 10K has no taper: nothing to prepare for.
+  // A 10K has no taper, but its race week is where the sharpening starts (wave 26e group E): the last two build weeks before RACE WEEK carry them.
   const tenK = { date: addDayKey(weekOf(9), 6), distanceKm: 10 };
-  assert.equal(planFor(runs.filter(r => r.day < weekOf(7)), 7, { race: tenK }).strides, false);
+  const tenAt = (w: number) => planFor(runs.filter(r => r.day < weekOf(w)), w, { race: tenK });
+  assert.equal(tenAt(6).strides, false);
+  assert.equal(tenAt(7).strides, true);
+  assert.equal(tenAt(8).strides, true);
   // Not on a plan without a race.
   assert.equal(planFor(runs.filter(r => r.day < weekOf(7)), 7).strides, false);
 });

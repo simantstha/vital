@@ -22,6 +22,8 @@ export type InstructionKind =
   | 'long_run'
   /** "long run ≤ ~8 km" (a light week): the long run alone is at most this. */
   | 'long_run_cap'
+  /** Wave 26e group E: "3 short easy runs, each ≤ ~6 km" (the race week's shape): no single run is longer than this. Not a total, so it never sizes the rest of the week. */
+  | 'per_run_cap'
   /** "this week's km are done", "skip the long run": nothing more. */
   | 'done'
   /** "rest tomorrow": tomorrow's run is zero (no km figure). */
@@ -62,6 +64,8 @@ const LEFT = new RegExp(`~?${NUM}\\s?(km|mi) left\\b(?:[^.;]*?\\bor rest(?:, eit
 // Wave 24e: a restart that begins mid-week: "Starting today? ~10 km over the rest of this week in 2-3 easy runs, nothing over ~4 km; the restart week (~18 km) starts Monday".
 const REST_OF_WEEK = new RegExp(`~?${NUM}\\s?(km|mi) over the rest of this week`, 'gi');
 const NOTHING_OVER = new RegExp(`nothing over ~?${NUM}\\s?(km|mi)`, 'gi');
+// Wave 26e group E: "3 short easy runs, each ≤ ~6 km" / "1 short easy run, ≤ ~10 km": the race week's per-run cap
+const PER_RUN_CAP = new RegExp(`\\bshort easy runs?, (?:each )?≤ ${AMOUNT}`, 'gi');
 // "make Sunday's long run ~6 km easy"
 const EXACT = new RegExp(`\\bmake (?:Sunday['’]s|the) (?:long(?:est)? )?run ${AMOUNT}`, 'gi');
 // "long run 10 km", "next long run ~11 km", "keep the long run 11 km", "Sunday's long run ~11.5–15 km easy", "long run ≤ ~8 km"
@@ -123,6 +127,11 @@ export function extractInstructions(
     while ((m = REST_OF_WEEK.exec(text)) != null) {
       const n = toKm(Number(m[1]), m[2]);
       out.push({ where, text: m[0], kind: 'exact', lo: n, hi: n });
+    }
+    PER_RUN_CAP.lastIndex = 0;
+    while ((m = PER_RUN_CAP.exec(text)) != null) {
+      const r = range(m, 1);
+      out.push({ where, text: m[0], kind: 'per_run_cap', lo: 0, hi: r.hi });
     }
     NOTHING_OVER.lastIndex = 0;
     while ((m = NOTHING_OVER.exec(text)) != null) out.push({ where, text: m[0], kind: 'long_run_cap', lo: 0, hi: toKm(Number(m[1]), m[2]) });

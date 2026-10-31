@@ -12,7 +12,7 @@ import {
   type WeeklyReviewInput,
 } from './weeklyReview';
 import { NBSP, plainSpaces } from './displayText';
-import { LONG_RUN_STEP_10_TO_16_KM, LONG_RUN_STEP_UNDER_10_KM, roundLongRunKm } from './enduranceProgression';
+import { LONG_RUN_STEP_10_TO_16_KM, LONG_RUN_STEP_UNDER_10_KM, enduranceWeekPlan, roundLongRunKm } from './enduranceProgression';
 import { computeGoalProgress, type GoalProgressInput } from './goalProgress';
 import { liftChange4w, pickHeadlineLift } from './liftChange';
 import type { WeightReading } from './weightTrend';
@@ -1683,7 +1683,8 @@ test('race phase review: next week follows the coming week\'s phase (taper, race
   // Taper -> race week (race Thu Oct 8: the coming Monday is 3 days out; x0.4 = 16 km).
   const toRaceWeek = computeWeeklyReview(raceWeekReview('2026-10-08', [8, 8, 8]));
   assert.equal(toRaceWeek.weekRating, 'good'); // reviewed Monday is 10 days out: late taper, 24 km
-  assert.equal(toRaceWeek.nextWeek, 'Race week: short easy runs, ~16 km before the race, then rest 1–2 days before it.');
+  // (Wave 26e group E: the race week has a shape. Two weeks of history are all this runner has outside the wind-down weeks: no rhythm to count runs from.)
+  assert.equal(toRaceWeek.nextWeek, 'Race week: ~16 km before the race — 2–3 short easy runs, each ≤ ~8 km; 4–6 strides after the first; rest or a 15-min shakeout the day before.');
   // Race week -> recovery week 1 (race Fri Oct 2; the coming Monday is 3 days after it).
   assert.equal(
     computeWeeklyReview(raceWeekReview('2026-10-02', [5, 5, 21.1])).nextWeek,
@@ -2603,13 +2604,30 @@ test('half marathon table: ONE taper week (x0.75), race week x0.5, recovery x0.4
   assert.equal(r.nextWeek, 'Recovery: easy only, ≤ 16 km next week.');
   // The week before the race week is the taper week: x0.75 of the peak, with the intensity spelled out.
   const toTaper = computeWeeklyReview(planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-11', raceDistanceKm: 21.1, racePeakWeekKm: 40 }));
-  assert.equal(toTaper.nextWeek.replace(/ /g, ' ').replace(/long run [\d.]+ km/, 'long run N km'), 'Race week: short easy runs, ~20 km before the race, then rest 1–2 days before it.');
+  assert.equal(toTaper.nextWeek.replace(/ /g, ' ').replace(/long run [\d.]+ km/, 'long run N km'), 'Race week: ~20 km before the race — 3 short easy runs, each ≤ ~8 km; 4–6 strides after the first; rest or a 15-min shakeout the day before.');
   const toRaceWeek = computeWeeklyReview(planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-18', raceDistanceKm: 21.1, racePeakWeekKm: 40 }));
   // (Wave 23e P3-m: 30 km weeks into a taper of 30 km - 75% of the 40 km peak - hold the volume, they do not cut it.)
   assert.match(toRaceWeek.nextWeek, /^Taper: hold ~30 km next week \(75% of your ~40 km peak\); long run [\d.]+ km easy, plus 3×1 km at race pace midweek\.$/);
   // 10K: no taper — the week before race week is still a build / maintain week.
   const ten = computeWeeklyReview(planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-18', raceDistanceKm: 10, racePeakWeekKm: 40 }));
   assert.match(ten.nextWeek, /^Hold 30 km;/);
+});
+
+test('race week next (wave 26e group E): the review\'s "Next week" names the runs and the per-run cap of the race-week plan the card and the coach will read on Monday', () => {
+  const input = planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-11', raceDistanceKm: 21.1, racePeakWeekKm: 40 });
+  const review = computeWeeklyReview(input);
+  const nextMonday = addDays(WEEK_START, 7);
+  const runs = input.workouts.filter(w => w.distanceKm != null).map(w => ({ day: w.day, km: w.distanceKm as number }));
+  const plan = enduranceWeekPlan({ runs, weekStart: nextMonday, goalKm: 30, race: { date: '2026-10-11', distanceKm: 21.1 }, today: nextMonday, racePeakWeekKm: 40 });
+  assert.equal(plan.kind, 'race_week');
+  assert.ok(plan.raceWeekShape != null);
+  const m = /~(\d+) km before the race — (\d+) short easy runs, each ≤ ~(\d+) km/.exec(review.nextWeek);
+  assert.ok(m != null, review.nextWeek);
+  assert.equal(Number(m[1]), plan.targetKm);
+  assert.equal(Number(m[2]), plan.raceWeekShape.runs);
+  assert.equal(Number(m[3]), plan.raceWeekShape.perRunCapKm);
+  // The goal card on that Monday says the same line (without the closing full stop).
+  assert.equal(`${plainSpaces(plan.purpose)}.`, review.nextWeek);
 });
 
 test('rebuild: the step out of recovery is "Back to building", later weeks "Keep rebuilding"; each is graded against its step', () => {

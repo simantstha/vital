@@ -87,6 +87,7 @@ import {
   overUpToCap,
   planWeekKm,
   racePaceReps,
+  raceWeekShapeClause,
   racePhaseInfo,
   racePhaseTargetKm,
   weekStepTarget,
@@ -2548,7 +2549,10 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
         : `Taper: ~${t} next week — cut volume; ${lr ? `${lr} easy, plus ` : ''}${rep} at race pace midweek${lr ? '' : ', the rest easy'}.`;
       break;
     case 'race_week':
-      text = `Race week: short easy runs, ~${t} before the race, then rest 1–2 days before it.`;
+      // Wave 26e group E: the early race week has a shape - the same runs and cap the card will show on Monday.
+      text = next.raceWeekShape != null && t != null
+        ? `Race week: ~${t} before the race — ${raceWeekShapeClause(next.raceWeekShape, u)}.`
+        : `Race week: short easy runs, ~${t} before the race, then rest 1–2 days before it.`;
       break;
     case 'recovery':
       text = `Recovery: easy only, ≤ ${t} next week.`;

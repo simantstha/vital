@@ -3374,9 +3374,10 @@ function w23Conflicts(snap: DaySnapshot, done: number, longestSoFarKm: number, t
   const ins = extractInstructions(snap, { longestSoFarKm }).filter(i => i.kind !== 'rest_tomorrow');
   const km = (n: number): string => `${Math.round(n * 10) / 10} km`;
   for (const a of ins) {
-    if (a.kind === 'long_run_cap') continue;
+    // (A per-run cap - wave 26e group E, "3 short easy runs, each <= ~6 km" - limits ONE run, not the rest of the week: like the long-run cap it is not a total to agree with.)
+    if (a.kind === 'long_run_cap' || a.kind === 'per_run_cap') continue;
     for (const b of ins) {
-      if (a === b || b.kind === 'long_run_cap') continue;
+      if (a === b || b.kind === 'long_run_cap' || b.kind === 'per_run_cap') continue;
       // a asks for more than b allows: done + a's least remaining is over done + b's largest remaining by more than 10%.
       if (done + a.lo > (done + b.hi) * W23_TOLERANCE + W23_ABS_SLACK_KM) {
         out.push(`${a.where} "${visible(a.text)}" (${km(done)} + at least ${km(a.lo)} = ${km(done + a.lo)}) vs ${b.where} "${visible(b.text)}" (${km(done)} + at most ${km(b.hi)} = ${km(done + b.hi)})`);
@@ -4794,6 +4795,10 @@ function w24Compliance(v: W23View, runKm: Map<string, number>, sundayDate: strin
         if (Math.abs(longestRest - i.lo) > W24_SLACK_KM) return { ok: false, why: `"${phrase}" but the longest run after it was ${km(longestRest)}` };
         break;
       case 'long_run_cap':
+        if (longestRest > i.hi + W24_SLACK_KM) return { ok: false, why: `"${phrase}" but the longest run after it was ${km(longestRest)}` };
+        break;
+      case 'per_run_cap':
+        // (A ceiling on every run after it, not a size for the rest of the week.)
         if (longestRest > i.hi + W24_SLACK_KM) return { ok: false, why: `"${phrase}" but the longest run after it was ${km(longestRest)}` };
         break;
       case 'rest_tomorrow':

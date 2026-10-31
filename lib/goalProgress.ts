@@ -357,8 +357,13 @@ export interface GoalWeekPlan {
   taperLongRunKm?: number | null;
   /** Additive (wave 22e): the next Monday starts a taper / race week (this is the last build week); absent otherwise. */
   preTaper?: 'taper' | 'race_week';
-  /** Additive: one of the last 2 build weeks before the taper: the plan copy asks for a few strides after one easy run. */
+  /** Additive: one of the last 2 build weeks before the taper (a 5K / 10K: before race week): the plan copy asks for a few strides after one easy run. */
   strides?: boolean;
+  /**
+   * Additive (wave 26e group E): the shape of the early race week (race 3+ days out, under half the budget run): `runs` short easy runs (`runsFrom`: the fewest, for a runner with no
+   * rhythm to read), none longer than `perRunCapKm`. The plan line and the coach line say the same two figures; absent from 2 days out and in any other week.
+   */
+  raceWeekShape?: { runs: number; runsFrom?: number; perRunCapKm: number };
   /** Additive: the week's long run is held (not grown) - a cutback week, or after last week's long-run jump. */
   longRunHeld?: boolean;
   /** Additive: the target is a careful comeback's ceiling, worded "up to ~18 km". */
@@ -2959,6 +2964,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.easingOff != null ? { easingOff: true, taperLongRunKm: plan.easingOff.taperLongRunKm } : {}),
             ...(plan.preTaper != null ? { preTaper: plan.preTaper.nextPhase } : {}),
             ...(plan.strides ? { strides: true } : {}),
+            ...(plan.raceWeekShape != null ? { raceWeekShape: plan.raceWeekShape } : {}),
             ...(plan.longRun.held ? { longRunHeld: true } : {}),
             ...(plan.upTo ? { upTo: true } : {}),
             ...(plan.hold?.skippedCutback ? { skippedCutback: true } : {}),
