@@ -78,6 +78,56 @@ enum MuscleHeroLogic {
         return "Last (\(weekday)): \(exercise) \(sets)×\(reps) \(load)"
     }
 
+    // MARK: - "Next" load (what to put on the bar today)
+
+    /// "Next: Squat 3×5 @ 142.5 kg (last 140 kg)" — the load the lift logger's
+    /// "try …" hint suggests after this session, so Today answers "what do I put
+    /// on the bar?" without opening the sheet. The number comes from
+    /// `LiftLoggerLogic.nextLoad` (the same function behind the logger's hint),
+    /// in the user's unit; the "last …" is the load as logged. `/api/training/summary`
+    /// carries only the top set, not every set's reps, so this assumes a clean
+    /// session; the logger, which has all the sets, says "repeat" after a missed one.
+    /// `nil` for a bodyweight lift (no load to progress) or when the step would
+    /// not raise the load (the logger's cap) — callers then show `lastLiftText`.
+    static func nextLiftText(
+        exercise: String,
+        sets: Int,
+        reps: Int,
+        weightKg: Double?,
+        system: UnitSystem
+    ) -> String? {
+        let last = LiftLoggerLogic.displayLoad(fromKg: weightKg, system: system)
+        guard last > 0 else { return nil }
+        let next = LiftLoggerLogic.nextLoad(
+            after: last, key: LiftLoggerLogic.canonicalKey(from: exercise), system: system
+        )
+        guard next > last else { return nil }
+        return "Next: \(exercise) \(sets)×\(reps) @ \(LiftLoggerLogic.loadText(next, system: system)) "
+            + "(last \(LiftLoggerLogic.loadText(last, system: system)))"
+    }
+
+    /// The hero's lift line: the next load when there is one, otherwise what was
+    /// last lifted. While the goal card is asking about a logged injury
+    /// (`injuryCheckIn`), Today never advertises a heavier load — it keeps the
+    /// plain "Last (Wed): …" line, and the check-in itself stays on the goal card.
+    static func liftLineText(
+        exercise: String,
+        date: String,
+        sets: Int,
+        reps: Int,
+        weightKg: Double?,
+        injuryCheckIn: Bool,
+        system: UnitSystem
+    ) -> String? {
+        if !injuryCheckIn,
+           let next = nextLiftText(exercise: exercise, sets: sets, reps: reps, weightKg: weightKg, system: system) {
+            return next
+        }
+        return lastLiftText(
+            exercise: exercise, date: date, sets: sets, reps: reps, weightKg: weightKg, system: system
+        )
+    }
+
     // MARK: - Sessions this week (fed by GET /api/training/summary, #202)
     //
     // `plannedSessions` in the response is `null` when the user has never

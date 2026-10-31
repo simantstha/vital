@@ -630,6 +630,39 @@ final class LiftLoggerLogicTests: XCTestCase {
         XCTAssertEqual(LiftLoggerLogic.applyingProgression(hint, to: updated), updated)
     }
 
+    func testUseSuggestedLabelNamesTheLoad() throws {
+        let hint = try XCTUnwrap(
+            LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 140), key: "squat", system: .metric)
+        )
+        XCTAssertEqual(LiftLoggerLogic.useSuggestedLabel(hint, system: .metric), "Use 142.5\u{00A0}kg")
+        let lb = try XCTUnwrap(
+            LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 225), key: "squat", system: .imperial)
+        )
+        XCTAssertEqual(LiftLoggerLogic.useSuggestedLabel(lb, system: .imperial), "Use 230\u{00A0}lb")
+    }
+
+    /// With an injury check-in the form keeps last session's load: nothing to apply, nothing changes.
+    func testAnInjuryCheckInHoldsBackTheIncrease() throws {
+        let hint = try XCTUnwrap(
+            LiftLoggerLogic.progressionHint(history: refs([5, 5, 5], at: 140), key: "squat", system: .metric)
+        )
+        let sets = [LiftDraftSet(reps: 5, load: 140), LiftDraftSet(reps: 5, load: 140)]
+        XCTAssertTrue(hint.isIncrease)
+        XCTAssertTrue(LiftLoggerLogic.holdsBackForInjury(hint, injuryCheckIn: true))
+        XCTAssertFalse(LiftLoggerLogic.holdsBackForInjury(hint, injuryCheckIn: false))
+        XCTAssertTrue(LiftLoggerLogic.canApplyProgression(hint, to: sets, injuryCheckIn: false))
+        XCTAssertFalse(LiftLoggerLogic.canApplyProgression(hint, to: sets, injuryCheckIn: true))
+        XCTAssertEqual(LiftLoggerLogic.applyingProgression(hint, to: sets, injuryCheckIn: true), sets)
+        XCTAssertEqual(LiftLoggerLogic.applyingProgression(hint, to: sets).map { $0.load }, [142.5, 142.5])
+    }
+
+    func testARepeatHintIsNotHeldBackForAnInjury() throws {
+        let hint = try XCTUnwrap(
+            LiftLoggerLogic.progressionHint(history: refs([5, 5, 4], at: 140), key: "squat", system: .metric)
+        )
+        XCTAssertFalse(LiftLoggerLogic.holdsBackForInjury(hint, injuryCheckIn: true))
+    }
+
     func testARepeatHintIsNeverApplied() throws {
         let hint = try XCTUnwrap(
             LiftLoggerLogic.progressionHint(history: refs([5, 5, 4], at: 140), key: "squat", system: .metric)

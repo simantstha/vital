@@ -13,7 +13,8 @@ struct MuscleHeroView: View {
     let proteinHave: Int
     let proteinGoal: Int
 
-    /// "Last (Mon): Deadlift 2×5 @ 150 kg" — `TodayViewModel
+    /// "Next: Squat 3×5 @ 142.5 kg (last 140 kg)" (or "Last (Mon): Deadlift 2×5
+    /// @ 150 kg" when there's no next load to show) — `TodayViewModel
     /// .muscleLastLiftText`. `nil` hides the line entirely.
     var lastLiftText: String? = nil
     /// "2 of 4 sessions" or the no-plan-data "N sessions this week" fallback

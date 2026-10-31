@@ -509,16 +509,19 @@ final class TodayViewModel: ObservableObject {
         return !(enduranceCalibratingText == nil && enduranceReasonLine != nil)
     }
 
-    /// The muscle hero's "Last (Mon): Deadlift 2×5 @ 150 kg" line — `nil`
+    /// The muscle hero's lift line — "Next: Squat 3×5 @ 142.5 kg (last 140 kg)",
+    /// or "Last (Mon): Deadlift 2×5 @ 150 kg" for a bodyweight lift and while the
+    /// goal card is asking about an injury (`MuscleHeroLogic.liftLineText`) — `nil`
     /// whenever there's no logged strength history yet (never fabricated).
     var muscleLastLiftText: String? {
         guard let lift = trainingSummary?.lastLift else { return nil }
-        return MuscleHeroLogic.lastLiftText(
+        return MuscleHeroLogic.liftLineText(
             exercise: lift.exercise,
             date: lift.date,
             sets: lift.sets,
             reps: lift.reps,
             weightKg: lift.weightKg,
+            injuryCheckIn: goalProgress?.hasInjuryCheckIn ?? false,
             system: UnitPreference.shared.current
         )
     }

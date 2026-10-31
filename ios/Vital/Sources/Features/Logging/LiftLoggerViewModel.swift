@@ -8,6 +8,7 @@ import UIKit
 @MainActor
 protocol LiftLoggerAPIProviding {
     func fetchWorkoutSummary(days: Int) async throws -> WorkoutSummaryResponse
+    func fetchGoalProgress() async throws -> GoalProgressDTO
     func fetchLastWorkoutSession(exercise: String) async throws -> WorkoutLastSessionResponse
     func fetchRecentWorkoutSessions(limit: Int) async throws -> WorkoutRecentSessionsResponse
     func logWorkoutSets(
@@ -80,6 +81,12 @@ final class LiftLoggerViewModel: ObservableObject {
     /// The rest countdown started by ticking a set (running, or showing "Rest
     /// done" for a few seconds); `nil` when there is none.
     @Published private(set) var rest: LiftRestState? = nil
+    /// The goal card is asking about a logged injury (`GoalProgressDTO.hasInjuryCheckIn`):
+    /// the form never offers a heavier load while this is `true`. Fail-soft — `false`
+    /// until (and unless) `/api/goal/progress` answers.
+    @Published private(set) var injuryCheckInActive = false
+    /// The server's check-in sentence, shown beside a held-back "try …" hint.
+    @Published private(set) var injuryCheckInLine: String? = nil
 
     let system: UnitSystem
     /// Client-generated UUID for the whole session: groups the sets and makes
@@ -144,6 +151,16 @@ final class LiftLoggerViewModel: ObservableObject {
             if !key.isEmpty {
                 candidates.append(key)
                 preferredCanonicalKey = key
+            }
+        }
+
+        do {
+            let progress = try await api.fetchGoalProgress()
+            injuryCheckInActive = progress.hasInjuryCheckIn
+            injuryCheckInLine = progress.injuryCheckInLine
+        } catch {
+            if !error.isCancellation {
+                print("[Vital] LiftLoggerViewModel.load goal progress failed: \(error.localizedDescription)")
             }
         }
 
@@ -370,7 +387,14 @@ final class LiftLoggerViewModel: ObservableObject {
     func canApplyProgression(to exerciseID: UUID) -> Bool {
         guard let i = index(ofExercise: exerciseID),
               let hint = progressionHint(for: exerciseID) else { return false }
-        return LiftLoggerLogic.canApplyProgression(hint, to: exercises[i].sets)
+        return LiftLoggerLogic.canApplyProgression(hint, to: exercises[i].sets, injuryCheckIn: injuryCheckInActive)
+    }
+
+    /// `true` when this exercise's "try …" hint is shown as plain text beside the
+    /// injury check-in instead of as a one-tap "Use …" control.
+    func isProgressionHeldBack(for exerciseID: UUID) -> Bool {
+        guard let hint = progressionHint(for: exerciseID) else { return false }
+        return LiftLoggerLogic.holdsBackForInjury(hint, injuryCheckIn: injuryCheckInActive)
     }
 
     /// Puts the suggested load on every working set that isn't ticked and
@@ -378,7 +402,9 @@ final class LiftLoggerViewModel: ObservableObject {
     func applyProgression(to exerciseID: UUID) {
         guard let i = index(ofExercise: exerciseID),
               let hint = progressionHint(for: exerciseID) else { return }
-        exercises[i].sets = LiftLoggerLogic.applyingProgression(hint, to: exercises[i].sets)
+        exercises[i].sets = LiftLoggerLogic.applyingProgression(
+            hint, to: exercises[i].sets, injuryCheckIn: injuryCheckInActive
+        )
     }
 
     // MARK: - Done ticks + rest timer

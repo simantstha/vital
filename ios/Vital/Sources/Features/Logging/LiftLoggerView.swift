@@ -339,37 +339,44 @@ private extension LiftLoggerView {
         .accessibilityIdentifier("liftLogger.more")
     }
 
-    /// "Last 3×5 @ 140 kg · try 142.5 kg" under the exercise name. Tappable
-    /// (applies the suggested load to untouched sets) while it still would
-    /// change something; plain text for "repeat …" hints and once applied.
+    /// "Last 3×5 @ 140 kg · try 142.5 kg" under the exercise name. While a "try"
+    /// still would change something, a filled "Use 142.5 kg" chip (same capsule
+    /// idiom as the warm-up chip) sits under it — the sets stay pre-filled at last
+    /// session's load, so a Save without looking never logs a heavier weight than
+    /// the "Repeat" note promises, and the heavier load is one deliberate tap away.
+    /// While the goal card is asking about an injury the hint is plain text with
+    /// the check-in beside it and no chip; "repeat …" hints are plain text too.
     @ViewBuilder
     func progressionHint(for exercise: LiftDraftExercise) -> some View {
         if let hint = vm.progressionHint(for: exercise.id) {
             let text = LiftLoggerLogic.progressionText(hint, system: vm.system)
-            if vm.canApplyProgression(to: exercise.id) {
-                Button {
-                    vm.applyProgression(to: exercise.id)
-                } label: {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Text(text)
-                            .multilineTextAlignment(.leading)
-                        Image(systemName: "arrow.up.circle.fill")
-                            .accessibilityHidden(true)
-                    }
-                    .scaledFont(size: 13, weight: .semibold)
-                    .foregroundStyle(Theme.Colors.accentContent)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(text)
-                .accessibilityHint("Applies the suggested weight to sets you haven't changed")
-                .accessibilityIdentifier("liftLogger.progressionHint")
-            } else {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(text)
                     .scaledFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("liftLogger.progressionHint")
+                if vm.canApplyProgression(to: exercise.id) {
+                    Button {
+                        vm.applyProgression(to: exercise.id)
+                    } label: {
+                        Text(LiftLoggerLogic.useSuggestedLabel(hint, system: vm.system))
+                            .scaledFont(size: 13, weight: .bold)
+                            .foregroundStyle(Theme.Colors.onAccent)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Theme.Colors.accent))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Puts the suggested weight on sets you haven't changed")
+                    .accessibilityIdentifier("liftLogger.useSuggestedLoad")
+                } else if vm.isProgressionHeldBack(for: exercise.id), let line = vm.injuryCheckInLine {
+                    Text(line)
+                        .scaledFont(size: 13, weight: .medium)
+                        .foregroundStyle(Theme.Colors.caution)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("liftLogger.injuryCheckIn")
+                }
             }
         }
     }

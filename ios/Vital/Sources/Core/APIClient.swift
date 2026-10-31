@@ -2898,11 +2898,58 @@ struct GoalProgressDTO: Decodable, Equatable {
     /// the lifts itself. `nil` when absent (older servers, other goals), empty or
     /// not a string.
     let headlineLift: String?
+    /// Wave 27: the user's most recent active Injury fact (logged in the last 28 days), present
+    /// only for goals whose plan has a session to swap (never weight loss). `nil` when absent,
+    /// null, malformed (no usable `text`) and for older servers. The server also leads `reasons`
+    /// with the check-in sentence (kind `injury`); see `injuryCheckInLine`.
+    let injuryCheckIn: InjuryCheckIn?
+
+    /// `GoalProgress.injuryCheckIn` on the wire (`lib/injuryCheckIn.ts`).
+    struct InjuryCheckIn: Decodable, Equatable {
+        /// Lower-case short text, e.g. "knee pain".
+        let text: String
+        /// User-local `YYYY-MM-DD` the fact was logged; `nil` when missing.
+        let since: String?
+
+        private enum CodingKeys: String, CodingKey { case text, since }
+
+        init(text: String, since: String? = nil) {
+            self.text = text
+            self.since = since
+        }
+
+        /// Throws without a non-empty `text` so the enclosing `try?` drops the whole check-in.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let text = try c.decode(String.self, forKey: .text)
+            guard !text.isEmpty else {
+                throw DecodingError.dataCorruptedError(forKey: .text, in: c, debugDescription: "empty injury text")
+            }
+            self.text = text
+            self.since = try? c.decode(String.self, forKey: .since)
+        }
+    }
+
+    /// The `reasons[].kind` the server uses for the injury check-in line.
+    static let injuryReasonKind = "injury"
+
+    /// The server's own check-in sentence ("You noted knee pain on Oct 24 — if it still hurts,
+    /// swap hard sessions (heavy lifts) for easy work or rest, and see a professional if it
+    /// persists."), shown as sent; `nil` without one.
+    var injuryCheckInLine: String? {
+        reasons.first { $0.kind == Self.injuryReasonKind }?.text
+    }
+
+    /// Whether a logged injury is being asked about — either the structured field or the reason
+    /// line says so. Callers that would otherwise push load up hold back while this is `true`.
+    var hasInjuryCheckIn: Bool {
+        injuryCheckIn != nil || injuryCheckInLine != nil
+    }
 
     private enum CodingKeys: String, CodingKey {
         case goal, target, distance, race, longRun, current, ratePerWeek, safeBand, eta, onPaceForTargetDate
         case verdict, headline, reasons, dataSufficiency, lastWeighInDaysAgo, adherence, reachedAt
-        case lastSessionDaysAgo, weightRead, liftReturn, liftReturns, headlineLift
+        case lastSessionDaysAgo, weightRead, liftReturn, liftReturns, headlineLift, injuryCheckIn
     }
 
     init(
@@ -2927,9 +2974,11 @@ struct GoalProgressDTO: Decodable, Equatable {
         weightRead: WeightRead? = nil,
         liftReturn: LiftReturn? = nil,
         liftReturns: [LiftReturn]? = nil,
-        headlineLift: String? = nil
+        headlineLift: String? = nil,
+        injuryCheckIn: InjuryCheckIn? = nil
     ) {
         self.goal = goal
+        self.injuryCheckIn = injuryCheckIn
         self.lastWeighInDaysAgo = lastWeighInDaysAgo
         self.adherence = adherence
         self.reachedAt = reachedAt
@@ -2977,6 +3026,7 @@ struct GoalProgressDTO: Decodable, Equatable {
         liftReturn = try? c.decode(LiftReturn.self, forKey: .liftReturn)
         liftReturns = try? c.decode([LiftReturn].self, forKey: .liftReturns)
         headlineLift = (try? c.decode(String.self, forKey: .headlineLift)).flatMap { $0.isEmpty ? nil : $0 }
+        injuryCheckIn = try? c.decode(InjuryCheckIn.self, forKey: .injuryCheckIn)
     }
 
     /// A whole-day count sent as `5` or `5.0`; `nil` for null, missing or

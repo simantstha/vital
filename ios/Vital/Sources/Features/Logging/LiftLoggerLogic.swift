@@ -316,16 +316,35 @@ enum LiftLoggerLogic {
         !set.isWarmup && !set.isDone && sameLoad(set.load, hint.lastLoad)
     }
 
+    /// "Use 142.5 kg" — the label of the one-tap control that puts a "try …"
+    /// hint's load on the untouched sets (the hint text itself stays
+    /// `progressionText`).
+    static func useSuggestedLabel(_ hint: LiftProgressionHint, system: UnitSystem) -> String {
+        "Use \(loadText(hint.suggestedLoad, system: system))"
+    }
+
+    /// `true` when a "try …" hint is held back because the goal card is asking
+    /// about a logged injury: the form keeps last session's load and shows the
+    /// hint as plain text with the check-in beside it, never a one-tap increase.
+    static func holdsBackForInjury(_ hint: LiftProgressionHint, injuryCheckIn: Bool) -> Bool {
+        injuryCheckIn && hint.isIncrease
+    }
+
     /// `true` when tapping the hint would change something: it's a "try" hint
-    /// and at least one set is still eligible.
-    static func canApplyProgression(_ hint: LiftProgressionHint, to sets: [LiftDraftSet]) -> Bool {
-        hint.isIncrease && sets.contains { isEligibleForProgression($0, hint: hint) }
+    /// that isn't held back for an injury, and at least one set is still eligible.
+    static func canApplyProgression(
+        _ hint: LiftProgressionHint, to sets: [LiftDraftSet], injuryCheckIn: Bool = false
+    ) -> Bool {
+        hint.isIncrease && !injuryCheckIn && sets.contains { isEligibleForProgression($0, hint: hint) }
     }
 
     /// Sets with the suggested load applied to every eligible set; edited,
-    /// ticked, warm-up and lighter (ramp / back-off) sets are left alone.
-    static func applyingProgression(_ hint: LiftProgressionHint, to sets: [LiftDraftSet]) -> [LiftDraftSet] {
-        guard hint.isIncrease else { return sets }
+    /// ticked, warm-up and lighter (ramp / back-off) sets are left alone. A hint
+    /// held back for an injury changes nothing.
+    static func applyingProgression(
+        _ hint: LiftProgressionHint, to sets: [LiftDraftSet], injuryCheckIn: Bool = false
+    ) -> [LiftDraftSet] {
+        guard hint.isIncrease, !injuryCheckIn else { return sets }
         return sets.map { set in
             guard isEligibleForProgression(set, hint: hint) else { return set }
             var updated = set

@@ -21,6 +21,13 @@ final class LiftLoggerViewModelTests: XCTestCase {
         var savedSets: [[WorkoutSetInputDTO]] = []
         var saveError: Error? = nil
         var recentSessionsError: Error? = nil
+        var goalProgress = GoalProgressDTO(goal: "muscle", verdict: .progressing)
+        var goalProgressError: Error? = nil
+
+        func fetchGoalProgress() async throws -> GoalProgressDTO {
+            if let goalProgressError { throw goalProgressError }
+            return goalProgress
+        }
 
         func fetchWorkoutSummary(days: Int) async throws -> WorkoutSummaryResponse {
             summary
@@ -499,6 +506,58 @@ final class LiftLoggerViewModelTests: XCTestCase {
         XCTAssertEqual(squat.history.map { $0.load }, [140, 140, 140])
         XCTAssertFalse(vm.canApplyProgression(to: squatID))
         XCTAssertTrue(vm.canApplyProgression(to: benchID))
+    }
+
+    /// The form pre-fills last session's load (the "Repeat" note stays true) and the
+    /// heavier load is one tap away — it is never written into the sets unasked.
+    func testSetsStayAtLastLoadUntilTheUseControlIsTapped() async throws {
+        let api = FakeAPI()
+        api.recentSessions = [recentSession("s-legs", day: "2026-10-05", [("squat", 3, 140)])]
+        let vm = makeViewModel(api)
+        await vm.load()
+        let id = vm.exercises[0].id
+
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [140, 140, 140])
+        XCTAssertTrue(vm.canApplyProgression(to: id))
+        XCTAssertFalse(vm.isProgressionHeldBack(for: id))
+        XCTAssertFalse(vm.injuryCheckInActive)
+    }
+
+    func testAnInjuryCheckInKeepsLastLoadAndOffersNoIncrease() async throws {
+        let sentence = "You noted knee pain on Oct 24 \u{2014} if it still hurts, swap hard sessions (heavy lifts) for easy work or rest, and see a professional if it persists."
+        let api = FakeAPI()
+        api.goalProgress = GoalProgressDTO(
+            goal: "muscle", verdict: .progressing,
+            reasons: [GoalReasonDTO(kind: "injury", text: sentence)],
+            injuryCheckIn: .init(text: "knee pain", since: "2026-10-24")
+        )
+        api.recentSessions = [recentSession("s-legs", day: "2026-10-05", [("squat", 3, 140)])]
+        let vm = makeViewModel(api)
+        await vm.load()
+        let id = vm.exercises[0].id
+
+        XCTAssertTrue(vm.injuryCheckInActive)
+        XCTAssertEqual(vm.injuryCheckInLine, sentence)
+        // The hint is still there, as plain information…
+        let hint = try XCTUnwrap(vm.progressionHint(for: id))
+        XCTAssertEqual(LiftLoggerLogic.progressionText(hint, system: .metric), "Last 3×5 @ 140\u{00A0}kg · try 142.5\u{00A0}kg")
+        XCTAssertTrue(vm.isProgressionHeldBack(for: id))
+        // …but nothing applies it and the sets keep last session's load.
+        XCTAssertFalse(vm.canApplyProgression(to: id))
+        vm.applyProgression(to: id)
+        XCTAssertEqual(vm.exercises[0].sets.map { $0.load }, [140, 140, 140])
+    }
+
+    func testAFailedGoalProgressFetchFailsSoftToTheNormalHint() async throws {
+        let api = FakeAPI()
+        api.goalProgressError = SaveFailure()
+        api.recentSessions = [recentSession("s-legs", day: "2026-10-05", [("squat", 3, 140)])]
+        let vm = makeViewModel(api)
+        await vm.load()
+
+        XCTAssertFalse(vm.injuryCheckInActive)
+        XCTAssertNil(vm.injuryCheckInLine)
+        XCTAssertTrue(vm.canApplyProgression(to: vm.exercises[0].id))
     }
 
     func testApplyingTheHintSkipsTickedAndEditedSets() async throws {

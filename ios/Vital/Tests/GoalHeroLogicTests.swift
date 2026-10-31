@@ -256,6 +256,75 @@ final class GoalHeroLogicTests: XCTestCase {
         ))
     }
 
+    // MARK: - MuscleHeroLogic.nextLiftText / liftLineText (Today shows today's load)
+
+    func testNextLiftTextShowsTheLoadTheLoggerSuggests() {
+        let text = MuscleHeroLogic.nextLiftText(exercise: "Squat", sets: 3, reps: 5, weightKg: 140, system: .metric)
+        XCTAssertEqual(text, "Next: Squat 3×5 @ 142.5\u{00A0}kg (last 140\u{00A0}kg)")
+    }
+
+    /// One function behind both surfaces: Today's number is `LiftLoggerLogic.nextLoad`, i.e. the
+    /// logger's "try N" for the same last top set.
+    func testNextLiftTextAgreesWithTheLoggersTryHint() throws {
+        let cases: [(Double, UnitSystem)] = [(140, .metric), (82.5, .metric), (101, .metric), (102.06, .imperial), (84, .imperial)]
+        for (kg, system) in cases {
+            let last = LiftLoggerLogic.displayLoad(fromKg: kg, system: system)
+            let hint = try XCTUnwrap(LiftLoggerLogic.progressionHint(
+                history: [LiftLastRef(reps: 5, load: last), LiftLastRef(reps: 5, load: last)], key: "squat", system: system
+            ))
+            XCTAssertTrue(hint.isIncrease)
+            let text = try XCTUnwrap(MuscleHeroLogic.nextLiftText(exercise: "Squat", sets: 2, reps: 5, weightKg: kg, system: system))
+            XCTAssertTrue(
+                text.contains("@ \(LiftLoggerLogic.loadText(hint.suggestedLoad, system: system)) "),
+                "\(text) should carry the logger's \(hint.suggestedLoad)"
+            )
+            XCTAssertTrue(text.hasSuffix("(last \(LiftLoggerLogic.loadText(last, system: system))))"))
+        }
+    }
+
+    func testNextLiftTextRespectsImperialSystem() {
+        // 102.06 kg = 225 lb; the logger steps +5 lb.
+        let text = MuscleHeroLogic.nextLiftText(exercise: "Squat", sets: 3, reps: 5, weightKg: 102.06, system: .imperial)
+        XCTAssertEqual(text, "Next: Squat 3×5 @ 230\u{00A0}lb (last 225\u{00A0}lb)")
+    }
+
+    func testNextLiftTextNilForBodyweightOrMissingLoad() {
+        XCTAssertNil(MuscleHeroLogic.nextLiftText(exercise: "Pull-up", sets: 3, reps: 8, weightKg: nil, system: .metric))
+        XCTAssertNil(MuscleHeroLogic.nextLiftText(exercise: "Pull-up", sets: 3, reps: 8, weightKg: 0, system: .metric))
+    }
+
+    func testLiftLineShowsNextWithoutAnInjury() {
+        let text = MuscleHeroLogic.liftLineText(
+            exercise: "Squat", date: "2026-09-21", sets: 3, reps: 5, weightKg: 140, injuryCheckIn: false, system: .metric
+        )
+        XCTAssertEqual(text, "Next: Squat 3×5 @ 142.5\u{00A0}kg (last 140\u{00A0}kg)")
+    }
+
+    /// While the goal card asks about an injury, Today does not advertise a heavier load.
+    func testLiftLineKeepsTheLastLoadWhileAnInjuryCheckInIsPresent() {
+        let text = MuscleHeroLogic.liftLineText(
+            exercise: "Squat", date: "2026-09-21", sets: 3, reps: 5, weightKg: 140, injuryCheckIn: true, system: .metric
+        )
+        XCTAssertEqual(text, "Last (Mon): Squat 3×5 @ 140\u{00A0}kg")
+        XCTAssertFalse(text?.contains("142.5") ?? true)
+    }
+
+    func testLiftLineFallsBackToLastForBodyweightAndBadDates() {
+        XCTAssertEqual(
+            MuscleHeroLogic.liftLineText(
+                exercise: "Pull-up", date: "2026-09-21", sets: 3, reps: 8, weightKg: nil, injuryCheckIn: false, system: .metric
+            ),
+            "Last (Mon): Pull-up 3×8 bodyweight"
+        )
+        // A "Next" line needs no date, so a bad date only matters for the "Last" fallback.
+        XCTAssertNotNil(MuscleHeroLogic.liftLineText(
+            exercise: "Squat", date: "not-a-date", sets: 3, reps: 5, weightKg: 140, injuryCheckIn: false, system: .metric
+        ))
+        XCTAssertNil(MuscleHeroLogic.liftLineText(
+            exercise: "Squat", date: "not-a-date", sets: 3, reps: 5, weightKg: 140, injuryCheckIn: true, system: .metric
+        ))
+    }
+
     func testWeekdayShortLabelKnownDates() {
         XCTAssertEqual(MuscleHeroLogic.weekdayShortLabel(forDateString: "2026-09-24"), "Thu")
         XCTAssertEqual(MuscleHeroLogic.weekdayShortLabel(forDateString: "2026-09-21"), "Mon")

@@ -1125,6 +1125,37 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(GoalProgressDTO(goal: "muscle", verdict: .progressing, headlineLift: "squat").headlineLift, "squat")
     }
 
+    /// Wave 27: `injuryCheckIn` { text, since } and the kind-`injury` reason line. Absent, null,
+    /// malformed or empty text reads as `nil`, never a decode failure, and the memberwise initialiser defaults it.
+    func testInjuryCheckInDecodesTolerantly() throws {
+        func decode(_ extra: String, reasons: String = "[]") throws -> GoalProgressDTO {
+            let json = "{\"goal\":\"muscle\",\"verdict\":\"progressing\",\"headline\":\"x\",\"reasons\":\(reasons)\(extra)}"
+            return try JSONDecoder().decode(GoalProgressDTO.self, from: Data(json.utf8))
+        }
+        let sentence = "You noted knee pain on Oct 24 \u{2014} if it still hurts, swap hard sessions (heavy lifts) for easy work or rest, and see a professional if it persists."
+        let withInjury = try decode(
+            ",\"injuryCheckIn\":{\"text\":\"knee pain\",\"since\":\"2026-10-24\"}",
+            reasons: "[{\"kind\":\"injury\",\"text\":\"\(sentence)\",\"tone\":\"neutral\"},{\"kind\":\"x\",\"text\":\"Other\",\"tone\":\"good\"}]"
+        )
+        XCTAssertEqual(withInjury.injuryCheckIn, GoalProgressDTO.InjuryCheckIn(text: "knee pain", since: "2026-10-24"))
+        XCTAssertEqual(withInjury.injuryCheckInLine, sentence)
+        XCTAssertTrue(withInjury.hasInjuryCheckIn)
+
+        XCTAssertEqual(try decode(",\"injuryCheckIn\":{\"text\":\"knee pain\"}").injuryCheckIn?.since, nil)
+        XCTAssertNil(try decode("").injuryCheckIn, "older servers and weight loss omit it")
+        XCTAssertFalse(try decode("").hasInjuryCheckIn)
+        XCTAssertNil(try decode(",\"injuryCheckIn\":null").injuryCheckIn)
+        XCTAssertNil(try decode(",\"injuryCheckIn\":{\"text\":\"\"}").injuryCheckIn)
+        XCTAssertNil(try decode(",\"injuryCheckIn\":{\"since\":\"2026-10-24\"}").injuryCheckIn)
+        XCTAssertNil(try decode(",\"injuryCheckIn\":7").injuryCheckIn)
+        XCTAssertNil(GoalProgressDTO(goal: "muscle", verdict: .building).injuryCheckIn)
+        XCTAssertTrue(GoalProgressDTO(goal: "muscle", verdict: .building, injuryCheckIn: .init(text: "knee pain")).hasInjuryCheckIn)
+        // The reason line alone also counts (a server that sends only the sentence).
+        XCTAssertTrue(GoalProgressDTO(
+            goal: "muscle", verdict: .building, reasons: [GoalReasonDTO(kind: "injury", text: sentence)]
+        ).hasInjuryCheckIn)
+    }
+
     // MARK: - Wave 21: weight (moving again, one displayed weight)
 
     private func decodeWeightLoss(_ extra: String, headline: String = "x") throws -> GoalProgressDTO {
