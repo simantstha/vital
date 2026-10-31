@@ -7,7 +7,8 @@ final class MetricMeaningTests: XCTestCase {
 
     func testHRVAboveWithRestingHRBelowCorroborates() {
         let message = MetricMeaning.message(metricKey: "hrv_sdnn", verdict: .above(z: 1.2), relatedVerdict: .below(z: -1.1))
-        XCTAssertEqual(message, "You're well recovered. A good day for your hardest session.")
+        XCTAssertEqual(message, "Your recovery markers look good today. See Today for what to do.")
+        XCTAssertFalse(message?.lowercased().contains("hardest") ?? true)
     }
 
     func testHRVAboveWithoutCorroborationOmitsAgreesClause() {
@@ -22,9 +23,34 @@ final class MetricMeaningTests: XCTestCase {
 
     func testHRVBelowNeverDiagnoses() {
         let message = MetricMeaning.message(metricKey: "whoop_hrv_rmssd", verdict: .below(z: -1.4), relatedVerdict: nil)
-        XCTAssertEqual(message, "Your body may still be recovering. Keep today easy and prioritise sleep.")
+        XCTAssertEqual(message, "Your HRV is below your normal today — your body may still be recovering. See Today for what to do.")
         XCTAssertFalse(message?.lowercased().contains("sick") ?? true)
         XCTAssertFalse(message?.lowercased().contains("illness") ?? true)
+    }
+
+    func testHRVNormalIsDescriptive() {
+        let message = MetricMeaning.message(metricKey: "hrv_sdnn", verdict: .normal, relatedVerdict: .below(z: -1.1))
+        XCTAssertEqual(message, "Your HRV is right in your normal range today.")
+    }
+
+    /// The HRV card only sees HRV + resting HR, so no tier may prescribe
+    /// training intensity (it contradicted the coach and Today for a user
+    /// with a deficit goal and a knee injury).
+    func testNoHRVTierPrescribesTraining() {
+        let verdicts: [Verdict] = [.above(z: 1.2), .below(z: -1.4), .normal]
+        let related: [Verdict?] = [nil, .normal, .below(z: -1.1), .above(z: 1.0)]
+        let banned = ["hardest", "go hard", "push", "keep today easy", "train", "session", "workout"]
+        for key in ["hrv_sdnn", "whoop_hrv_rmssd"] {
+            for verdict in verdicts {
+                for rel in related {
+                    let text = (MetricMeaning.message(metricKey: key, verdict: verdict, relatedVerdict: rel) ?? "").lowercased()
+                    XCTAssertFalse(text.isEmpty)
+                    for word in banned {
+                        XCTAssertFalse(text.contains(word), "\(key) \(verdict) \(String(describing: rel)): \"\(text)\" contains \"\(word)\"")
+                    }
+                }
+            }
+        }
     }
 
     func testHRVCalibratingHidesCard() {

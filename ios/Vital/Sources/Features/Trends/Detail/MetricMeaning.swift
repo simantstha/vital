@@ -31,6 +31,10 @@ enum MetricMeaning {
 
     // MARK: - HRV
 
+    /// The HRV detail *describes* recovery; it never prescribes training. It
+    /// only sees HRV and resting HR, not sleep debt, the calorie deficit or
+    /// logged injuries — so any "what to do" is deferred to Today, which has
+    /// the full plan and the same voice as the coach.
     private static func hrvMessage(verdict: Verdict, restingHRVerdict: Verdict?) -> String? {
         switch verdict {
         case .above:
@@ -40,11 +44,11 @@ enum MetricMeaning {
             // hasn't loaded, omits the corroboration clause rather than
             // guessing at agreement.
             if case .below? = restingHRVerdict {
-                return "You're well recovered. A good day for your hardest session."
+                return "Your recovery markers look good today. See Today for what to do."
             }
             return "Your HRV is above your normal today — a sign of good recovery."
         case .below:
-            return "Your body may still be recovering. Keep today easy and prioritise sleep."
+            return "Your HRV is below your normal today — your body may still be recovering. See Today for what to do."
         case .normal:
             return "Your HRV is right in your normal range today."
         case .calibrating, .noData:
