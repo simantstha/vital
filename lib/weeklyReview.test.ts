@@ -1673,10 +1673,11 @@ test('race phase review: taper far under or far over its target is a slip that n
 });
 
 test('race phase review: next week follows the coming week\'s phase (taper, race week, recovery, back to building)', () => {
-  // Taper -> taper (coming Monday is 10 days out: x0.6 = 24 km).
+  // Taper -> taper (coming Monday is 10 days out: x0.6 = 24 km). Wave 26e: the late marathon taper's long run is 0.45 x the 10 km peak long run = 4.5 km
+  // (it was 0.65 = 6.5 km), and under 5 km it is the "longest run".
   assert.equal(
     computeWeeklyReview(raceWeekReview('2026-10-15', [10, 10, 10])).nextWeek,
-    'Taper: ~24 km next week — cut volume; long run 6.5 km easy, plus 3×1 km at race pace midweek.',
+    'Taper: ~24 km next week — cut volume; longest run 4.5 km easy, plus 3×1 km at race pace midweek.',
   );
   // Taper -> race week (race Thu Oct 8: the coming Monday is 3 days out; x0.4 = 16 km).
   const toRaceWeek = computeWeeklyReview(raceWeekReview('2026-10-08', [8, 8, 8]));

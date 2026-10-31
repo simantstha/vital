@@ -178,6 +178,7 @@ import {
   isWindDownPhase,
   longRunCapNote,
   longRunPeakTarget,
+  noRaceLongRunMaxKm,
   longRunStats,
   longRunStepKm,
   longRunTargetKm as longRunTargetKmFor,
@@ -3407,7 +3408,11 @@ function longRunShareReason(input: GoalProgressInput, share: LongRunShare, plan:
   const u = unitsPerKm(input);
   // The weeks it names are the GOAL's (the number every other line says, "18.6 mi"), and the long run it keeps is the plan's own peak target at
   // that goal (at most half of it) - not a second number derived from the one oversized week. The unit word follows the runner's unit.
-  const keepKm = plan.longRun.targetPeakKm ?? floorLongRunKm(plan.goalKm * LONG_RUN_MAX_WEEK_SHARE, u);
+  // (Wave 26e: without a race distance the long run the plan keeps never passes the no-race ceiling, so neither does this note: "keep long runs ~30 km" on 60 km weeks was the bug.)
+  const raceKm = input.race?.distanceKm;
+  const noRace = !(raceKm != null && Number.isFinite(raceKm) && raceKm > 0);
+  const halfGoalKm = floorLongRunKm(plan.goalKm * LONG_RUN_MAX_WEEK_SHARE, u);
+  const keepKm = plan.longRun.targetPeakKm ?? (noRace ? Math.min(halfGoalKm, roundLongRunKm(noRaceLongRunMaxKm(u), u)) : halfGoalKm);
   const easy = input.unitSystem === 'imperial' ? 'miles' : 'km';
   return {
     kind: 'long_run',

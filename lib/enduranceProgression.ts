@@ -106,13 +106,34 @@ export function weekStepOrGoalKm(lastWeekKm: number | null, weeklyTargetKm: numb
 /**
  * Next week's long run (km): +2 km on the last one, never past the peak target
  * and not past it even when the last long run is already there (then the peak
- * itself, i.e. "hold"). Without a peak target it is simply last + 2 km.
+ * itself, i.e. "hold"). Without a peak target it is simply last + 2 km (the plan then holds it under the no-race ceiling, `capNoRaceLongRunKm`).
  */
 export function longRunStepKm(lastKm: number, targetPeakKm: number | null | undefined): number {
   const round1 = (n: number): number => Math.round(n * 10) / 10;
   if (targetPeakKm == null) return round1(lastKm + LONG_RUN_MAX_STEP_KM);
   if (lastKm >= targetPeakKm) return targetPeakKm;
   return round1(lastKm + Math.min(LONG_RUN_MAX_STEP_KM, targetPeakKm - lastKm));
+}
+
+/**
+ * Wave 26e: without a race there is no event to build a long run toward, so the long run never steps above this (a general-endurance run of about two
+ * hours): 21 km, 13 mi for an imperial runner. A CEILING ON GROWTH, not a cut - a runner whose recent long run is already above it is held at it.
+ */
+export const NO_RACE_LONG_RUN_MAX_KM = 21;
+const NO_RACE_LONG_RUN_MAX_MI = 13;
+
+/** The no-race long-run ceiling in km for a display unit (`unitsPerKm` below 1 = miles: 13 mi, ~20.92 km). */
+export function noRaceLongRunMaxKm(unitsPerKm = 1): number {
+  if (!Number.isFinite(unitsPerKm) || unitsPerKm <= 0 || unitsPerKm >= 1) return NO_RACE_LONG_RUN_MAX_KM;
+  return Math.round((NO_RACE_LONG_RUN_MAX_MI / unitsPerKm) * 100) / 100;
+}
+
+/**
+ * A no-race long run: the stepped distance `nextKm`, never above the ceiling - and never below the runner's own recent long run (`lastKm`) just because that
+ * is above it: past the ceiling the long run is held where it is (not cut, not grown).
+ */
+export function capNoRaceLongRunKm(nextKm: number, lastKm: number, unitsPerKm = 1): number {
+  return Math.min(nextKm, Math.max(noRaceLongRunMaxKm(unitsPerKm), lastKm));
 }
 
 /** True when the last long run is already at or past its peak target (so the long run is held, not grown). */
@@ -1036,6 +1057,8 @@ export const LONG_RUN_MAX_WEEK_SHARE = 0.5;
 export const LONG_RUN_RESTART_WEEK_SHARE = 0.4;
 /** A taper week's long run is this share of the peak long run of the last 28 days. */
 const TAPER_LONG_RUN_SHARE = 0.65;
+/** Wave 26e: the late marathon taper's long run (8-13 days out, the Sunday a week before the race) is this share of the peak long run. */
+export const TAPER_LATE_LONG_RUN_SHARE = 0.45;
 /** Every 4th plain build / maintain week is a cutback at ~80% of the week it replaces (long run held). */
 export const CUTBACK_EVERY_WEEKS = 4;
 export const CUTBACK_FRACTION = 0.8;
@@ -1366,6 +1389,25 @@ export function weekShareKm(targetKm: number, share: number, unitsPerKm = 1): nu
 }
 
 /**
+ * Wave 26e: a taper week's long run (km). A share of the peak long run of the last 28 days - 0.65, and 0.45 for the late marathon taper (8-13 days out, class
+ * long) - but never more than the week's share (`LONG_RUN_MAX_WEEK_SHARE` of the taper week's target: it is the week's biggest run, not most of it). A capped
+ * long run rounds DOWN to the half unit, like every cap. `info` is the taper week's own phase reading; `weekTargetKm` its target (null = no cap, no number).
+ * The plan, the pre-taper card line and the easing-off line all quote it from here.
+ */
+export function taperLongRunKm(
+  peakKm: number,
+  info: Pick<RacePhaseInfo, 'raceClass' | 'daysToRace'> | null | undefined,
+  weekTargetKm: number | null | undefined,
+  unitsPerKm = 1,
+): number {
+  const late = info != null && (info.raceClass ?? 'long') === 'long' && info.daysToRace <= TAPER_LATE_FROM_DAYS;
+  const planned = roundLongRunKm(peakKm * (late ? TAPER_LATE_LONG_RUN_SHARE : TAPER_LONG_RUN_SHARE), unitsPerKm);
+  if (weekTargetKm == null || !Number.isFinite(weekTargetKm) || weekTargetKm <= 0) return planned;
+  const cap = weekShareKm(weekTargetKm, LONG_RUN_MAX_WEEK_SHARE, unitsPerKm);
+  return planned > cap + 1e-9 ? floorLongRunKm(cap, unitsPerKm) : planned;
+}
+
+/**
  * The next long run (km) for a plan: min(last + 2 km, the peak target), never
  * above half of the week's target (40% in a restart week; unless the last long
  * run was already above that, then it is held), rounded to 0.5 of the display
@@ -1382,6 +1424,7 @@ function nextLongRun(
   heldKm: number | null,
   cutback = false,
   keepLastLong = true,
+  taperInfo: RacePhaseInfo | null = null,
 ): number | null {
   switch (kind) {
     case 'baseline':
@@ -1389,7 +1432,7 @@ function nextLongRun(
     case 'recovery':
       return null;
     case 'taper':
-      return lr.peakKm == null ? null : roundLongRunKm(lr.peakKm * TAPER_LONG_RUN_SHARE, ctx.units);
+      return lr.peakKm == null ? null : taperLongRunKm(lr.peakKm, taperInfo, targetKm, ctx.units);
     case 'hold': {
       if (lr.lastKm == null) return null;
       // Held where it was - except a hold AT a comeback ceiling (`keepLastLong` false), which cannot carry a 12 km long run in an 18 km week.
@@ -1409,7 +1452,9 @@ function nextLongRun(
         return held > cutCap + 1e-9 ? floorLongRunKm(cutCap, ctx.units) : held;
       }
       if (heldKm != null && !restarting) return roundLongRunKm(heldKm, ctx.units);
-      const next = longRunStepKm(lr.lastKm, lr.targetPeakKm);
+      // Wave 26e: without a race there is no peak to build to - the long run stops at the ceiling (21 km / 13 mi), held there when it is already above it.
+      const stepped = longRunStepKm(lr.lastKm, lr.targetPeakKm);
+      const next = ctx.raceKm == null ? capNoRaceLongRunKm(stepped, lr.lastKm, ctx.units) : stepped;
       // A restart week starts the long run again from the recent longest, but never past 40% of the (gentle) restart week.
       // (The hold AT a comeback ceiling, and the week after it, keep no such exception: the week is lowered below the spike's long run.)
       const cap = restarting ? weekShareKm(targetKm, LONG_RUN_RESTART_WEEK_SHARE, ctx.units) : keepLastLong ? Math.max(weekShareKm(targetKm, LONG_RUN_MAX_WEEK_SHARE, ctx.units), lr.lastKm) : weekShareKm(targetKm, LONG_RUN_MAX_WEEK_SHARE, ctx.units);
@@ -2148,15 +2193,18 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 
   // The long run the week would plan without a light-week cap (the light-week read and the easing-off read both quote it).
   const heldLongRun = longRunJump?.heldKm ?? null;
-  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null, hold?.ceiling !== true && prevPlan?.hold?.ceiling !== true);
+  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null, hold?.ceiling !== true && prevPlan?.hold?.ceiling !== true, info);
 
   // The week before a taper (or race week): the next Monday's phase is wind-down. Easing off is the plan's own next step.
   const nextWindPhase = buildLike && info != null && info.phase === 'build' ? phaseAt(ctx, addDayKey(w, 7))?.phase : undefined;
   // (Wave 23e P3-j: the taper's long run is read the way Monday's plan will read it - stats as of this week's Sunday, this week's long run included.)
   const taperPeakKm = nextWindPhase === 'taper' ? longRunStats(ctx.runs, addDayKey(w, 6), ctx.raceDate).peakKm : null;
+  // (Wave 26e: the taper week's own long run - its phase reading and its target - so the line quotes what Monday's plan will say.)
+  const nextWindInfo = nextWindPhase === 'taper' ? phaseAt(ctx, addDayKey(w, 7)) : null;
+  const nextWindTargetKm = nextWindInfo != null ? racePhaseTargetKm(nextWindInfo, ctx.peakKm ?? ctx.goalKm, { weeklyGoalKm: ctx.goalKm, unitsPerKm: ctx.units }) : null;
   const preTaper: EnduranceWeekPlan['preTaper'] = nextWindPhase === 'taper' || nextWindPhase === 'race_week'
     ? nextWindPhase === 'taper'
-      ? { nextPhase: nextWindPhase, taperLongRunKm: taperPeakKm == null ? null : roundLongRunKm(taperPeakKm * TAPER_LONG_RUN_SHARE, ctx.units) }
+      ? { nextPhase: nextWindPhase, taperLongRunKm: taperPeakKm == null ? null : taperLongRunKm(taperPeakKm, nextWindInfo, nextWindTargetKm, ctx.units) }
       : { nextPhase: nextWindPhase }
     : null;
 
@@ -2196,7 +2244,7 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     }
     if (reason != null && preTaper != null) {
       const taperLong = plannedNextKm != null || lr0.peakKm != null
-        ? roundLongRunKm(Math.max(lr0.peakKm ?? 0, plannedNextKm ?? 0) * TAPER_LONG_RUN_SHARE, ctx.units)
+        ? taperLongRunKm(Math.max(lr0.peakKm ?? 0, plannedNextKm ?? 0), nextWindInfo, nextWindTargetKm, ctx.units)
         : null;
       easingOff = { reason, daysOff, longRunKm: plannedNextKm, taperLongRunKm: taperLong };
     } else if (reason != null) {

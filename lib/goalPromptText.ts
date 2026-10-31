@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, midWeekRestartText, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
+import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -139,6 +139,11 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
   // (A trimmed long run is said once, by the note `weekTargetLine` adds - "keep Sunday's long run to ~6 km" - not also as "long run 6 km held / eased".)
   const trimmed = plan.longRunTrim != null;
   const lr = plan.longRunKm != null && !trimmed ? `long run ${longRunText(plan.longRunKm, units)}` : null;
+  // Wave 26e: without a race the long run stops at a ceiling (21 km / 13 mi): a plan AT it says so plainly, so nothing reads as "it keeps growing".
+  const perKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
+  const atNoRaceCeiling = gp.race?.distanceKm == null && plan.longRunKm != null && !trimmed
+    && roundLongRunKm(plan.longRunKm, perKm) >= roundLongRunKm(noRaceLongRunMaxKm(perKm), perKm) - 1e-9;
+  const ceilingNote = atNoRaceCeiling ? ' — the most a long run needs without a race, so it stops growing there' : '';
   const back = plan.comebackKm != null ? distKm(plan.comebackKm, units) : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
   // Days off in the week (or well behind its pace from Friday): the same line the card shows, as an instruction.
@@ -181,7 +186,7 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
         }
         return `- This week's target: build up to ~${t} (a ceiling for a careful comeback${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past it this week${strides}`;
       }
-      return `- This week's target: build to ~${t} (${step}${climb}${lr ? `; ${lr}` : ''}); the ${goal}/week goal comes after — do not push past the step this week${strides}`;
+      return `- This week's target: build to ~${t} (${step}${climb}${lr ? `; ${lr}${ceilingNote}` : ''}); the ${goal}/week goal comes after — do not push past the step this week${strides}`;
     }
     case 'maintain': {
       // The long run keeps growing only toward a peak it has not reached yet, in the runner's unit.
@@ -191,13 +196,13 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
         && roundLongRunKm(lrc.peakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1) < roundLongRunKm(lrc.targetPeakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1);
       const grow = growing ? ` (the long run keeps growing ~${units === 'imperial' ? '1 mi' : '2 km'} a week toward its peak)` : '';
       if (plan.goalReachedBefore === false) {
-        return `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the first week at the goal, do not go past it${strides}`;
+        return `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${atNoRaceCeiling ? ceilingNote : plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the first week at the goal, do not go past it${strides}`;
       }
       // Wave 23e P3-c: reached before, but last week fell short of it (a cutback, a 28 km week): back TO the goal, not "hold" a number he has not just run.
       if (plan.lastAtGoal === false) {
-        return `- This week's target: build back to the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — last week was under it, so build back to the goal and do not go past it${strides}`;
+        return `- This week's target: build back to the ${goal}/week goal${lr ? `; ${lr}${atNoRaceCeiling ? ceilingNote : plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — last week was under it, so build back to the goal and do not go past it${strides}`;
       }
-      return `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
+      return `- This week's target: hold the ${goal}/week goal${lr ? `; ${lr}${atNoRaceCeiling ? ceilingNote : plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the runner is at the goal, do not add volume${strides}`;
     }
     case 'hold':
       // A cutback week that ran more than 10% over its lowered number: hold at the week it replaced.
