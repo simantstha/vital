@@ -141,9 +141,14 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
   const lr = plan.longRunKm != null && !trimmed ? `long run ${longRunText(plan.longRunKm, units)}` : null;
   // Wave 26e: without a race the long run stops at a ceiling (21 km / 13 mi): a plan AT it says so plainly, so nothing reads as "it keeps growing".
   const perKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
-  const atNoRaceCeiling = gp.race?.distanceKm == null && plan.longRunKm != null && !trimmed
-    && roundLongRunKm(plan.longRunKm, perKm) >= roundLongRunKm(noRaceLongRunMaxKm(perKm), perKm) - 1e-9;
-  const ceilingNote = atNoRaceCeiling ? ' — the most a long run needs without a race, so it stops growing there' : '';
+  const noRaceLong = gp.race?.distanceKm == null && plan.longRunKm != null && !trimmed ? roundLongRunKm(plan.longRunKm, perKm) : null;
+  const ceilingKm = roundLongRunKm(noRaceLongRunMaxKm(perKm), perKm);
+  const atNoRaceCeiling = noRaceLong != null && noRaceLong >= ceilingKm - 1e-9;
+  // AT the ceiling the long run stops growing there; ABOVE it (a runner already past it) it is held where it is - 24 km is not presented as the cap.
+  const ceilingNote = !atNoRaceCeiling ? ''
+    : (noRaceLong as number) > ceilingKm + 1e-9
+      ? ` — already past the ~${longRunText(noRaceLongRunMaxKm(perKm), units)} a long run needs without a race, so hold it here rather than add more`
+      : ' — the most a long run needs without a race, so it stops growing there';
   const back = plan.comebackKm != null ? distKm(plan.comebackKm, units) : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
   // Days off in the week (or well behind its pace from Friday): the same line the card shows, as an instruction.

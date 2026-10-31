@@ -268,7 +268,8 @@ test('a no-race runner held at the ceiling: the card and the coach name the same
   const target = text.split('\n').find(l => l.startsWith("- This week's target")) ?? '';
   assert.match(target, /long run 24 km/);
   assert.doesNotMatch(target, /keeps growing|toward its peak|a week toward/);
-  assert.match(target, /long run 24 km — the most a long run needs without a race, so it stops growing there/);
+  assert.match(target, /long run 24 km — already past the ~21 km a long run needs without a race, so hold it here rather than add more/);
+  assert.doesNotMatch(target, /stops growing there/);
   // The same long run everywhere it is named: no 26 km (24 + 2) and no 30 km (half of the goal) anywhere on the card or in the coach lines.
   const card = JSON.stringify(gp);
   assert.doesNotMatch(card + text, /\b(26|27|30) km/);
@@ -285,4 +286,27 @@ test('the long-run share watch note keeps a no-race runner at the ceiling too ("
   assert.ok(note != null, JSON.stringify(gp.reasons));
   assert.match(note.text, /keep long runs ~21 km on 60 km weeks/);
   assert.doesNotMatch(note.text, /~30 km/);
+});
+
+test('coach wording: AT the ceiling "it stops growing there"; ABOVE it "already past the ~21 km … hold it here" (13 mi in imperial)', () => {
+  const build = (long: number, others: number[]): Run[] => {
+    const runs: Run[] = [];
+    const monday = addDayKey(TODAY, -1);
+    for (let w = 1; w <= 5; w++) {
+      [0, 2, 4].forEach((d, i) => runs.push(run(addDayKey(monday, -7 * w + d), others[i])));
+      runs.push(run(addDayKey(monday, -7 * w + 6), long));
+    }
+    return runs;
+  };
+  const targetOf = (gp: GoalProgress, units: 'metric' | 'imperial'): string => formatGoalProgressLines(gp, units).join('\n').split('\n').find(l => l.startsWith("- This week's target")) ?? '';
+  // Exactly at the ceiling: the plan's 21 km long run is where growth stops.
+  const at = targetOf(computeGoalProgress(noRaceInput(build(21, [6, 8, 8]))), 'metric');
+  assert.match(at, /long run 21 km — the most a long run needs without a race, so it stops growing there/);
+  assert.doesNotMatch(at, /already past/);
+  // Above it: held, and the copy does not present 24 km as the cap.
+  const above = targetOf(computeGoalProgress(noRaceInput(build(24, [6, 8, 8]))), 'metric');
+  assert.match(above, /long run 24 km — already past the ~21 km a long run needs without a race, so hold it here rather than add more/);
+  // Imperial: the ceiling is named in the runner's unit (~13 mi), the long run is 15 mi (24.1 km).
+  const mi = targetOf(computeGoalProgress(noRaceInput(build(24.1, [6, 8, 8]))), 'imperial');
+  assert.match(mi, /already past the ~13 mi a long run needs without a race/);
 });
