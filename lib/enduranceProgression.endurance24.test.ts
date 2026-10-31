@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addDayKey, enduranceWeekPlan, longRunPeakReachedOn, type PlanRun } from './enduranceProgression';
+import { addDayKey, enduranceWeekPlan, longRunPeakReachedOn, longRunStepKm, type PlanRun } from './enduranceProgression';
 
 const WEEK1 = '2026-09-14';
 const monday = (n: number): string => addDayKey(WEEK1, 7 * (n - 1));
@@ -155,9 +155,9 @@ test('a peak date is promised from the plan\'s ACTUAL next long runs, held weeks
   const runs = runsFor([15, 17, 19, 21, 23]);
   const plan = planOf(runs, 5, 0); // Monday 2026-10-12; the calendar's cutback week is Monday 2026-10-19
   const lastKm = 8.4;
-  const flat = (): string => { // the old model: +2 km on every Sunday, this week's included
+  const flat = (): string => { // the flat model: the plan's graded step (`longRunStepKm`) on every Sunday, this week's included
     let km = lastKm;
-    for (let sunday = addDayKey(monday(5), 6), i = 0; i < 14; sunday = addDayKey(sunday, 7), i++) { km = Math.min(15, km + 2); if (km >= 15) return sunday; }
+    for (let sunday = addDayKey(monday(5), 6), i = 0; i < 14; sunday = addDayKey(sunday, 7), i++) { km = longRunStepKm(km, 15); if (km >= 15) return sunday; }
     return 'never';
   };
   const real = longRunPeakReachedOn(plan, lastKm, 15, '2026-12-31', null);

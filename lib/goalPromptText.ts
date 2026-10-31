@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
+import { RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -199,7 +199,10 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
       // A held long run (after last week's jump) is not growing, whatever the peak says.
       const growing = plan.longRunHeld !== true && lrc != null && lrc.targetPeakKm != null
         && roundLongRunKm(lrc.peakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1) < roundLongRunKm(lrc.targetPeakKm, units === 'imperial' ? 1 / KM_PER_MILE : 1);
-      const grow = growing ? ` (the long run keeps growing ~${units === 'imperial' ? '1 mi' : '2 km'} a week toward its peak)` : '';
+      // Wave 26e group B: the step the NEXT week takes from this week's long run - the plan's graded `longRunStepKm`, in the runner's unit - not a literal.
+      const stepBase = plan.longRunKm ?? lrc?.lastKm ?? 0;
+      const stepUnits = Math.round(longRunStepAmountKm(stepBase, perKm) * perKm * 2) / 2;
+      const grow = growing ? ` (the long run keeps growing ~${stepUnits} ${units === 'imperial' ? 'mi' : 'km'} a week toward its peak)` : '';
       if (plan.goalReachedBefore === false) {
         return `- This week's target: build to the ${goal}/week goal${lr ? `; ${lr}${atNoRaceCeiling ? ceilingNote : plan.longRunHeld ? ' (held)' : grow}` : ''}, the rest easy — the first week at the goal, do not go past it${strides}`;
       }

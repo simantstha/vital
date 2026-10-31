@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { computeWeeklyReview as computeWeeklyReviewRaw, type WeeklyReview, type WeeklyReviewInput } from './weeklyReview';
 import { plainSpaces } from './displayText';
+import { LONG_RUN_STEP_10_TO_16_KM, roundLongRunKm } from './enduranceProgression';
 
 function computeWeeklyReview(input: WeeklyReviewInput): WeeklyReview {
   return JSON.parse(plainSpaces(JSON.stringify(computeWeeklyReviewRaw(input)))) as WeeklyReview;
@@ -73,11 +74,12 @@ test('"Next week" never promises the goal for a week that is the taper: "then th
   // A half on Sun 2026-11-29: Monday 11-16 is 13 days out (the taper). Reviewing 11-02: next week 11-09 builds to ~28 km.
   const race = { raceDate: '2026-11-29', raceDistanceKm: 21.1 };
   const r = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25], { weekStart: '2026-11-02', ...race }));
-  assert.equal(r.nextWeek, 'Build to ~28 km: long run 12 km, the rest mostly easy runs, plus 4–6 strides after one easy run; then the taper.');
+  // (The last long run is 10 km, 40% of the 25 km week: + the graded 1.5 km from 10 km, to the half km.)
+  assert.equal(r.nextWeek, `Build to ~28 km: long run ${roundLongRunKm(10 + LONG_RUN_STEP_10_TO_16_KM)} km, the rest mostly easy runs, plus 4–6 strides after one easy run; then the taper.`);
   assert.doesNotMatch(r.nextWeek, /the week after|toward 30/);
   // A race further out keeps the arithmetic.
   const far = computeWeeklyReview(planReview([15, 17, 19, 21, 23, 25], { weekStart: '2026-11-02', raceDate: '2026-12-27', raceDistanceKm: 21.1 }));
-  assert.equal(far.nextWeek, 'Build to ~28 km: long run 12 km, the rest mostly easy runs; 30 km the week after.');
+  assert.equal(far.nextWeek, `Build to ~28 km: long run ${roundLongRunKm(10 + LONG_RUN_STEP_10_TO_16_KM)} km, the rest mostly easy runs; 30 km the week after.`);
 });
 
 test('a comeback week\'s "Next week" climbs "back toward your usual ~N km", as the card says - not toward the weekly goal (22e)', () => {

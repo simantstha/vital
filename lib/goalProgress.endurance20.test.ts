@@ -139,8 +139,9 @@ test('recovery: "Set your next goal" is for week 1 only, and never offers a week
 test('build week: once the step is run the card warns while a day is left (a watch reason, not a spike); Sunday talks about next week', () => {
   const lastWeeks = [wk(23), wk(21), wk(19), wk(17), wk(15)];
   const saturday = '2026-10-10';
-  // 28 km by Saturday against a 25 km step, a long run still to come.
-  const sat = computeGoalProgress(input(weeks(saturday, [[[1, 9.4], [3, 9.3], [5, 9.3]], ...lastWeeks]), { todayKey: saturday }));
+  // 28 km by Saturday against a 25 km step, a long run still to come. (Four 7 km runs: three ~9.3 km ones would be within 10% of the 10 km long run the graded step plans,
+  // and a run of nearly the long run's length counts as the long run run - wave 26e group B.)
+  const sat = computeGoalProgress(input(weeks(saturday, [[[0, 7], [1, 7], [3, 7], [5, 7]], ...lastWeeks]), { todayKey: saturday }));
   assert.equal(sat.distance!.plan?.kind, 'build');
   assert.equal(sat.verdict, 'building');
   assert.match(sat.headline, /^Building — 23 km last week/);

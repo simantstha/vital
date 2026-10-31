@@ -2459,7 +2459,7 @@ function thenWindDown(phase: 'taper' | 'race_week'): string {
  * "Next week" for a build week: build toward the weekly target without a jump.
  * Next week's distance is the plan's step (~10% over this week, in the user's
  * unit — the same `stepTargetKm` the goal card shows for the week then under
- * way); the long run grows by at most 2 km and never past its peak target; the
+ * way); the long run grows by the graded step (`longRunStepKm`) and never past its peak target; the
  * rest of the growth goes to easy runs. Spells out the staging ("30 km the week
  * after") when the cap leaves the target out of reach for one more week.
  */
@@ -2471,7 +2471,7 @@ function buildNextWeekText(input: WeeklyReviewInput, next: EnduranceWeekPlan): s
   const nextUnits = Math.round(nextKm * perKm * 10) / 10;
   const goalUnits = next.goalKm * perKm;
 
-  // Long run: +2 km at most, never above the peak target; none without long-run data.
+  // Long run: the graded step at most, never above the peak target; none without long-run data.
   let longRunPart: string | null = null;
   const lr = next.longRun;
   if (next.longRunKm != null) {
@@ -2521,7 +2521,7 @@ function buildNextWeekText(input: WeeklyReviewInput, next: EnduranceWeekPlan): s
  *    from the jump — "Hold around ~28 km next week";
  *  - restart (after a break or a very light week): a share of the median week by the
  *    gap, easy; the weeks after climb back toward that median;
- *  - build: ~10% up, long run +2 km; maintain: hold the weekly goal, the long
+ *  - build: ~10% up, long run + the graded step; maintain: hold the weekly goal, the long
  *    run keeps stepping toward its peak.
  * Null without a plan (no distance target, or nothing run yet).
  */

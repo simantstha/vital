@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enduranceWeekPlan, type PlanRun } from './enduranceProgression';
+import { enduranceWeekPlan, longRunStepKm, type PlanRun } from './enduranceProgression';
 import { computeGoalProgress as computeGoalProgressRaw, type GoalProgress, type GoalProgressInput } from './goalProgress';
 import { plainSpaces } from './displayText';
 
@@ -135,11 +135,11 @@ test('the trim belongs to the week being read: the review\'s read of the coming 
 
 test('Sunday morning, long run ahead: the card does not judge the week - it says what the long run is for (never "Behind")', () => {
   const sun = '2026-10-11';
-  // Week 2: Tue 3 / Thu 3 / Sat 3 = 9 of ~17, the 8 km long run ahead.
+  // Week 2: Tue 3 / Thu 3 / Sat 3 = 9 of ~17, the 7 km long run ahead (6 km + the graded +1 km step; it was 8 km at a flat +2).
   const card = computeGoalProgress(input(weeks(sun, [[[1, 3], [3, 3], [5, 3]], wk(15)]), { todayKey: sun }));
   assert.doesNotMatch(card.headline, /Behind|Week done|a bit under|Holding steady/);
   assert.equal(card.distance!.plan?.longRunAhead, true);
-  assert.match(card.reasons.find(r => r.kind === 'plan')!.text, /long run 8 km/);
+  assert.match(card.reasons.find(r => r.kind === 'plan')!.text, /long run 7 km/);
   // The same Sunday evening, long run in: the week is judged in the Monday review's words.
   const done = computeGoalProgress(input(weeks(sun, [[[1, 3], [3, 3], [5, 3], [6, 8]], wk(15)]), { todayKey: sun }));
   assert.match(done.headline, /^Week done — 17 of ~17 km, on plan$/);
@@ -228,14 +228,21 @@ test('the sessions line quotes "before your break" only from weeks older than th
   assert.equal(sessions([[], [], [], wk(30), wk(30)]), '4 runs a week before your break');
 });
 
-test('a peak date is promised only when the long run can get there: 10 -> 12 -> 14 -> 15 km needs three Sundays before the peak-by day (23e P3-i)', () => {
-  // A half: the peak is due 14 days before the race. Tuesday 2026-10-06, last long run 10 km (40% of 25 km): Sundays 10-11 (12), 10-18 (14), 10-25 (15).
+test('a peak date is promised only when the long run can get there: 10 -> 11.5 -> 13 -> (cutback week holds) -> 14.5 -> 15 km needs five Sundays before the peak-by day (23e P3-i, graded step)', () => {
+  // A half: the peak is due 14 days before the race. Tuesday 2026-10-06, last long run 10 km (40% of 25 km). The graded step (+1.5 km from 10 km): Sundays 10-11 (11.5),
+  // 10-18 (13), 10-25 (13: the calendar's cutback week 10-19 holds the long run), 11-01 (14.5), 11-08 (15). At a flat +2 km it was 12, 14, 15 on 10-11, 10-18, 10-25.
   const history = [[[1, 4]] as Array<[number, number]>, wk(25), wk(23), wk(21), wk(19)];
   const longRunLine = (raceDate: string): string => computeGoalProgress(input(weeks(TODAY, history), { race: { date: raceDate, distanceKm: 21.1 }, racePeakWeekKm: 30 })).reasons.find(r => r.kind === 'long_run')!.text;
-  // Race 11-08: the peak is due 10-25 - the third Sunday, in time.
-  assert.match(longRunLine('2026-11-08'), /^Long run 10 km · build to 15 km by late Oct/);
-  // Race 11-01: the peak is due 10-18, two Sundays away (14 km) - 15 km would come a week after the date, so no date is promised.
-  const late = longRunLine('2026-11-01');
+  const sundays: Array<[string, number]> = [];
+  for (let km = 10, sunday = '2026-10-11'; km < 15 - 1e-9; sunday = addDays(sunday, 7)) {
+    if (sunday !== '2026-10-25') km = longRunStepKm(km, 15);
+    sundays.push([sunday, km]);
+  }
+  assert.deepEqual(sundays, [['2026-10-11', 11.5], ['2026-10-18', 13], ['2026-10-25', 13], ['2026-11-01', 14.5], ['2026-11-08', 15]]);
+  // Race 11-22: the peak is due 11-08 - the fifth Sunday, in time.
+  assert.match(longRunLine('2026-11-22'), /^Long run 10 km · build to 15 km by (?:early |mid-|late )Nov/);
+  // Race 11-15: the peak is due 11-01, a week before the 15 km arrives (14.5 km) - no date is promised.
+  const late = longRunLine('2026-11-15');
   assert.match(late, /^Long run 10 km · peak target 15 km/);
   assert.doesNotMatch(late, /build to|by (early|mid|late)/);
 });

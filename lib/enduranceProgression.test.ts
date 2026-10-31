@@ -22,6 +22,8 @@ import {
   longRunCapNote,
   longRunPeakTarget,
   longRunStepKm,
+  LONG_RUN_STEP_10_TO_16_KM,
+  LONG_RUN_STEP_UNDER_10_KM,
   mondayOfDay,
   overCapPhrase,
   peakWeekKmBeforeTaper,
@@ -73,13 +75,15 @@ test('weekStepTargetKm: km in, km out; the step is rounded in the display unit',
   assert.equal(weekStepTargetKm(10, 30, 0), null);
 });
 
-test('longRunStepKm: +2 km at most, never past the peak target, held at the peak', () => {
-  assert.equal(longRunStepKm(14, 18), 16);
+test('longRunStepKm: the graded step at most, never past the peak target, held at the peak', () => {
+  assert.equal(longRunStepKm(14, 18), 14 + LONG_RUN_STEP_10_TO_16_KM); // 10 to under 16 km: +1.5
+  assert.equal(longRunStepKm(16, 18), 18); // from 16 km: +2 (the peak is 2 km away)
   assert.equal(longRunStepKm(17, 18), 18); // only 1 km of room
   assert.equal(longRunStepKm(18, 18), 18); // at the peak: hold
   assert.equal(longRunStepKm(20, 18), 18); // past the peak: back to it
-  assert.equal(longRunStepKm(14, null), 16); // no peak target: +2 km
-  assert.equal(longRunStepKm(14.3, undefined), 16.3);
+  assert.equal(longRunStepKm(14, null), 14 + LONG_RUN_STEP_10_TO_16_KM); // no peak target: the graded step
+  assert.equal(longRunStepKm(14.3, undefined), 15.8);
+  assert.equal(longRunStepKm(8, null), 8 + LONG_RUN_STEP_UNDER_10_KM); // under 10 km: +1
   assert.equal(longRunAtPeak(18, 18), true);
   assert.equal(longRunAtPeak(17, 18), false);
   assert.equal(longRunAtPeak(30, null), false);
@@ -343,14 +347,15 @@ test('baseline: no earlier run at all — no target, rated on consistency (3+ ru
   assert.equal(second.last?.kind, 'baseline');
 });
 
-test('build: ~10% over last week (at least +1), the long run +2 km and never past 60% of the week', () => {
+test('build: ~10% over last week (at least +1), the long run + the graded step and never past 60% of the week', () => {
   const runs = runsFor([15, 17, 19]);
   const plan = planFor(runs, 4);
   assert.equal(plan.kind, 'build');
   assert.equal(plan.targetKm, 21);
-  // Last long run 7.6 km (40% of 19): +2 -> 9.6, rounded to the half km.
+  // Last long run 7.6 km (40% of 19): +1 (under 10 km) -> 8.6, rounded to the half km.
   assert.equal(plan.longRun.lastKm, 7.6);
-  assert.equal(plan.longRunKm, 9.5);
+  assert.equal(plan.longRunKm, roundLongRunKm(7.6 + LONG_RUN_STEP_UNDER_10_KM));
+  assert.equal(plan.longRunKm, 8.5);
   assert.equal(plan.last?.changePct, 12); // 17 -> 19 km: the one growth number, finished weeks only
   assert.equal(plan.last?.grade?.level, 'good');
   assert.ok(plan.band.goodFromKm <= 19 && plan.band.mixedFromKm < plan.band.goodFromKm);
@@ -591,7 +596,7 @@ test('the break rule follows the runner\'s own rhythm: a once-a-week runner is n
   assert.notEqual(friday.kind, 'restart');
 });
 
-test('maintain: at the weekly goal the plan holds it and the long run keeps stepping +2 km toward the peak target', () => {
+test('maintain: at the weekly goal the plan holds it and the long run keeps stepping (graded) toward the peak target', () => {
   const runs = runsFor([30, 30, 30, 30]);
   const race = { date: addDayKey(MON, 130), distanceKm: 21.1 };
   const plan = planFor(runs, 5, { race });
@@ -601,8 +606,8 @@ test('maintain: at the weekly goal the plan holds it and the long run keeps step
   assert.equal(plan.longRun.targetPeakKm, 15);
   assert.equal(plan.longRun.raceTargetKm, 18);
   assert.equal(plan.longRun.lastKm, 12); // 40% of 30
-  assert.equal(plan.longRunKm, 14);
-  assert.equal(plan.purpose.replace(/\u00a0/g, ' '), 'Hold 30 km this week: long run 14 km, the rest easy');
+  assert.equal(plan.longRunKm, 12 + LONG_RUN_STEP_10_TO_16_KM); // 12 km: +1.5
+  assert.equal(plan.purpose.replace(/\u00a0/g, ' '), 'Hold 30 km this week: long run 13.5 km, the rest easy');
   assert.equal(plan.band.overKm, null); // at the goal, going past it is just a hit target
   // The peak target caps the long run; "no race" has no peak but is capped at half of the week (a longer one already run is held).
   // Week 4: a 17 km long run in an otherwise ordinary 30 km week.
@@ -768,10 +773,10 @@ test('a long run that jumped 2+ km over its plan (and 2+ km over the one before)
   const plan = planFor(runs, 5);
   assert.equal(plan.cutback, null);
   assert.equal(plan.longRunJump?.actualKm, 14);
-  assert.equal(plan.longRunJump?.plannedKm, 12);
+  assert.equal(plan.longRunJump?.plannedKm, roundLongRunKm(10 + LONG_RUN_STEP_10_TO_16_KM)); // the plan's step from the 10 km before it: 11.5
   assert.equal(plan.longRunKm, 14); // held at 14, not 16
   assert.match(plan.purpose.replace(/ /g, ' '), /long run 14 km \(held after last week's jump\)/);
-  // A +1 km creep is no jump; neither is a long run on plan.
+  // A +0.5 km creep is no jump; neither is a long run on plan.
   const creep = planFor([...week(0, 6, 15), ...week(1, 7, 17), ...week(2, 8, 19), ...week(3, 10, 23), ...week(4, 12, 25)], 5);
   assert.equal(creep.longRunJump, null);
 });

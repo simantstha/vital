@@ -1,8 +1,9 @@
 /**
  * Wave 26e group A - coaching arithmetic for the long run. Two caps: without a race the long run never steps above 21 km (13 mi) - a
  * general-fitness runner is not sent out for 30 km every Sunday - and a taper long run never passes its week's share (the late marathon
- * taper's Sunday, a week out, is 45% of the peak). Every test here was written BEFORE the rule it locks in. (Its own file, like the wave
- * 20 - 25 ones.)
+ * taper's Sunday, a week out, is 45% of the peak). Group B: the long-run STEP is graded by distance (+1 km under 10 km, +1.5 km to 16 km, +2 km
+ * from 16 km; +0.5 mi under 6 mi, +1 mi from it) - except while a restart / comeback / rebuild regains a distance the runner ran before the break.
+ * Every test here was written BEFORE the rule it locks in. (Its own file, like the wave 20 - 25 ones.)
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -13,6 +14,8 @@ import {
   addDayKey,
   enduranceWeekPlan,
   floorLongRunKm,
+  longRunPeakReachedOn,
+  longRunStepKm,
   noRaceLongRunMaxKm,
   peakWeekKmBeforeTaper,
   roundLongRunKm,
@@ -309,4 +312,144 @@ test('coach wording: AT the ceiling "it stops growing there"; ABOVE it "already 
   // Imperial: the ceiling is named in the runner's unit (~13 mi), the long run is 15 mi (24.1 km).
   const mi = targetOf(computeGoalProgress(noRaceInput(build(24.1, [6, 8, 8]))), 'imperial');
   assert.match(mi, /already past the ~13 mi a long run needs without a race/);
+});
+
+// ── 4. Group B: the long-run step is graded by distance ─────────────────────────────────────────────────────────────
+
+/** The step as the runner reads it: the next long run (rounded to the half unit, as the plan shows it) minus the last, in the display unit. */
+const stepOf = (lastKm: number, units = 1, opts?: { regain?: boolean }): number => Math.round((roundLongRunKm(longRunStepKm(lastKm, null, units, opts), units) - lastKm) * units * 100) / 100;
+
+test('longRunStepKm (km): +1 km under 10 km, +1.5 km from 10 to under 16 km, +2 km from 16 km', () => {
+  assert.equal(stepOf(6), 1);
+  assert.equal(stepOf(9.5), 1);
+  assert.equal(stepOf(10), 1.5);
+  assert.equal(stepOf(15.5), 1.5);
+  assert.equal(stepOf(16), 2);
+  assert.equal(stepOf(24), 2);
+  // The 6 km -> 8 km jump (+33%) of the flat rule is now 6 -> 7 (+17%).
+  assert.equal(longRunStepKm(6, 18), 7);
+  assert.equal(longRunStepKm(10, 18), 11.5);
+  assert.equal(longRunStepKm(16, 18), 18);
+  // Still never past the peak target, held at it.
+  assert.equal(longRunStepKm(9.5, 10), 10);
+  assert.equal(longRunStepKm(17, 18), 18);
+  assert.equal(longRunStepKm(18, 18), 18);
+  assert.equal(longRunStepKm(20, 18), 18);
+});
+
+test('longRunStepKm (imperial): +0.5 mi under 6 mi, +1 mi from 6 mi - graded on the distance as the runner reads it', () => {
+  assert.equal(stepOf(4 * KM_PER_MILE, MI), 0.5);
+  assert.equal(stepOf(5.5 * KM_PER_MILE, MI), 0.5);
+  assert.equal(stepOf(6 * KM_PER_MILE, MI), 1);
+  assert.equal(stepOf(9 * KM_PER_MILE, MI), 1);
+  assert.equal(stepOf(14 * KM_PER_MILE, MI), 1);
+});
+
+test('longRunStepKm: a regain step (a restart / comeback / rebuild week) keeps the old +2 km (+1 mi), whatever the distance', () => {
+  assert.equal(stepOf(6, 1, { regain: true }), 2);
+  assert.equal(stepOf(12, 1, { regain: true }), 2);
+  assert.equal(stepOf(4 * KM_PER_MILE, MI, { regain: true }), 1);
+  assert.equal(longRunStepKm(6, 7, 1, { regain: true }), 7); // still never past the peak target
+  assert.equal(longRunStepKm(6, null, 1, { regain: false }), 7);
+  assert.equal(longRunStepKm(6, null), 7); // the default is the graded step
+});
+
+test('a 4-week build from a 6 km long run: no week grows the long run by more than 1 km while it is under 10 km', () => {
+  const { plans } = simulate({ goalKm: 40, baseKm: 20, baseLong: 6, days: [0, 2, 4, 6], weeks: 6, race: null });
+  const lr = longRuns(plans);
+  let prev = 6;
+  for (const km of lr) {
+    if (prev < 10) assert.ok(km - prev <= 1 + 1e-9, `${prev} -> ${km} km: ${lr.join(', ')}`);
+    prev = km;
+  }
+  // It still climbs: 7, 8, 9, 10 (a cutback week holds it).
+  assert.deepEqual(lr.slice(0, 4), [7, 8, 9, 10]);
+});
+
+test('a comeback regains a distance the runner ran before the break at the old +2 km a week; once it is back the step is graded', () => {
+  // Six 30 km weeks with a 14 km Sunday, an empty week, then the plan week by week (the runner obeys it).
+  const runs: PlanRun[] = [];
+  const add = (w: number, total: number, long: number): void => {
+    const mon = addDayKey(D0, w * 7);
+    const rest = (total - long) / 3;
+    [0, 2, 4, 6].forEach((d, i) => runs.push({ day: addDayKey(mon, d), km: Math.round((i === 3 ? long : rest) * 10) / 10 }));
+  };
+  for (let w = 0; w < 6; w++) add(w, 30, 14);
+  const rows: Array<{ kind: string; comeback: boolean; last: number | null; long: number | null }> = [];
+  for (let w = 7; w < 13; w++) {
+    const plan = enduranceWeekPlan({ runs, weekStart: addDayKey(D0, w * 7), goalKm: 40, race: null, today: addDayKey(D0, w * 7), unitsPerKm: 1, goalStartDay: D0 });
+    rows.push({ kind: plan.kind, comeback: plan.comeback != null, last: plan.longRun.lastKm, long: plan.longRunKm });
+    const t = plan.targetKm ?? 20;
+    add(w, t, Math.min(plan.longRunKm ?? t / 4, t));
+  }
+  assert.equal(rows[0].kind, 'restart');
+  // The comeback weeks (long run still under the 14 km from before the break): +2 km on the last one (rounded to the half km).
+  const comeback = rows.filter(r => r.comeback);
+  assert.ok(comeback.length >= 3, JSON.stringify(rows));
+  for (const r of comeback) assert.equal(r.long, roundLongRunKm((r.last as number) + 2), `comeback: ${JSON.stringify(r)}`);
+  // After the comeback, with the long run back above the pre-break 14 km, the step is the graded one (+1.5 km from 14.5 km).
+  const after = rows.find(r => !r.comeback && r.kind === 'build' && (r.last as number) >= 14);
+  assert.ok(after != null, JSON.stringify(rows));
+  assert.equal(after.long, roundLongRunKm((after.last as number) + 1.5));
+});
+
+test('longRunPeakReachedOn follows the graded step: a late 6 km runner needs 4 more Sundays to reach 10 km, not 2', () => {
+  const plan = { weekStart: '2026-03-02', longRunKm: 6, longRunAhead: false, buildWeeks: 0, cutbackOwed: false, kind: 'build' as const, unitsPerKm: 1 };
+  // 6 -> 7 -> 8 -> 9 -> 10: the 4th Sunday after this one (no cutback is in the way between 2026-03-09 and 2026-03-29 for a runner on 0 build weeks).
+  const on = longRunPeakReachedOn(plan, 6, 10, '2026-12-31', null);
+  assert.ok(on != null && on >= '2026-03-29', `${on}`);
+  // The same plan in miles: 4 mi -> 6 mi at +0.5 mi a week takes 4 Sundays too (it took 2 at the flat +2 km ~ +1.2 mi... 2 at +1 mi).
+  const mi = longRunPeakReachedOn({ ...plan, unitsPerKm: MI }, 4 * KM_PER_MILE, 6 * KM_PER_MILE, '2026-12-31', null);
+  assert.ok(mi != null && mi >= '2026-03-29', `${mi}`);
+});
+
+test('imperial: a 4-week build from a 4 mi long run grows it by at most 0.5 mi a week while it is under 6 mi', () => {
+  const { plans } = simulate({ goalKm: 25 * KM_PER_MILE, baseKm: 12 * KM_PER_MILE, baseLong: 4 * KM_PER_MILE, days: [0, 2, 4, 6], weeks: 6, units: MI });
+  const mi = longRuns(plans).map(k => Math.round(k * MI * 100) / 100);
+  let prev = 4;
+  for (const m of mi) {
+    if (prev < 6) assert.ok(m - prev <= 0.5 + 0.06, `${prev} -> ${m} mi: ${mi.join(', ')}`);
+    prev = m;
+  }
+  assert.ok(mi[0] === 4.5 && mi[1] === 5, mi.join(', '));
+});
+
+test('the card, the coach, the opener and the review all name the long run the plan has (one step, derived from the last long run)', () => {
+  // Five 4-run weeks (15..23 km) with a 40% Sunday; today is the Monday of the sixth week, nothing run yet: the card's plan line, the coach's target line and the
+  // structured long run all say the graded step from the last long run (9.2 km from 23 km x 0.4 -> +1).
+  const monday = '2026-10-05';
+  const runs: Run[] = [];
+  [15, 17, 19, 21, 23].forEach((km, i) => {
+    const mon = addDayKey(monday, -7 * (5 - i));
+    [[1, km * 0.2], [3, km * 0.2], [5, km * 0.2], [6, km * 0.4]].forEach(([d, k]) => runs.push(run(addDayKey(mon, d), Math.round(k * 10) / 10)));
+  });
+  const gp = computeGoalProgress({ ...noRaceInput(runs), todayKey: monday, target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 40 } });
+  const plan = gp.distance?.plan;
+  assert.ok(plan != null && plan.longRunKm != null);
+  const last = gp.longRun?.lastKm as number;
+  const expected = roundLongRunKm(longRunStepKm(last, null));
+  assert.equal(plan.longRunKm, expected);
+  assert.equal(gp.longRun?.nextKm, expected);
+  assert.match(plan.purpose, new RegExp(`long run ${expected} km`));
+  const text = formatGoalProgressLines(gp, 'metric').join('\n');
+  assert.match(text, new RegExp(`next long run ~${expected} km`));
+  assert.match(text, new RegExp(`long run ${expected} km`));
+  assert.equal(expected - last <= 1.5 + 1e-9, true, `${last} -> ${expected}`);
+});
+
+test('Sunday morning, before the run: an easy run within 10% of the long run is not the long run run while the week still has room for it', () => {
+  // Four 6 km weeks (Tue / Thu / Sat / Sun), then a week of 6.3 / 6.4 / 6.3 by Saturday against a ~26 km step with a 7 km long run planned: 19 + 7 = 26, so the long run is still ahead.
+  const runs: PlanRun[] = [];
+  for (let w = 0; w < 2; w++) {
+    const mon = addDayKey(D0, w * 7);
+    [1, 3, 5, 6].forEach(d => runs.push({ day: addDayKey(mon, d), km: 6 }));
+  }
+  const monday = addDayKey(D0, 14);
+  [[1, 6.3], [3, 6.4], [5, 6.3]].forEach(([d, km]) => runs.push({ day: addDayKey(monday, d), km }));
+  const sunday = addDayKey(monday, 6);
+  const plan = enduranceWeekPlan({ runs, weekStart: monday, goalKm: 40, race: null, today: sunday, unitsPerKm: 1, goalStartDay: D0 });
+  assert.equal(plan.longRunAhead, true, `${plan.purpose}`);
+  // The long run really run on Saturday (the week at its number) is still done.
+  const done = enduranceWeekPlan({ runs: [...runs.filter(r => r.day < addDayKey(monday, 5)), { day: addDayKey(monday, 1), km: 6 }, { day: addDayKey(monday, 3), km: 6 }, { day: addDayKey(monday, 5), km: 12 }], weekStart: monday, goalKm: 40, race: null, today: sunday, unitsPerKm: 1, goalStartDay: D0 });
+  assert.equal(done.longRunAhead, false, `${done.purpose}`);
 });

@@ -17,7 +17,8 @@
  *
  * Rule: a week may grow ~10% over the previous one (at least +1 unit so a very
  * small week still moves), never past the weekly target; the long run grows by
- * at most 2 km and never past its peak target.
+ * a graded step (1 km under 10 km, 1.5 km to 16 km, 2 km from there; 0.5 / 1 mi)
+ * and never past its peak target.
  *
  * Race lifecycle (same module, same rule for every surface): with a race date
  * the calendar decides a RACE PHASE — build, taper, race week (0–7 days out,
@@ -53,7 +54,7 @@ import { KM_PER_MILE } from './metricFormat';
 
 /** Weekly distance may grow by at most this fraction week over week (the ~10% rule). */
 export const WEEKLY_DISTANCE_GROWTH = 0.1;
-/** The long run may grow by at most this many km in a week. */
+/** The longest the long run grows in a week (km): the step from 16 km, a regain step, and the "jumped" threshold of the overreach read. */
 export const LONG_RUN_MAX_STEP_KM = 2;
 /** A base week under this much running (in the display unit) has nothing to take 10% of. */
 export const MIN_BASE_WEEK = 1;
@@ -104,15 +105,43 @@ export function weekStepOrGoalKm(lastWeekKm: number | null, weeklyTargetKm: numb
 }
 
 /**
- * Next week's long run (km): +2 km on the last one, never past the peak target
- * and not past it even when the last long run is already there (then the peak
- * itself, i.e. "hold"). Without a peak target it is simply last + 2 km (the plan then holds it under the no-race ceiling, `capNoRaceLongRunKm`).
+ * Wave 26e: the long-run step is GRADED by the distance the runner reads, because a flat +2 km is +33% on a 6 km long run and +12% on a 16 km one. Under 10 km it
+ * is +1 km, from 10 to under 16 km +1.5 km, from 16 km +2 km (the old step); in miles under 6 mi +0.5 mi, from 6 mi +1 mi. That is roughly 10-17% at every length.
+ * A REGAIN step - a restart, comeback or rebuild week whose long run is still under the longest run from before the break or the race - keeps the old +2 km
+ * (+1 mi): the legs ran that distance recently, so it is not new load.
  */
-export function longRunStepKm(lastKm: number, targetPeakKm: number | null | undefined): number {
+export const LONG_RUN_STEP_UNDER_10_KM = 1;
+export const LONG_RUN_STEP_10_TO_16_KM = 1.5;
+export const LONG_RUN_STEP_UNDER_6_MI = 0.5;
+export const LONG_RUN_STEP_FROM_6_MI = 1;
+
+/**
+ * The size of the long-run step in km, from the long run (`lastKm`) it grows. `unitsPerKm` is the display unit (below 1 = miles: graded on the miles the runner
+ * reads). `regain`: the old +2 km (+1 mi). The step before it is clamped to the peak target - `longRunStepKm` does that.
+ */
+export function longRunStepAmountKm(lastKm: number, unitsPerKm = 1, regain = false): number {
+  const units = Number.isFinite(unitsPerKm) && unitsPerKm > 0 ? unitsPerKm : 1;
+  if (units < 1) {
+    const mi = Math.round(lastKm * units * 100) / 100;
+    const step = regain ? LONG_RUN_STEP_FROM_6_MI : mi < 6 - 1e-9 ? LONG_RUN_STEP_UNDER_6_MI : LONG_RUN_STEP_FROM_6_MI;
+    return step / units;
+  }
+  if (regain) return LONG_RUN_MAX_STEP_KM;
+  const km = Math.round(lastKm * units * 100) / 100;
+  return km < 10 - 1e-9 ? LONG_RUN_STEP_UNDER_10_KM : km < 16 - 1e-9 ? LONG_RUN_STEP_10_TO_16_KM : LONG_RUN_MAX_STEP_KM;
+}
+
+/**
+ * Next week's long run (km): the graded step (`longRunStepAmountKm`) on the last one, never past the peak target and not past it even when the last long run is
+ * already there (then the peak itself, i.e. "hold"). Without a peak target it is simply last + the step (the plan then holds it under the no-race ceiling,
+ * `capNoRaceLongRunKm`). `unitsPerKm` and `opts.regain` are optional: the default is the km step, not a regain.
+ */
+export function longRunStepKm(lastKm: number, targetPeakKm: number | null | undefined, unitsPerKm = 1, opts: { regain?: boolean } = {}): number {
   const round1 = (n: number): number => Math.round(n * 10) / 10;
-  if (targetPeakKm == null) return round1(lastKm + LONG_RUN_MAX_STEP_KM);
+  const step = longRunStepAmountKm(lastKm, unitsPerKm, opts.regain === true);
+  if (targetPeakKm == null) return round1(lastKm + step);
   if (lastKm >= targetPeakKm) return targetPeakKm;
-  return round1(lastKm + Math.min(LONG_RUN_MAX_STEP_KM, targetPeakKm - lastKm));
+  return round1(lastKm + Math.min(step, targetPeakKm - lastKm));
 }
 
 /**
@@ -763,7 +792,7 @@ export interface PlanLongRun {
   targetPeakKm: number | null;
   /** The race-distance peak when the cap at the weekly goal held `targetPeakKm` lower (then say so, once); null otherwise. */
   raceTargetKm: number | null;
-  /** The week's long run: min(lastKm + 2 km, the peak target); rounded to 0.5 of the display unit. */
+  /** The week's long run: min(lastKm + the graded step, the peak target); rounded to 0.5 of the display unit. */
   nextKm: number | null;
   /**
    * Wave 25e: the long run the week's cards QUOTE as its plan - the figure Saturday's trim gave ("keep Sunday's long run to ~9 km") when a trim named one, else the
@@ -1407,8 +1436,28 @@ export function taperLongRunKm(
   return planned > cap + 1e-9 ? floorLongRunKm(cap, unitsPerKm) : planned;
 }
 
+/** Wave 26e group B: how far back the "longest run before the break or the race" a regaining long run is measured against reaches (8 weeks). */
+const REGAIN_LOOKBACK_DAYS = 56;
+
 /**
- * The next long run (km) for a plan: min(last + 2 km, the peak target), never
+ * Wave 26e group B: is this week's long run REGAINING a distance the runner ran recently? Only a restart, comeback or rebuild week can (`regainState`), and only
+ * while the long run it grows from (`lastKm`) is still under the longest run of the 8 weeks before the week - before the race for a rebuild - the break itself and
+ * the race left out. Then the long run keeps the old +2 km step; once it is back, or in any plain build week, the step is the graded one.
+ */
+function regainingLongRun(ctx: PlanCtx, w: string, regainState: boolean, lastKm: number | null): boolean {
+  if (!regainState || lastKm == null) return false;
+  const anchor = ctx.raceDate != null && dayIndex(w) > dayIndex(ctx.raceDate) ? ctx.raceDate : w;
+  const from = addDayKey(anchor, -REGAIN_LOOKBACK_DAYS);
+  let best = 0;
+  for (const r of ctx.runs) {
+    if (r.day < from || r.day >= anchor || r.day === ctx.raceDate) continue;
+    if (r.km > best) best = r.km;
+  }
+  return lastKm < round1(best) - 1e-9;
+}
+
+/**
+ * The next long run (km) for a plan: min(last + the graded step, the peak target), never
  * above half of the week's target (40% in a restart week; unless the last long
  * run was already above that, then it is held), rounded to 0.5 of the display
  * unit. A hold week keeps the last one; a taper week runs about two thirds of
@@ -1425,6 +1474,7 @@ function nextLongRun(
   cutback = false,
   keepLastLong = true,
   taperInfo: RacePhaseInfo | null = null,
+  regain = false,
 ): number | null {
   switch (kind) {
     case 'baseline':
@@ -1453,7 +1503,8 @@ function nextLongRun(
       }
       if (heldKm != null && !restarting) return roundLongRunKm(heldKm, ctx.units);
       // Wave 26e: without a race there is no peak to build to - the long run stops at the ceiling (21 km / 13 mi), held there when it is already above it.
-      const stepped = longRunStepKm(lr.lastKm, lr.targetPeakKm);
+      // Wave 26e group B: the step is graded by distance; a restart / comeback / rebuild week still under the pre-break long run keeps the old +2 km (`regain`).
+      const stepped = longRunStepKm(lr.lastKm, lr.targetPeakKm, ctx.units, { regain });
       const next = ctx.raceKm == null ? capNoRaceLongRunKm(stepped, lr.lastKm, ctx.units) : stepped;
       // A restart week starts the long run again from the recent longest, but never past 40% of the (gentle) restart week.
       // (The hold AT a comeback ceiling, and the week after it, keep no such exception: the week is lowered below the spike's long run.)
@@ -2193,7 +2244,8 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
 
   // The long run the week would plan without a light-week cap (the light-week read and the easing-off read both quote it).
   const heldLongRun = longRunJump?.heldKm ?? null;
-  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null, hold?.ceiling !== true && prevPlan?.hold?.ceiling !== true, info);
+  const regain = regainingLongRun(ctx, w, restart != null || comeback != null || rebuild != null, lr0.lastKm);
+  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null, hold?.ceiling !== true && prevPlan?.hold?.ceiling !== true, info, regain);
 
   // The week before a taper (or race week): the next Monday's phase is wind-down. Easing off is the plan's own next step.
   const nextWindPhase = buildLike && info != null && info.phase === 'build' ? phaseAt(ctx, addDayKey(w, 7))?.phase : undefined;
@@ -2272,6 +2324,13 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     // day any run logged TODAY is the long run (a 12 km Sunday run against a planned 14 is the long run run short, not one still to come).
     const ranOnLastDay = lastDay && ctx.runs.some(r => r.day === ctx.today && r.day !== ctx.raceDate);
     longRunAhead = longestToday < plannedNextKm * LONG_RUN_DONE_FRACTION && !ranOnLastDay;
+    // Wave 26e group B: the graded step puts a low-volume week's long run within 10% of its easy runs (a 6.4 km Saturday run against a 7 km long run), so an easy run can read as the
+    // long run run. On the week's last morning, before today's run, that is not proof while the week still has room for the long run: 19 of ~26 km with 7 km planned is a long run
+    // ahead, not "Week done - a bit under the step".
+    if (!longRunAhead && lastDay && !ranOnLastDay && targetKm != null && lightWeek == null && easingOff == null && !onBreak) {
+      const through = ctx.runs.filter(r => r.day >= w && r.day < ctx.today && r.day !== ctx.raceDate).reduce((a, r) => a + r.km, 0);
+      longRunAhead = through + plannedNextKm <= targetKm * weekLimitFraction(kind) + 1e-9;
+    }
     const budgetRuns = ctx.runs.filter(r => r.day >= w && r.day <= (lastDay ? addDayKey(ctx.today, -1) : ctx.today) && r.day !== ctx.raceDate);
     const longestThen = Math.max(0, ...budgetRuns.map(r => r.km));
     const doneNow = budgetRuns.reduce((a, r) => a + r.km, 0);
@@ -2466,8 +2525,8 @@ export function longRunClimbKnown(plan: Pick<EnduranceWeekPlan, 'kind'> & Partia
 }
 
 /**
- * Wave 24e: the Sunday on which the plan's own long run first reaches `targetPeakKm` - the plan's ACTUAL next long runs, held weeks included, not a flat "+2 km a Sunday":
- * this week's long run as the plan has it (held after a jump, a cutback or a restart cap, trimmed to what is left), then +2 km on each coming Sunday except the cutback
+ * Wave 24e: the Sunday on which the plan's own long run first reaches `targetPeakKm` - the plan's ACTUAL next long runs, held weeks included, not a flat "+2 km a Sunday" (the graded `longRunStepKm`, in the plan's unit):
+ * this week's long run as the plan has it (held after a jump, a cutback or a restart cap, trimmed to what is left), then the graded step on each coming Sunday except the cutback
  * weeks the calendar brings (they hold the long run: every 4th week after 3 build weeks, 2 when a cutback is owed, never the last build week before a taper). Null when it
  * is not reached by `byDay` (the peak date) or the taper starts first. `lastKm` is the longest run of the last 14 days. This week's Sunday counts only while this week's
  * long run is still to come.
@@ -2483,7 +2542,7 @@ export function longRunPeakReachedOn(
 ): string | null {
   const windDownAt = (monday: string): boolean => race?.date != null && isWindDownPhase(racePhase(race.date, monday, race.distanceKm));
   const units = plan.unitsPerKm ?? 1;
-  // Wave 25e (`opts.realClimb`, the DATE shown; whether a date is promised at all stays the plain +2 km rule): in a plain build / maintain / hold week the climb is also held to half of each coming week's target (`nextLongRun`'s cap), the weeks' numbers stepping ~10% a
+  // Wave 25e (`opts.realClimb`, the DATE shown; whether a date is promised at all stays the plain graded-step rule): in a plain build / maintain / hold week the climb is also held to half of each coming week's target (`nextLongRun`'s cap), the weeks' numbers stepping ~10% a
   // week toward the goal (`weekStepOrGoalKm`; a cutback week is lower and the week after it steps from the full one) - the date the plan REALLY gets there, which an
   // obedient runner meets ("early May", not "mid-Apr" and not the "early Jun" deadline).
   let normalKm: number | null = opts.realClimb === true && longRunClimbKnown(plan) ? (plan.cutback?.normalKm ?? (plan.targetKm as number)) : null;
@@ -2505,7 +2564,7 @@ export function longRunPeakReachedOn(
       if (held) builds = 0;
       else {
         const before = km;
-        km = longRunStepKm(km, targetPeakKm);
+        km = longRunStepKm(km, targetPeakKm, units);
         if (normalKm != null) {
           normalKm = weekStepOrGoalKm(normalKm, plan.goalKm as number, units);
           const cap = Math.max(weekShareKm(normalKm, LONG_RUN_MAX_WEEK_SHARE, units), before);

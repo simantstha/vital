@@ -444,7 +444,7 @@ export interface GoalLongRunProgress {
   /** Peak long-run distance to build to before the taper (by race distance); null without a race distance. */
   targetPeakKm: number | null;
   /**
-   * The next long run from the week plan: min(lastKm + 2 km, the peak target); additive, absent when there is none to plan. Wave 25e: on the week's last day, once
+   * The next long run from the week plan: min(lastKm + the graded step, the peak target); additive, absent when there is none to plan. Wave 25e: on the week's last day, once
    * its long run is run, NEXT week's long run (the number Monday's plan shows; absent when next week plans none).
    */
   nextKm?: number | null;
@@ -3261,7 +3261,7 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
   const word = longRunWord(lr.lastKm, unitsPerKm(input));
   const lead = `${word.charAt(0).toUpperCase()}${word.slice(1)} ${fmtDistance(input, lr.lastKm)}`;
   const peakBy = addDays(race.date, -raceRules(race.distanceKm).peakLongRunLeadDays);
-  // Wave 23e P3-i: a peak date is promised only if the plan's long-run step (+2 km on each Sunday, this week's only while its long run is still to come)
+  // Wave 23e P3-i: a peak date is promised only if the plan's long-run step (the graded one on each Sunday, this week's only while its long run is still to come)
   // gets there by then; otherwise it is "peak target 15 km", with no date to miss ("build to 15 km by early Jun", then a 14 km peak "done" in the taper).
   // Wave 24e: and the plan's ACTUAL next long runs decide it, held weeks included (this week's long run as the plan has it, the cutback weeks that hold it):
   // `longRunPeakReachedOn`. Without a plan (nothing measured yet) the flat step stands.
@@ -3271,7 +3271,7 @@ function longRunReason(input: GoalProgressInput, lr: GoalLongRunProgress | null,
     reachedOn = longRunPeakReachedOn(ec.plan, lr.lastKm, lr.targetPeakKm, peakBy, input.race ?? null);
   } else {
     for (let step = 0, km = lr.lastKm, sunday = addDays(weekStart(input.todayKey), 6); step < 12 && reachedOn == null; step++, sunday = addDays(sunday, 7)) {
-      km = longRunStepKm(km, lr.targetPeakKm);
+      km = longRunStepKm(km, lr.targetPeakKm, unitsPerKm(input));
       if (km >= lr.targetPeakKm - 1e-9) reachedOn = sunday;
     }
   }

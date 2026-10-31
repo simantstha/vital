@@ -173,9 +173,18 @@ test('week plan: the coach is told the week\'s ONE target for every plan kind', 
   const climbing = (units: 'metric' | 'imperial', peakKm: number) => formatGoalProgressLines(gp({
     goal: 'endurance', distance: d({ kind: 'maintain', targetKm: 30, longRunKm: 15 }, 30), longRun: { lastKm: 12, peakKm, targetPeakKm: 15, nextKm: 14 },
   }), units).join('\n');
-  assert.match(climbing('metric', 12), /long run 15 km \(the long run keeps growing ~2 km a week toward its peak\)/);
+  // (Wave 26e group B: the step quoted is the plan's graded one from this week's long run - 15 km: +1.5 km, 9.3 mi: +1 mi - not a literal.)
+  assert.match(climbing('metric', 12), /long run 15 km \(the long run keeps growing ~1\.5 km a week toward its peak\)/);
   assert.match(climbing('imperial', 12), /\(the long run keeps growing ~1 mi a week toward its peak\)/);
-  assert.doesNotMatch(climbing('imperial', 12), /~2 km/);
+  assert.doesNotMatch(climbing('imperial', 12), /~2 km|~1\.5 km/);
+  const growsBy = (units: 'metric' | 'imperial', longRunKm: number): string => formatGoalProgressLines(gp({
+    goal: 'endurance', distance: d({ kind: 'maintain', targetKm: 30, longRunKm }, 30), longRun: { lastKm: longRunKm - 1, peakKm: longRunKm - 1, targetPeakKm: 30, nextKm: longRunKm },
+  }), units).join('\n');
+  assert.match(growsBy('metric', 8), /keeps growing ~1 km a week/); // under 10 km
+  assert.match(growsBy('metric', 12), /keeps growing ~1\.5 km a week/); // 10 to under 16 km
+  assert.match(growsBy('metric', 18), /keeps growing ~2 km a week/); // from 16 km
+  assert.match(growsBy('imperial', 6.4), /keeps growing ~0\.5 mi a week/); // 4 mi
+  assert.match(growsBy('imperial', 12.9), /keeps growing ~1 mi a week/); // 8 mi
   assert.doesNotMatch(climbing('metric', 15), /keeps growing/); // the peak is reached
   // He has never run the goal: it is "build to", not "hold".
   assert.match(lines(d({ kind: 'maintain', targetKm: 30, longRunKm: 15, goalReachedBefore: false }, 30)), /- This week's target: build to the 30\.0 km\/week goal; long run 15 km, the rest easy — the first week at the goal, do not go past it/);

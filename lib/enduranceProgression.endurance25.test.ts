@@ -142,7 +142,8 @@ test('item 9: a Sunday that is not one of the runner\'s run days has no "~2 km l
 });
 
 test('item 10: the peak date is the plan\'s real one, and the hold-week card has no "— fine."', () => {
-  assert.match(nbsp(snap('runner_on_plan_obedient', 36).card?.reasons.find(r => r.kind === 'long_run')?.text ?? ''), /build to 15 km by early May/);
+  // (Wave 26e group B: the graded long-run step 7, 8, 9, 10, [cutback], 11.5, 13, 14.5, [cutback], 15 gets the obedient runner there on Sunday 2026-05-17: "mid-May", it was "early May" at +2 km a week.)
+  assert.match(nbsp(snap('runner_on_plan_obedient', 36).card?.reasons.find(r => r.kind === 'long_run')?.text ?? ''), /build to 15 km by mid-May/);
   const hold = runTimeline('runner_on_plan').map(s => nbsp(s.card?.reasons.find(r => r.kind === 'plan')?.text ?? '')).find(t => /became a normal week/.test(t));
   assert.match(hold ?? '', /^Your cutback became a normal week\. Hold ~25 km this week/);
 });

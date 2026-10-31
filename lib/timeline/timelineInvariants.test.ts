@@ -3707,9 +3707,10 @@ invariant(RUNNERS, 'P3-c: "Hold 30 km" / "hold the 30 km/week goal" (card plan l
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-invariant(RUNNERS, 'P3-i: "build to 15 km by early Jun" is said only when the plan\'s long-run step (+2 km a Sunday, the next Sunday if this week\'s long run is run) reaches the peak target by then', (snaps, name) => {
+invariant(RUNNERS, 'P3-i: "build to 15 km by early Jun" is said only when the plan\'s graded long-run step (`longRunStepKm` in the runner\'s unit, one a Sunday, the next Sunday if this week\'s long run is run) reaches the peak target by then', (snaps, name) => {
   const out: Violation[] = [];
   let promises = 0;
+  const units = buildScenario(name).profile.units === 'imperial' ? 1 / KM_PER_MILE : 1;
   for (const snap of snaps) {
     const line = snap.card?.reasons.find(r => r.kind === 'long_run');
     const m = line ? /build to (\d+(?:\.\d+)?)\s?(km|mi) by (early |mid-|late )?([A-Z][a-z]{2})\b/.exec(plain(line.text)) : null;
@@ -3723,18 +3724,18 @@ invariant(RUNNERS, 'P3-i: "build to 15 km by early Jun" is said only when the pl
     const lastDay = new Date(Date.UTC(year, monthIdx, 0)).getUTCDate();
     const day = m[3] === 'early ' ? 7 : m[3] === 'mid-' ? 22 : lastDay;
     const promisedBy = `${year}-${String(monthIdx).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    // The plan's growth: +2 km a Sunday (capped at the peak target). This week's Sunday only counts while this week's long run is still to come.
+    // The plan's growth: the graded step a Sunday (capped at the peak target). This week's Sunday only counts while this week's long run is still to come.
     const longRunDone = snap.card?.distance?.plan?.longRunAhead !== true && weekdayOf(snap.date) === 'Sun' && (snap.card?.distance?.thisWeekKm ?? 0) > 0;
     let sunday = addDays(mondayOfDate(snap.date), longRunDone ? 13 : 6);
     let km = lr.lastKm;
     const target = lr.targetPeakKm as number;
     let reached: string | null = null;
     for (let i = 0; i < 12 && reached == null; i++) {
-      km = longRunStepKm(km, target);
+      km = longRunStepKm(km, target, units);
       if (km >= target - 1e-9) reached = sunday;
       sunday = addDays(sunday, 7);
     }
-    if (reached == null || reached > promisedBy) out.push({ snap, detail: `"${visible(line?.text ?? '')}": the long run (${lr.lastKm} km, +2 km a Sunday) first reaches ${target} km on ${reached ?? 'never'}, after ${promisedBy}` });
+    if (reached == null || reached > promisedBy) out.push({ snap, detail: `"${visible(line?.text ?? '')}": the long run (${lr.lastKm} km, the graded step a Sunday) first reaches ${target} km on ${reached ?? 'never'}, after ${promisedBy}` });
   }
   if (name === 'runner_messy' || name === 'runner_no_race' || name === 'runner_on_plan') assert.ok(promises > 0 || name === 'runner_no_race', `${name}: no peak date was promised, so this invariant checked nothing`);
   return out;
@@ -5682,9 +5683,10 @@ invariant(RUNNERS, 'item 7: the review of a restart week that ran more than it c
 });
 
 // item 8: no peak date during a scaled restart that the plan cannot keep.
-invariant(RUNNERS, 'item 8: during a mid-week (scaled) restart "build to 15 km by early Jun" is promised only if the restart\'s own climb (the full restart week\'s long run is capped at 40% of it, then +2 km a Sunday) gets there by then', (snaps, name) => {
+invariant(RUNNERS, 'item 8: during a mid-week (scaled) restart "build to 15 km by early Jun" is promised only if the restart\'s own climb (the full restart week\'s long run is capped at 40% of it, then the graded step a Sunday) gets there by then', (snaps, name) => {
   const out: Violation[] = [];
   let stubs = 0;
+  const units = buildScenario(name).profile.units === 'imperial' ? 1 / KM_PER_MILE : 1;
   for (const snap of snaps) {
     const mid = snap.card?.distance?.plan?.midWeekRestart;
     const lr = snap.card?.longRun;
@@ -5706,9 +5708,9 @@ invariant(RUNNERS, 'item 8: during a mid-week (scaled) restart "build to 15 km b
     let reached: string | null = null;
     for (let i = 0; i < 12 && reached == null; i++) {
       if (km >= lr.targetPeakKm - 1e-9) reached = sunday;
-      else { km = longRunStepKm(km, lr.targetPeakKm); sunday = addDays(sunday, 7); }
+      else { km = longRunStepKm(km, lr.targetPeakKm, units); sunday = addDays(sunday, 7); }
     }
-    if (reached == null || reached > promisedBy) out.push({ snap, detail: `"${visible(line.text)}" during a ${mid.fullKm} km restart (long run ${Math.floor(mid.fullKm * 0.4 * 2) / 2} km next Sunday, +2 a Sunday) reaches ${lr.targetPeakKm} km on ${reached ?? 'never'}, after ${promisedBy}` });
+    if (reached == null || reached > promisedBy) out.push({ snap, detail: `"${visible(line.text)}" during a ${mid.fullKm} km restart (long run ${Math.floor(mid.fullKm * 0.4 * 2) / 2} km next Sunday, the graded step a Sunday) reaches ${lr.targetPeakKm} km on ${reached ?? 'never'}, after ${promisedBy}` });
   }
   if (name === 'runner_messy') assert.ok(stubs > 0, `${name}: no scaled restart day was stepped, so this invariant checked nothing`);
   return out;
