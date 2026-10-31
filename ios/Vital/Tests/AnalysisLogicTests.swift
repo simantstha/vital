@@ -182,15 +182,51 @@ final class AnalysisLogicTests: XCTestCase {
         XCTAssertEqual(AnalysisLogic.sleepStageTone(.core, minutes: 10, usualMinutes: 400), .neutral)
     }
 
-    func testSleepStageBarFractionScalesToLargerOfTheTwo() {
-        // usual (70) is the larger value here, so 42/(70*1.15) is the bar fraction.
-        let fraction = AnalysisLogic.sleepStageBarFraction(minutes: 42, usualMinutes: 70)
-        XCTAssertEqual(fraction, 42.0 / (70.0 * 1.15), accuracy: 0.0001)
+    func testSleepStageScaleIsTheLongestOfAnyRowTimesHeadroom() {
+        // Core's 287 min (last night) is the longest value on any row.
+        let scale = AnalysisLogic.sleepStageScale(rows: [
+            (minutes: 90, usual: 80), (minutes: 100, usual: 95), (minutes: 287, usual: 270), (minutes: 29, usual: 14),
+        ])
+        XCTAssertEqual(scale, 287.0 * 1.15, accuracy: 0.0001)
     }
 
-    func testSleepStageUsualTickFractionIsOneWhenUsualIsTheLarger() {
-        let fraction = AnalysisLogic.sleepStageUsualTickFraction(minutes: 42, usualMinutes: 70)
-        XCTAssertEqual(fraction, 70.0 / (70.0 * 1.15), accuracy: 0.0001)
+    func testSleepStageScaleCountsAUsualLongerThanLastNight() {
+        let scale = AnalysisLogic.sleepStageScale(rows: [(minutes: 42, usual: 300), (minutes: 100, usual: 95)])
+        XCTAssertEqual(scale, 300.0 * 1.15, accuracy: 0.0001)
+    }
+
+    func testSleepStageScaleIgnoresRowsThatAreNotDrawn() {
+        // A row missing either value is not drawn, so it must not stretch the scale.
+        let scale = AnalysisLogic.sleepStageScale(rows: [(minutes: 60, usual: 50), (minutes: 500, usual: nil), (minutes: nil, usual: 600)])
+        XCTAssertEqual(scale, 60.0 * 1.15, accuracy: 0.0001)
+        XCTAssertEqual(AnalysisLogic.sleepStageScale(rows: []), 1.15, accuracy: 0.0001)
+    }
+
+    /// The bug: with a scale per row, "Awake 29m" drew as long as "Core 4h 47m".
+    func testSharedScaleKeepsAShortStageShorterThanALongOne() {
+        let scale = AnalysisLogic.sleepStageScale(rows: [(minutes: 287, usual: 270), (minutes: 29, usual: 14)])
+        let core = AnalysisLogic.sleepStageBarFraction(minutes: 287, scale: scale)
+        let awake = AnalysisLogic.sleepStageBarFraction(minutes: 29, scale: scale)
+        XCTAssertEqual(core, 287.0 / (287.0 * 1.15), accuracy: 0.0001)
+        XCTAssertEqual(awake, 29.0 / (287.0 * 1.15), accuracy: 0.0001)
+        XCTAssertLessThan(awake, core / 5)
+    }
+
+    func testSleepStageUsualTickSitsOnTheSameSharedScale() {
+        let scale = AnalysisLogic.sleepStageScale(rows: [(minutes: 287, usual: 270), (minutes: 29, usual: 14)])
+        XCTAssertEqual(AnalysisLogic.sleepStageUsualTickFraction(usualMinutes: 14, scale: scale), 14.0 / (287.0 * 1.15), accuracy: 0.0001)
+        XCTAssertEqual(AnalysisLogic.sleepStageUsualTickFraction(usualMinutes: 270, scale: scale), 270.0 / (287.0 * 1.15), accuracy: 0.0001)
+    }
+
+    func testSleepStageFractionsAreClampedToTheTrack() {
+        XCTAssertEqual(AnalysisLogic.sleepStageBarFraction(minutes: 500, scale: 100), 1)
+        XCTAssertEqual(AnalysisLogic.sleepStageBarFraction(minutes: -5, scale: 100), 0)
+        XCTAssertEqual(AnalysisLogic.sleepStageBarFraction(minutes: 10, scale: 0), 0)
+        XCTAssertEqual(AnalysisLogic.sleepStageUsualTickFraction(usualMinutes: 500, scale: 100), 1)
+    }
+
+    func testSleepStageLegendNamesTheBarAndTheTick() {
+        XCTAssertEqual(AnalysisLogic.sleepStageLegend, "bar = last night \u{00B7} tick = your usual")
     }
 
     // MARK: - Week strip layout

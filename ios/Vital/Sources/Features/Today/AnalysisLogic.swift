@@ -222,18 +222,31 @@ enum AnalysisLogic {
         }
     }
 
-    /// A stage bar's fill fraction (0...1) relative to the row's own scale —
-    /// each row is scaled independently to `max(minutes, usualMinutes) * headroom`
-    /// so a stage far below its usual doesn't render as a sliver next to an
-    /// oversized usual tick, and vice versa.
-    static func sleepStageBarFraction(minutes: Double, usualMinutes: Double, headroom: Double = 1.15) -> Double {
-        let scale = max(minutes, usualMinutes, 1) * headroom
+    /// The key printed with the stage rows (every variant that draws the ticks).
+    static let sleepStageLegend = "bar = last night \u{00B7} tick = your usual"
+
+    /// ONE minutes-per-full-width scale shared by every stage row: the largest
+    /// of any row's last-night and usual minutes, with `headroom` above it so the
+    /// longest bar or tick is never flush with the track's end. Per-row scales
+    /// made "Awake 29m" draw as long as "Core 4h 47m". Rows missing either value
+    /// are not drawn and do not count; with none, the scale is `headroom` (1 min).
+    static func sleepStageScale(rows: [(minutes: Double?, usual: Double?)], headroom: Double = 1.15) -> Double {
+        let longest = rows.compactMap { row -> Double? in
+            guard let minutes = row.minutes, let usual = row.usual else { return nil }
+            return max(minutes, usual)
+        }.max() ?? 0
+        return max(longest, 1) * headroom
+    }
+
+    /// A stage bar's fill fraction (0...1) on the shared `scale`.
+    static func sleepStageBarFraction(minutes: Double, scale: Double) -> Double {
+        guard scale > 0 else { return 0 }
         return min(max(minutes / scale, 0), 1)
     }
 
-    /// The usual-value tick's position (0...1) on that same per-row scale.
-    static func sleepStageUsualTickFraction(minutes: Double, usualMinutes: Double, headroom: Double = 1.15) -> Double {
-        let scale = max(minutes, usualMinutes, 1) * headroom
+    /// The usual-value tick's position (0...1) on that same shared `scale`.
+    static func sleepStageUsualTickFraction(usualMinutes: Double, scale: Double) -> Double {
+        guard scale > 0 else { return 0 }
         return min(max(usualMinutes / scale, 0), 1)
     }
 

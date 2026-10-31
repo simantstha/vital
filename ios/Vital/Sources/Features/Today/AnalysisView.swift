@@ -1338,7 +1338,7 @@ struct SleepAnalysisContent: View {
     private var stages: some View {
         if let hkStages = metrics?.stages, let usualStages = context?.sleepUsual?.stages {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                AnalysisSectionHeader(title: "Stages", trailing: "bar = last night · tick = your usual")
+                AnalysisSectionHeader(title: "Stages")
                 stageRowsCard(hkStages, usualStages: usualStages)
             }
         } else if let hkStages = metrics?.stages {
@@ -1346,16 +1346,25 @@ struct SleepAnalysisContent: View {
         }
     }
 
-    /// The "bar = last night · tick = your usual" card, pulled out of
-    /// `stages` so the devices stages switch (below) can reuse it for the
-    /// primary device's tab without duplicating its own section header.
+    /// The stage rows card (bar = last night, tick = your usual) with its key
+    /// printed inside it, so every variant that draws ticks explains them - the
+    /// devices stages switch reuses this for the primary device's tab. All rows
+    /// share ONE scale (`AnalysisLogic.sleepStageScale`).
     private func stageRowsCard(_ hkStages: AnalysisMetrics.SleepStages, usualStages: AnalysisContext.SleepUsual.Stages) -> some View {
-        VitalCard(padding: Theme.Spacing.md) {
+        let scale = AnalysisLogic.sleepStageScale(rows: [
+            (hkStages.deep, usualStages.deep), (hkStages.rem, usualStages.rem),
+            (hkStages.core, usualStages.core), (hkStages.awake, usualStages.awake),
+        ])
+        return VitalCard(padding: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 0) {
-                stageRow("Deep", minutes: hkStages.deep, usual: usualStages.deep, kind: .deep, isFirst: true)
-                stageRow("REM", minutes: hkStages.rem, usual: usualStages.rem, kind: .rem, isFirst: false)
-                stageRow("Core", minutes: hkStages.core, usual: usualStages.core, kind: .core, isFirst: false)
-                stageRow("Awake", minutes: hkStages.awake, usual: usualStages.awake, kind: .awake, isFirst: false)
+                stageRow("Deep", minutes: hkStages.deep, usual: usualStages.deep, kind: .deep, scale: scale, isFirst: true)
+                stageRow("REM", minutes: hkStages.rem, usual: usualStages.rem, kind: .rem, scale: scale, isFirst: false)
+                stageRow("Core", minutes: hkStages.core, usual: usualStages.core, kind: .core, scale: scale, isFirst: false)
+                stageRow("Awake", minutes: hkStages.awake, usual: usualStages.awake, kind: .awake, scale: scale, isFirst: false)
+                Text(AnalysisLogic.sleepStageLegend)
+                    .scaledFont(size: 11)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .padding(.top, Theme.Spacing.xs)
             }
         }
     }
@@ -1367,7 +1376,7 @@ struct SleepAnalysisContent: View {
     }
 
     @ViewBuilder
-    private func stageRow(_ label: String, minutes: Double?, usual: Double?, kind: AnalysisLogic.SleepStageKind, isFirst: Bool) -> some View {
+    private func stageRow(_ label: String, minutes: Double?, usual: Double?, kind: AnalysisLogic.SleepStageKind, scale: Double, isFirst: Bool) -> some View {
         if let minutes, let usual {
             HStack(spacing: Theme.Spacing.md) {
                 Text(label).scaledFont(size: 14, weight: .semibold).foregroundStyle(Theme.Colors.textPrimary).frame(width: 54, alignment: .leading)
@@ -1375,11 +1384,11 @@ struct SleepAnalysisContent: View {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(stageColor(kind))
-                            .frame(width: geo.size.width * CGFloat(AnalysisLogic.sleepStageBarFraction(minutes: minutes, usualMinutes: usual)), height: 10)
+                            .frame(width: geo.size.width * CGFloat(AnalysisLogic.sleepStageBarFraction(minutes: minutes, scale: scale)), height: 10)
                         Rectangle()
                             .fill(Theme.Colors.textPrimary.opacity(0.55))
                             .frame(width: 2, height: 18)
-                            .offset(x: geo.size.width * CGFloat(AnalysisLogic.sleepStageUsualTickFraction(minutes: minutes, usualMinutes: usual)) - 1)
+                            .offset(x: geo.size.width * CGFloat(AnalysisLogic.sleepStageUsualTickFraction(usualMinutes: usual, scale: scale)) - 1)
                     }
                 }
                 .frame(height: 18)
