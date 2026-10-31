@@ -1618,7 +1618,7 @@ final class GoalProgressLogicTests: XCTestCase {
         XCTAssertEqual(try read(",\"goalAgeDays\":\"old\"")?.state, .early)
         // A full wave-20 read still equals the one built from its parts.
         let full = try read(",\"scaleKg\":82.3,\"weekMeanKg\":82.5,\"goalAgeDays\":30,\"paceWindowDays\":21,\"intake\":null")
-        XCTAssertEqual(full, GoalProgressDTO.WeightRead(state: .early, scaleKg: 82.3, weekMeanKg: 82.5, goalAgeDays: 30))
+        XCTAssertEqual(full, GoalProgressDTO.WeightRead(state: .early, scaleKg: 82.3, weekMeanKg: 82.5, goalAgeDays: 30, paceWindowDays: 21))
     }
 
     // MARK: - Wave 20: endurance fields the app does not read

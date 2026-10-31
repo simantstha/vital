@@ -912,11 +912,12 @@ final class WeightHeroLogicTests: XCTestCase {
     }
 
     /// An older server sends no `earlierPace` (or no plan, or no weightRead): the hero is exactly as it was.
+    /// With no weightRead there is no pace window, so the window phrase is dropped.
     func testHeroKeepsTheSingleRateWithoutAnEarlierPace() {
         let single = "\u{2212}0.6\u{00A0}kg/wk over 4 weeks"
         XCTAssertEqual(wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(earlier: nil))), single)
         XCTAssertEqual(wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59)), single, "wave 21: a pace read with no plan")
-        XCTAssertEqual(wiredHeroText(wave22(nil, headline: onPaceHeadline, rateKg: -0.59)), single, "older: no weightRead")
+        XCTAssertEqual(wiredHeroText(wave22(nil, headline: onPaceHeadline, rateKg: -0.59)), "\u{2212}0.6\u{00A0}kg/wk", "older: no weightRead \u{2014} no pace window, so no window phrase")
         // Neither pace a loss: the server prints no range either.
         XCTAssertEqual(
             wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(earlier: 0.05))), single
