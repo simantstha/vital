@@ -517,7 +517,7 @@ final class ScreenshotTests: XCTestCase {
                 // and `WeightHeroLogic.weeklyChangeText` computes it, so this
                 // fails loudly the same way the insight assertion above does
                 // if that endpoint's fixture interception ever regresses.
-                XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 4 weeks"),
+                XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 3 weeks"),
                                "Today's weight_loss hero should show the established trend's weekly change [\(appearance)]")
                 XCTAssertTrue(app.buttons["today.weighInChip"].waitForExistence(timeout: 10),
                                "Today's weight_loss hero should show the weigh-in chip [\(appearance)]")
@@ -621,7 +621,7 @@ final class ScreenshotTests: XCTestCase {
                        "Today should finish loading at an accessibility text size [\(scenario)/\(appearance)]")
         XCTAssertTrue(waitForText(app, containing: insight(for: scenario), timeout: 10),
                        "Today should show the \(scenario) fixture's insight text at an accessibility text size [\(appearance)]")
-        XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 4 weeks"),
+        XCTAssertTrue(waitForText(app, containing: "0.6\u{00A0}kg/wk over 3 weeks"),
                        "Today's weight_loss hero should show the weekly change at an accessibility text size [\(appearance)]")
         XCTAssertTrue(app.buttons["today.weighInChip"].waitForExistence(timeout: 10),
                        "Today's weight_loss hero should show the weigh-in chip at an accessibility text size [\(appearance)]")

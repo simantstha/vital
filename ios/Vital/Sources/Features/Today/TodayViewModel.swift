@@ -452,6 +452,12 @@ final class TodayViewModel: ObservableObject {
         return kg
     }
 
+    /// Days `heroGoalRateKgPerWeek` was fitted over (`weightRead.paceWindowDays`); `nil` from an
+    /// older server, where the hero names no window.
+    var heroGoalRateWindowDays: Int? {
+        goalProgress?.weightRead?.paceWindowDays
+    }
+
     /// True while the server is reading the scale itself (early read, welcome
     /// back, plateau, moving again) and withholds a pace: the weight hero then never computes
     /// its own 7-day rate. `false` without goal progress or from an older server

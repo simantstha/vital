@@ -210,7 +210,9 @@ final class WeightHeroLogicTests: XCTestCase {
         )
         let entries = [entry(daysAgo: 10), entry(daysAgo: 0)]
         XCTAssertEqual(
-            WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.4),
+            WeightHeroLogic.weeklyChangeText(
+                trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.4, goalRateWindowDays: 28
+            ),
             "\u{2212}0.4\u{00A0}kg/wk over 4 weeks"
         )
         // Not established: still nothing, even with a goal rate.
@@ -444,10 +446,10 @@ final class WeightHeroLogicTests: XCTestCase {
     }
 
     /// What `TodayViewModel.heroWithholdsLocalRate` / `heroServerWeightRead` feed the hero.
-    private func heroText(_ goal: GoalProgressDTO?, goalRate: Double? = nil) -> String? {
+    private func heroText(_ goal: GoalProgressDTO?, goalRate: Double? = nil, windowDays: Int? = nil) -> String? {
         let (trend, entries) = hero()
         return WeightHeroLogic.weeklyChangeText(
-            trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: goalRate,
+            trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: goalRate, goalRateWindowDays: windowDays,
             withholdsLocalRate: goal.map(GoalProgressLogic.usesServerWeightRead) ?? false,
             serverRead: goal.flatMap(WeightHeroLogic.serverReadSlotText)
         )
@@ -528,7 +530,7 @@ final class WeightHeroLogicTests: XCTestCase {
         XCTAssertEqual(heroText(progress(.reached, headline: "Goal reached")), local)
         // The 4-week goal rate still wins over the local one, as before.
         XCTAssertEqual(
-            heroText(progress(.pace, headline: "On track", rateKg: -0.4), goalRate: -0.4),
+            heroText(progress(.pace, headline: "On track", rateKg: -0.4), goalRate: -0.4, windowDays: 28),
             "\u{2212}0.4\u{00A0}kg/wk over 4 weeks"
         )
     }
@@ -790,7 +792,8 @@ final class WeightHeroLogicTests: XCTestCase {
     /// A weight-loss payload for a given read; a nil `state` is an older server (no `weightRead` at all).
     private func wave22(
         _ state: GoalProgressDTO.WeightRead.State?, headline: String, rateKg: Double? = nil,
-        lastWeighInDaysAgo: Int? = nil, verdict: GoalVerdict = .onTrack, plan: GoalProgressDTO.WeightRead.Plan? = nil
+        lastWeighInDaysAgo: Int? = nil, verdict: GoalVerdict = .onTrack, plan: GoalProgressDTO.WeightRead.Plan? = nil,
+        paceWindowDays: Int? = 28
     ) -> GoalProgressDTO {
         GoalProgressDTO(
             goal: "weight_loss",
@@ -800,7 +803,7 @@ final class WeightHeroLogicTests: XCTestCase {
             verdict: verdict,
             headline: headline,
             lastWeighInDaysAgo: lastWeighInDaysAgo,
-            weightRead: state.map { GoalProgressDTO.WeightRead(state: $0, weekMeanKg: 82.3, plan: plan) }
+            weightRead: state.map { GoalProgressDTO.WeightRead(state: $0, weekMeanKg: 82.3, paceWindowDays: paceWindowDays, plan: plan) }
         )
     }
 
@@ -828,7 +831,8 @@ final class WeightHeroLogicTests: XCTestCase {
         let (trend, entries) = hero()
         return WeightHeroLogic.weeklyChangeText(
             trend: trend, entries: entries, system: system,
-            goalRateKgPerWeek: goal.ratePerWeek.kg, goalRateRange: GoalProgressLogic.paceRange(goal),
+            goalRateKgPerWeek: goal.ratePerWeek.kg, goalRateWindowDays: goal.weightRead?.paceWindowDays,
+            goalRateRange: GoalProgressLogic.paceRange(goal),
             withholdsLocalRate: GoalProgressLogic.withholdsWeeklyRate(goal),
             serverRead: WeightHeroLogic.serverReadSlotText(goal)
         )
@@ -932,7 +936,9 @@ final class WeightHeroLogicTests: XCTestCase {
         )
         // A nil range is the old behaviour, the parameter defaulted.
         XCTAssertEqual(
-            WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.59, goalRateRange: nil),
+            WeightHeroLogic.weeklyChangeText(
+                trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.59, goalRateWindowDays: 28, goalRateRange: nil
+            ),
             "\u{2212}0.6\u{00A0}kg/wk over 4 weeks"
         )
         // The server's own read, and the honesty gate on the trend, both still come first.
@@ -1014,5 +1020,68 @@ final class WeightHeroLogicTests: XCTestCase {
         let reached = wave22(.reached, headline: "Goal reached — 76 kg", rateKg: -0.3, lastWeighInDaysAgo: 20, verdict: .reached)
         XCTAssertFalse(GoalProgressLogic.withholdsWeeklyRate(reached))
         XCTAssertEqual(wiredHeroText(reached), "\u{2212}0.3\u{00A0}kg/wk over 4 weeks")
+    }
+
+    // MARK: Pace window (the hero named "4 weeks" whatever the server fitted)
+
+    func testPaceWindowPhraseNamesTheServersWindowInWholeWeeks() {
+        XCTAssertEqual(WeightHeroLogic.paceWindowPhrase(days: 21), "over 3 weeks")
+        XCTAssertEqual(WeightHeroLogic.paceWindowPhrase(days: 28), "over 4 weeks")
+        XCTAssertEqual(WeightHeroLogic.paceWindowPhrase(days: 7), "over 1 week")
+        XCTAssertEqual(WeightHeroLogic.paceWindowPhrase(days: 20), "over 3 weeks", "rounded to the nearest week")
+    }
+
+    func testPaceWindowPhraseIsNilWithoutAUsableWindow() {
+        XCTAssertNil(WeightHeroLogic.paceWindowPhrase(days: nil))
+        XCTAssertNil(WeightHeroLogic.paceWindowPhrase(days: 0))
+        XCTAssertNil(WeightHeroLogic.paceWindowPhrase(days: -7))
+        XCTAssertNil(WeightHeroLogic.paceWindowPhrase(days: 2), "under half a week names no window")
+    }
+
+    func testHeroNamesTheServersPaceWindow() {
+        XCTAssertEqual(
+            wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(earlier: nil), paceWindowDays: 21)),
+            "\u{2212}0.6\u{00A0}kg/wk over 3 weeks"
+        )
+        XCTAssertEqual(
+            wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(earlier: nil), paceWindowDays: 28)),
+            "\u{2212}0.6\u{00A0}kg/wk over 4 weeks"
+        )
+    }
+
+    /// An older server sends no `paceWindowDays`: the rate stands alone, never with a guessed window.
+    func testHeroDropsTheWindowPhraseWhenTheServerSendsNone() {
+        XCTAssertEqual(
+            wiredHeroText(wave22(.pace, headline: onPaceHeadline, rateKg: -0.59, plan: paceWeek(earlier: nil), paceWindowDays: nil)),
+            "\u{2212}0.6\u{00A0}kg/wk"
+        )
+        let (trend, entries) = hero()
+        XCTAssertEqual(
+            WeightHeroLogic.weeklyChangeText(trend: trend, entries: entries, system: .metric, goalRateKgPerWeek: -0.4),
+            "\u{2212}0.4\u{00A0}kg/wk"
+        )
+    }
+
+    func testFasterThanRecommendedSuffixFollowsTheWindowPhrase() {
+        let trend = WeightTrendDTO(
+            days: [WeightTrendDayDTO(day: day(daysAgo: 0), rawKg: 60, trendKg: 60)],
+            delta7dKgPerWeek: -1.2, delta30dKgPerWeek: -1.2, established: true
+        )
+        let text = WeightHeroLogic.weeklyChangeText(
+            trend: trend, entries: [entry(daysAgo: 10), entry(daysAgo: 0)], system: .metric,
+            goalRateKgPerWeek: -1.2, goalRateWindowDays: 21
+        )
+        XCTAssertEqual(text, "\u{2212}1.2\u{00A0}kg/wk over 3 weeks · faster than recommended")
+    }
+
+    func testWeightReadDecodesPaceWindowDaysTolerantly() throws {
+        func read(_ json: String) throws -> GoalProgressDTO.WeightRead {
+            try JSONDecoder().decode(GoalProgressDTO.WeightRead.self, from: Data(json.utf8))
+        }
+        XCTAssertEqual(try read(#"{"state":"pace","paceWindowDays":21}"#).paceWindowDays, 21)
+        XCTAssertEqual(try read(#"{"state":"pace","paceWindowDays":28.0}"#).paceWindowDays, 28)
+        XCTAssertNil(try read(#"{"state":"pace","paceWindowDays":null}"#).paceWindowDays)
+        XCTAssertNil(try read(#"{"state":"pace"}"#).paceWindowDays, "older server")
+        XCTAssertNil(try read(#"{"state":"pace","paceWindowDays":"soon"}"#).paceWindowDays)
     }
 }

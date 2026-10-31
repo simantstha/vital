@@ -129,6 +129,7 @@ struct TodayView: View {
                                     system: unitPref.current,
                                     targetKg: vm.goalProgress?.target.weightKg,
                                     goalRateKgPerWeek: vm.heroGoalRateKgPerWeek,
+                                    goalRateWindowDays: vm.heroGoalRateWindowDays,
                                     goalRateRange: vm.heroGoalRateRange,
                                     withholdsLocalRate: vm.heroWithholdsRate,
                                     serverWeightRead: vm.heroServerWeightRead,

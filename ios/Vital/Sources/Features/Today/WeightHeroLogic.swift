@@ -108,8 +108,13 @@ enum WeightHeroLogic {
     /// gate above is satisfied.
     ///
     /// `goalRateKgPerWeek`: when the goal-progress card has a 4-week rate, the
-    /// hero shows that SAME number ("−0.9 lb/wk over 4 weeks") so the hero and
+    /// hero shows that SAME number ("−0.9 lb/wk over 3 weeks") so the hero and
     /// the card never disagree; without it the 7-day rate above is used.
+    ///
+    /// `goalRateWindowDays`: the days the server fitted that rate over
+    /// (`weightRead.paceWindowDays`: 21, or 28 while a gap is bridged). The hero
+    /// names that window ("over 3 weeks"); without it (an older server) it
+    /// names none rather than guess - see `paceWindowPhrase`.
     ///
     /// `goalRateRange` (wave 22w): when the server's card shows a RANGE for an
     /// on-pace week (`GoalProgressLogic.paceRange`: "Down 0.4–0.6 kg/wk"), the hero
@@ -131,7 +136,8 @@ enum WeightHeroLogic {
     /// keeps today's behaviour exactly.
     static func weeklyChangeText(
         trend: WeightTrendDTO?, entries: [WeightLogEntryDTO], system: UnitSystem,
-        goalRateKgPerWeek: Double? = nil, goalRateRange: GoalProgressLogic.PaceRange? = nil,
+        goalRateKgPerWeek: Double? = nil, goalRateWindowDays: Int? = nil,
+        goalRateRange: GoalProgressLogic.PaceRange? = nil,
         withholdsLocalRate: Bool = false, serverRead: String? = nil
     ) -> String? {
         guard let trend, trend.established else { return nil }
@@ -143,7 +149,8 @@ enum WeightHeroLogic {
             return GoalProgressLogic.paceRangeText(goalRateRange, system: system)
         }
         if let goalRate = goalRateKgPerWeek, goalRate.isFinite {
-            var text = "\(UnitFormat.weightDelta(kgPerWeek: goalRate, system)) over 4 weeks"
+            var text = UnitFormat.weightDelta(kgPerWeek: goalRate, system)
+            if let window = paceWindowPhrase(days: goalRateWindowDays) { text += " \(window)" }
             if isFasterThanRecommended(deltaPerWeek: goalRate, currentTrendKg: trend.days.last?.trendKg) {
                 text += " · faster than recommended"
             }
@@ -157,6 +164,17 @@ enum WeightHeroLogic {
             text += " · faster than recommended"
         }
         return text
+    }
+
+    /// "over 3 weeks" for the server's 21-day pace window, "over 4 weeks" for 28;
+    /// whole weeks, rounded, as the coach's prompt names it. `nil` when the server
+    /// sent no window (or one under half a week), so the hero says no window
+    /// rather than a guessed one.
+    static func paceWindowPhrase(days: Int?) -> String? {
+        guard let days, days > 0 else { return nil }
+        let weeks = Int((Double(days) / 7).rounded())
+        guard weeks >= 1 else { return nil }
+        return weeks == 1 ? "over 1 week" : "over \(weeks) weeks"
     }
 
     /// True only for a LOSS (`deltaPerWeek < 0`) whose magnitude exceeds

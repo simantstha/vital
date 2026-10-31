@@ -2743,17 +2743,21 @@ struct GoalProgressDTO: Decodable, Equatable {
         /// still short of a pace ("a few more weigh-ins and your pace is back"):
         /// `WeightHeroLogic.earlyReadSlotText(goalAgeDays:)`.
         let goalAgeDays: Int?
+        /// Days the quoted weekly pace was fitted over (21; 28 while a gap in weigh-ins is
+        /// bridged); `nil` without a pace and from a server that predates it - the hero then
+        /// names no window rather than guess one (`WeightHeroLogic.paceWindowPhrase`).
+        let paceWindowDays: Int?
         /// This week's plan (weight loss, wave 21); `nil` from an older server.
         let plan: Plan?
 
         private enum CodingKeys: String, CodingKey {
-            case state, scaleKg, scaleDay, weekMeanKg, weeksVsTarget, returned, reachedDaysAgo, goalAgeDays, plan
+            case state, scaleKg, scaleDay, weekMeanKg, weeksVsTarget, returned, reachedDaysAgo, goalAgeDays, paceWindowDays, plan
         }
 
         init(
             state: State? = nil, scaleKg: Double? = nil, scaleDay: String? = nil, weekMeanKg: Double? = nil,
             weeksVsTarget: Int? = nil, returned: Returned? = nil, reachedDaysAgo: Int? = nil,
-            goalAgeDays: Int? = nil, plan: Plan? = nil
+            goalAgeDays: Int? = nil, paceWindowDays: Int? = nil, plan: Plan? = nil
         ) {
             self.state = state
             self.scaleKg = scaleKg
@@ -2763,6 +2767,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             self.returned = returned
             self.reachedDaysAgo = reachedDaysAgo
             self.goalAgeDays = goalAgeDays
+            self.paceWindowDays = paceWindowDays
             self.plan = plan
         }
 
@@ -2777,6 +2782,7 @@ struct GoalProgressDTO: Decodable, Equatable {
             returned = try? c.decode(Returned.self, forKey: .returned)
             reachedDaysAgo = tolerantWholeNumber(c, .reachedDaysAgo)
             goalAgeDays = tolerantWholeNumber(c, .goalAgeDays)
+            paceWindowDays = tolerantWholeNumber(c, .paceWindowDays)
             plan = try? c.decode(Plan.self, forKey: .plan)
         }
     }

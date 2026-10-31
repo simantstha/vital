@@ -2212,6 +2212,7 @@ enum FixtureData {
                     "weeksVsTarget": targetSlackDays / 7,
                     "returned": none,
                     "reachedDaysAgo": none,
+                    "paceWindowDays": 21,
                     "plan": weekPlan,
                 ],
                 "headline": "On track — about \(trimmedKm(toGoKg)) kg to go, around \(shortDate(daysAhead: etaDays))",
