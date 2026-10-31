@@ -99,7 +99,11 @@ struct TodayView: View {
                                     goal: vm.goal,
                                     mealLogged: vm.diet.kcalConsumed > 0,
                                     secondItemLogged: vm.showFirstRunChecklistSecondItemDone,
-                                    healthConnected: HealthKitManager.didRequestAuthorization && !vm.showHealthKitRecoveryBanner,
+                                    healthConnected: DevicesLogic.checklistHealthConnected(
+                                        localAuthorized: HealthKitManager.didRequestAuthorization,
+                                        recoveryBannerShowing: vm.showHealthKitRecoveryBanner,
+                                        serverSourceConnected: vm.serverSourceConnected
+                                    ),
                                     goalTargetSet: vm.hasGoalTarget,
                                     onLogMeal: { showLogSheet = true },
                                     onLogSecondItem: { onChecklistSecondItemTap() },

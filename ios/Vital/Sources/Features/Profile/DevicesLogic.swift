@@ -202,4 +202,23 @@ enum DevicesLogic {
         guard mergedThisMonth > 0 else { return nil }
         return "\(mergedThisMonth) merged this month"
     }
+
+    // MARK: - Connected sources (Today checklist, Trends sleep card)
+
+    /// True when the server knows ANY connected source: the profile's integrations
+    /// list (its one combined "Apple Health" entry) or `/api/devices` (Apple Health
+    /// or WHOOP). Either input may be `nil` (its fetch failed or has not run).
+    static func anySourceConnected(integrations: [ProfileIntegration]?, devices: [DeviceStatusDTO]?) -> Bool {
+        let integrationConnected = integrations?.contains { $0.status.lowercased() == "connected" } ?? false
+        let deviceConnected = devices?.contains { $0.connected } ?? false
+        return integrationConnected || deviceConnected
+    }
+
+    /// Today's first-run checklist "Connect Apple Health" row is done when this
+    /// device's HealthKit authorization is in place (and not in recovery) OR the
+    /// server already has a connected source - an account whose watch data is
+    /// syncing must not be told to connect.
+    static func checklistHealthConnected(localAuthorized: Bool, recoveryBannerShowing: Bool, serverSourceConnected: Bool) -> Bool {
+        (localAuthorized && !recoveryBannerShowing) || serverSourceConnected
+    }
 }

@@ -169,4 +169,31 @@ final class DevicesLogicTests: XCTestCase {
         XCTAssertEqual(DevicesLogic.Metric.recovery.title, "Recovery")
         XCTAssertEqual(DevicesLogic.Metric.recovery.subtitle, "HRV, resting heart rate")
     }
+
+    // MARK: - Connected sources (Profile row, Today checklist)
+
+    func testAnySourceConnectedReadsIntegrationsAndDevices() {
+        let apple = ProfileIntegration(name: "Apple Health", status: "connected")
+        let none = ProfileIntegration(name: "Apple Health", status: "disconnected")
+        let whoop = DeviceStatusDTO(id: .whoop, connected: true, lastSyncAt: nil)
+        let off = DeviceStatusDTO(id: .apple, connected: false, lastSyncAt: nil)
+        XCTAssertTrue(DevicesLogic.anySourceConnected(integrations: [apple], devices: nil))
+        XCTAssertTrue(DevicesLogic.anySourceConnected(integrations: nil, devices: [off, whoop]), "WHOOP alone counts")
+        XCTAssertTrue(DevicesLogic.anySourceConnected(integrations: [none], devices: [whoop]))
+        XCTAssertFalse(DevicesLogic.anySourceConnected(integrations: [none], devices: [off]))
+        XCTAssertFalse(DevicesLogic.anySourceConnected(integrations: nil, devices: nil))
+        XCTAssertTrue(DevicesLogic.anySourceConnected(
+            integrations: [ProfileIntegration(name: "Apple Health", status: "Connected")], devices: nil
+        ), "status compares case-insensitively, as Profile always has")
+    }
+
+    func testChecklistHealthRowIsDoneWhenTheServerHasASource() {
+        // Local HealthKit flag alone, as before.
+        XCTAssertTrue(DevicesLogic.checklistHealthConnected(localAuthorized: true, recoveryBannerShowing: false, serverSourceConnected: false))
+        XCTAssertFalse(DevicesLogic.checklistHealthConnected(localAuthorized: true, recoveryBannerShowing: true, serverSourceConnected: false))
+        XCTAssertFalse(DevicesLogic.checklistHealthConnected(localAuthorized: false, recoveryBannerShowing: false, serverSourceConnected: false))
+        // A connected source on the server marks it done whatever the local flag says.
+        XCTAssertTrue(DevicesLogic.checklistHealthConnected(localAuthorized: false, recoveryBannerShowing: false, serverSourceConnected: true))
+        XCTAssertTrue(DevicesLogic.checklistHealthConnected(localAuthorized: true, recoveryBannerShowing: true, serverSourceConnected: true))
+    }
 }

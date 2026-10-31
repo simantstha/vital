@@ -30,9 +30,9 @@ struct WeeklyHeadlineStrip: View {
                 if let nightsAtGoalText {
                     twoUpRow(nightsAtGoalText)
                 } else {
-                    // No synced nights (e.g. Apple Health not connected yet):
-                    // say so instead of "0 of 7 nights at goal" / "7h 00m".
-                    Text("No sleep data yet. Connect Apple Health to see your week.")
+                    // No synced nights: say so instead of "0 of 7 nights at goal" /
+                    // "7h 00m" - and only ask to connect when no source is.
+                    Text(TrendsSummary.sleepEmptyText(sourceConnected: vm.hasConnectedSource))
                         .scaledFont(size: 13)
                         .foregroundStyle(Theme.Colors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)

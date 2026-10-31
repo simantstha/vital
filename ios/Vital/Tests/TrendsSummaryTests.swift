@@ -479,6 +479,27 @@ final class TrendsSummaryTests: XCTestCase {
         XCTAssertEqual(TrendsSummary.vitalsNote([47, 47, 48, 48, 49, 49, 49]), "7-day")
     }
 
+
+    // MARK: - Sleep card empty line (new_user__trends: told to connect while already connected)
+
+    func testSleepEmptyTextDoesNotAskAConnectedUserToConnect() {
+        let text = TrendsSummary.sleepEmptyText(sourceConnected: true)
+        XCTAssertEqual(text, "No sleep synced yet this week.")
+        XCTAssertFalse(text.contains("Connect"))
+    }
+
+    func testSleepEmptyTextAsksOnlyAnUnconnectedUserToConnect() {
+        XCTAssertEqual(
+            TrendsSummary.sleepEmptyText(sourceConnected: false),
+            "No sleep data yet. Connect Apple Health to see your week."
+        )
+    }
+
+    func testSleepEmptyTextClaimsNothingWhileConnectionIsUnknown() {
+        let text = TrendsSummary.sleepEmptyText(sourceConnected: nil)
+        XCTAssertEqual(text, "No sleep data yet.")
+        XCTAssertFalse(text.contains("Connect"))
+    }
 }
 
 // MARK: - TrendsViewModel.load() — batch loader integrity

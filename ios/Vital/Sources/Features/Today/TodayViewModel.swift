@@ -672,10 +672,21 @@ final class TodayViewModel: ObservableObject {
     /// sessions) — checks off the checklist's "Set your goal target" row.
     @Published private(set) var hasGoalTarget = false
 
+    /// True when the server already has a connected source (Apple Health or WHOOP), so the
+    /// checklist's "Connect Apple Health" row reads as done even where this device's local
+    /// HealthKit flag is not set. Refreshed alongside `hasGoalTarget`.
+    @Published private(set) var serverSourceConnected = false
+
     func refreshGoalTargetFlag() async {
-        if let response = try? await apiClient.fetchProfile() {
+        let profile = try? await apiClient.fetchProfile()
+        if let response = profile {
             hasGoalTarget = Self.profileHasGoalTarget(response)
             profileHasRaceDate = response.raceDate != nil
+        }
+        let devices = try? await apiClient.fetchDevices()
+        // Only ever turns on from a lookup that says so; a failed lookup leaves it as it was.
+        if DevicesLogic.anySourceConnected(integrations: profile?.integrations, devices: devices?.devices) {
+            serverSourceConnected = true
         }
     }
 

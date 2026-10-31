@@ -114,6 +114,22 @@ final class TrendsViewModelErrorCopyTests: XCTestCase {
         XCTAssertNil(TrendsViewModel.learningCardProgress(status: learning, hasLoadedGrid: true, errorMessage: "x"))
         XCTAssertNil(TrendsViewModel.learningCardProgress(status: .steady(period: .thirtyDays), hasLoadedGrid: true, errorMessage: nil))
     }
+
+    // MARK: Connected-source lookup behind the sleep card's empty line
+
+    func testConnectedSourceKnownCombinesIntegrationsAndDevices() {
+        let apple = ProfileIntegration(name: "Apple Health", status: "connected")
+        let off = ProfileIntegration(name: "Apple Health", status: "disconnected")
+        let whoop = DeviceStatusDTO(id: .whoop, connected: true, lastSyncAt: nil)
+        XCTAssertEqual(TrendsViewModel.connectedSourceKnown(integrations: [apple], devices: nil), true)
+        XCTAssertEqual(TrendsViewModel.connectedSourceKnown(integrations: nil, devices: [whoop]), true)
+        XCTAssertEqual(TrendsViewModel.connectedSourceKnown(integrations: [off], devices: []), false)
+        XCTAssertNil(TrendsViewModel.connectedSourceKnown(integrations: nil, devices: nil), "both lookups failed: unknown")
+    }
+
+    func testHasConnectedSourceIsUnknownBeforeTheSummaryLoads() {
+        XCTAssertNil(TrendsViewModel(apiClient: FakeTrendsLoadAPI()).hasConnectedSource)
+    }
 }
 
 /// Same leak, same fix, in the metric detail screen's loader.

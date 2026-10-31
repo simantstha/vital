@@ -92,6 +92,10 @@ final class TrendsViewModel: ObservableObject {
     @Published var sleepGoalMinutes: Int = 480 // 8h default
     @Published var isLoadingSummary = false
     @Published var summaryErrorMessage: String? = nil
+    /// Whether the server knows a connected source (Apple Health / WHOOP) -
+    /// `nil` until `loadSummary()` has looked, and when both lookups failed.
+    /// Only the sleep card's empty line reads it (`TrendsSummary.sleepEmptyText`).
+    @Published private(set) var hasConnectedSource: Bool? = nil
 
     // MARK: Goal-ordered index (customer-panel finding, 2026-09-23 —
     // docs/ux-spec-v4.md §9's screenshot acceptance table)
@@ -324,6 +328,7 @@ final class TrendsViewModel: ObservableObject {
         // profile error must never blank all three charts. Falls back to the
         // 480min/8h default.
         async let profileResp = try? await profileClient.fetchProfile()
+        async let devicesResp = try? await profileClient.fetchDevices()
 
         do {
             async let sleepResp = apiClient.fetchTrends(metric: "sleep", days: 7)
@@ -340,6 +345,8 @@ final class TrendsViewModel: ObservableObject {
         }
 
         let profile = await profileResp
+        let devices = await devicesResp
+        hasConnectedSource = Self.connectedSourceKnown(integrations: profile?.integrations, devices: devices?.devices)
         sleepGoalMinutes = profile?.sleepGoalMinutes ?? 480
         // Locale-default adoption PATCH: opportunistic housekeeping, not a
         // user-initiated action, so failure is silent and simply retries
@@ -348,6 +355,14 @@ final class TrendsViewModel: ObservableObject {
             try? await profileClient.updateProfile(unitSystem: UnitPreference.shared.current.rawValue)
         }
         isLoadingSummary = false
+    }
+
+    /// `true` when either lookup shows a connected source, `false` when a lookup
+    /// succeeded and shows none, `nil` when both failed (nothing is known).
+    /// Internal for tests.
+    static func connectedSourceKnown(integrations: [ProfileIntegration]?, devices: [DeviceStatusDTO]?) -> Bool? {
+        if DevicesLogic.anySourceConnected(integrations: integrations, devices: devices) { return true }
+        return integrations == nil && devices == nil ? nil : false
     }
 
     // MARK: - Load (goal + weight-log — drives goal-ordered sections)

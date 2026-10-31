@@ -9,6 +9,19 @@ import Foundation
 /// exercise it without any network or view-model plumbing.
 enum TrendsSummary {
 
+    /// The "Sleep this week" card's empty line. `sourceConnected` is whether the
+    /// server knows a connected source (Apple Health / WHOOP): connected means
+    /// nothing has synced yet this week, so it must not tell the user to connect;
+    /// only a known-unconnected account is asked to. `nil` (not known yet or the
+    /// lookup failed) claims neither.
+    static func sleepEmptyText(sourceConnected: Bool?) -> String {
+        switch sourceConnected {
+        case true?:  return "No sleep synced yet this week."
+        case false?: return "No sleep data yet. Connect Apple Health to see your week."
+        case nil:    return "No sleep data yet."
+        }
+    }
+
     /// A 7-day window of values (oldest → newest), aligned 1:1 with
     /// single-letter weekday labels (e.g. "F S S M T W T" ending today).
     struct WeekWindow: Equatable {
