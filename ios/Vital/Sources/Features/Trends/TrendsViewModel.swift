@@ -62,6 +62,27 @@ final class TrendsViewModel: ObservableObject {
     /// `false` — still gets the entrance.
     @Published private(set) var hasAnimatedIn = false
 
+    /// True once a `load()` has succeeded at least once this session. The
+    /// `.learning` default above is only a placeholder until then, so the
+    /// "Getting to know your normal" card must not render from it (it used
+    /// to show "0 of 14" above the "Couldn't load" cards during an outage).
+    @Published private(set) var hasLoadedGrid = false
+
+    /// The progress the "Getting to know your normal" card should show, or
+    /// `nil` when the card must stay hidden: the status isn't `.learning`,
+    /// no load has succeeded yet, or the latest load failed.
+    var learningCardProgress: TrendsHeadline.LearningProgress? {
+        Self.learningCardProgress(status: headlineStatus, hasLoadedGrid: hasLoadedGrid, errorMessage: errorMessage)
+    }
+
+    /// Internal for tests.
+    static func learningCardProgress(
+        status: TrendsHeadline.Status, hasLoadedGrid: Bool, errorMessage: String?
+    ) -> TrendsHeadline.LearningProgress? {
+        guard hasLoadedGrid, errorMessage == nil, case .learning(let progress) = status else { return nil }
+        return progress
+    }
+
     // MARK: Summary state (Last 7 days headline strip)
 
     @Published var sleepWindow: TrendsSummary.WeekWindow = .empty
@@ -158,6 +179,7 @@ final class TrendsViewModel: ObservableObject {
                 calibration = response.calibration
             }
             recomputeDerived()
+            hasLoadedGrid = true
             if isFirstLoad {
                 // Flipped on a later run-loop turn (not synchronously here)
                 // so THIS render still sees `hasAnimatedIn == false` — that's

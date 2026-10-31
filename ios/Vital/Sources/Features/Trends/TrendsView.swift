@@ -39,7 +39,10 @@ struct TrendsView: View {
                         // contradiction) is gone. `.learning` is now the ONE
                         // card for that state; `subtitleText` above renders
                         // nothing while it's showing.
-                        if case .learning(let progress) = vm.headlineStatus {
+                        // Only after a successful load: the status falls back
+                        // to "learning, 0 of 14" while loading or when the load
+                        // failed, which would misread as "no history".
+                        if let progress = vm.learningCardProgress {
                             learningCard(progress)
                         }
 

@@ -61,6 +61,59 @@ final class TrendsViewModelErrorCopyTests: XCTestCase {
         let message = viewModel.errorMessage ?? ""
         XCTAssertTrue(message.localizedCaseInsensitiveContains("offline") || message.localizedCaseInsensitiveContains("connection"))
     }
+
+    // MARK: Learning card gating (server_error__trends: "0 of 14" above the error card)
+
+    func testLearningCardHiddenBeforeAnyLoad() {
+        let viewModel = TrendsViewModel(apiClient: FakeTrendsLoadAPI())
+        // The default status is a `.learning(14 left)` placeholder; it must not render as a card.
+        XCTAssertNil(viewModel.learningCardProgress)
+        XCTAssertFalse(viewModel.hasLoadedGrid)
+    }
+
+    func testLearningCardHiddenWhenLoadFails() async {
+        let api = FakeTrendsLoadAPI()
+        api.batchError = APIError.serverError(500)
+        let viewModel = TrendsViewModel(apiClient: api)
+
+        await viewModel.load()
+
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.learningCardProgress)
+    }
+
+    func testLearningCardShownAfterSuccessfulLoadWithNoEstablishedMetric() async {
+        let viewModel = TrendsViewModel(apiClient: FakeTrendsLoadAPI())
+
+        await viewModel.load()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertTrue(viewModel.hasLoadedGrid)
+        XCTAssertNotNil(viewModel.learningCardProgress)
+    }
+
+    func testLearningCardHidesAgainWhenARefreshFailsAfterASuccess() async {
+        let api = FakeTrendsLoadAPI()
+        let viewModel = TrendsViewModel(apiClient: api)
+        await viewModel.load()
+        XCTAssertNotNil(viewModel.learningCardProgress)
+
+        api.batchError = URLError(.notConnectedToInternet)
+        await viewModel.load()
+
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.learningCardProgress)
+    }
+
+    func testLearningCardProgressHelperOnlyPassesLearningStatus() {
+        let learning = TrendsHeadline.Status.learning(TrendsHeadline.LearningProgress(daysRemaining: 9))
+        XCTAssertEqual(
+            TrendsViewModel.learningCardProgress(status: learning, hasLoadedGrid: true, errorMessage: nil)?.daysRemaining, 9
+        )
+        XCTAssertNil(TrendsViewModel.learningCardProgress(status: learning, hasLoadedGrid: false, errorMessage: nil))
+        XCTAssertNil(TrendsViewModel.learningCardProgress(status: learning, hasLoadedGrid: true, errorMessage: "x"))
+        XCTAssertNil(TrendsViewModel.learningCardProgress(status: .steady(period: .thirtyDays), hasLoadedGrid: true, errorMessage: nil))
+    }
 }
 
 /// Same leak, same fix, in the metric detail screen's loader.
