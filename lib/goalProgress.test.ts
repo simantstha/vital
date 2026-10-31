@@ -1477,7 +1477,7 @@ test('race phase: imperial targets are half miles in the copy, km in the structu
   assert.match(reasonOf(p, 'race_phase')!, /^Taper: ~18\.5 mi this week/);
   assert.ok(Math.abs(p.distance!.stepTargetKm / 1.609344 - 18.5) < 0.05, `${p.distance!.stepTargetKm}`);
   // The long run in the taper copy is rounded to the nearest half mile.
-  assert.match(reasonOf(p, 'race_phase')!, /long run 5 mi easy, plus 3×0\.5 mi at race pace midweek$/);
+  assert.match(reasonOf(p, 'race_phase')!, /long run 5 mi easy, plus 2×1 mi at race pace midweek$/);
 });
 
 test('race phase: a race with no distance goal and no running history has phase copy without a number', () => {

@@ -655,8 +655,8 @@ test('taper, race week and recovery targets come from the peak week; a half tape
   assert.equal(planFor(runs, 11, { race, racePeakWeekKm: 40 }).targetKm, 28);
   // Without a measured peak the weekly goal stands in.
   assert.equal(planFor(runs, 8, { race }).targetKm, 23);
-  // Imperial: the 3x1 km becomes 3x0.5 mi.
-  assert.match(planFor(runs, 8, { race, racePeakWeekKm: 40, unitsPerKm: 1 / 1.609344 }).purpose.replace(/\u00a0/g, ' '), /3×0\.5 mi at race pace midweek$/);
+  // Imperial: the 3x1 km becomes 2x1 mi (wave 26e group F).
+  assert.match(planFor(runs, 8, { race, racePeakWeekKm: 40, unitsPerKm: 1 / 1.609344 }).purpose.replace(/\u00a0/g, ' '), /2×1 mi at race pace midweek$/);
 });
 
 test('wind-down weeks are graded with the shared band: within or under is on plan, over the ceiling is not', () => {
@@ -1123,7 +1123,7 @@ test('a long run that was most of its week: one note for the most recent such we
 test('the race-pace reps and every new line of plan copy join numbers to units with U+00A0 (no ASCII space between a digit and km / mi)', () => {
   const MI = 1 / 1.609344;
   assert.equal(racePaceReps(), '3×1 km');
-  assert.equal(racePaceReps(MI), '3×0.5 mi');
+  assert.equal(racePaceReps(MI), '2×1 mi');
   const race = { date: addDayKey(weekOf(9), 6), distanceKm: 21.1 };
   const runs = runsFor([15, 17, 19, 21, 23, 25, 28, 30]);
   const copies: string[] = [];
@@ -1141,7 +1141,7 @@ test('the race-pace reps and every new line of plan copy join numbers to units w
   assert.ok(copies.some(c => c.startsWith('Cutback week:')), 'a cutback line was produced');
   assert.ok(copies.some(c => c.includes(STRIDES_COPY)), 'a strides line was produced');
   for (const c of copies) assert.equal(hasBreakingUnitSpace(c), false, c);
-  // The taper line itself reads "3×1<NBSP>km at race pace midweek" / "3×0.5<NBSP>mi".
+  // The taper line itself reads "3×1<NBSP>km at race pace midweek" / "2×1<NBSP>mi".
   assert.ok(copies.some(c => c.includes('3×1 km at race pace midweek')));
-  assert.ok(copies.some(c => c.includes('3×0.5 mi at race pace midweek')));
+  assert.ok(copies.some(c => c.includes('2×1 mi at race pace midweek')));
 });

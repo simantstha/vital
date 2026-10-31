@@ -87,6 +87,8 @@ import {
   overUpToCap,
   planWeekKm,
   racePaceReps,
+  taperPeakKm,
+  MEDIUM_WEEK_COPY,
   raceWeekShapeClause,
   racePhaseInfo,
   racePhaseTargetKm,
@@ -2534,7 +2536,7 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
   const t = next.targetKm != null ? distanceText(input, next.targetKm) : null;
   const goalText = distanceText(input, next.goalKm);
   const lr = next.longRunKm != null
-    ? `${longRunWord(next.longRunKm, u)} ${formatTargetLongRun(next.longRunKm, u)}${next.longRunJump != null ? " (hold it after last week's jump)" : ''}`
+    ? `${longRunWord(next.longRunKm, u)} ${formatTargetLongRun(next.longRunKm, u)}${next.longRunJump != null ? " (hold it after last week's jump)" : ''}${next.longRun.medium === true ? ` — ${MEDIUM_WEEK_COPY}` : ''}`
     : null;
   const growth = `${Math.round(WEEKLY_DISTANCE_GROWTH * 100)}%`;
   const rep = racePaceReps(unitsPerKmOf(input));
@@ -2545,7 +2547,7 @@ function plannedNextWeek(input: WeeklyReviewInput): { kind: EnduranceWeekPlan['k
     case 'taper':
       // Wave 23e P3-m: a taper week at last week's own volume holds it - "hold ~22 km next week (75% of your ~29 km peak)" - it does not cut it.
       text = next.taperHold && next.targetKm != null && next.wind != null
-        ? `Taper: hold ~${t} next week (${Math.round((next.targetKm / next.wind.peakKm) * 100)}% of your ~${distanceText(input, Math.round(next.wind.peakKm * u) / u)} peak); ${lr ? `${lr} easy, plus ` : ''}${rep} at race pace midweek${lr ? '' : ', the rest easy'}.`
+        ? `Taper: hold ~${t} next week (${Math.round((next.targetKm / next.wind.peakKm) * 100)}% of your ~${distanceText(input, taperPeakKm(next.wind.peakKm))} peak); ${lr ? `${lr} easy, plus ` : ''}${rep} at race pace midweek${lr ? '' : ', the rest easy'}.`
         : `Taper: ~${t} next week — cut volume; ${lr ? `${lr} easy, plus ` : ''}${rep} at race pace midweek${lr ? '' : ', the rest easy'}.`;
       break;
     case 'race_week':

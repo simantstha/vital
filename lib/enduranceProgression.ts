@@ -821,6 +821,8 @@ export interface PlanLongRun {
   capNoteDue: boolean;
   /** The long run is held (last week's long run jumped, or the plan asks for no more than the last one), not grown. */
   held: boolean;
+  /** Wave 26e group F (additive, marathon only): this week's long run is the MEDIUM-long one between two peak long runs (`MEDIUM_LONG_RUN_FRACTION` x the peak); never `held`. */
+  medium?: true;
   /** The most recent week whose long run was over 55% of its week (build weeks only): one watch note, not one per day. */
   share: LongRunShare | null;
   /** The watch note for `share` is said today: on the Monday after the oversized week only (wave 22e), never on the other days. */
@@ -1120,6 +1122,16 @@ export const LONG_RUN_RESTART_WEEK_SHARE = 0.4;
 const TAPER_LONG_RUN_SHARE = 0.65;
 /** Wave 26e: the late marathon taper's long run (8-13 days out, the Sunday a week before the race) is this share of the peak long run. */
 export const TAPER_LATE_LONG_RUN_SHARE = 0.45;
+/**
+ * Wave 26e group F (marathon only): a peak long run is not repeated every week. After a long run of 28 km (17.5 mi) or more AND 90% or more of the peak target, the next plain
+ * build / maintain week plans a MEDIUM-long run (0.75 x the peak, 24 km after a 32 km peak) and the week after it returns to the peak; a cutback counts as the down week.
+ */
+export const MEDIUM_LONG_RUN_FRACTION = 0.75;
+export const MEDIUM_LONG_RUN_MIN_KM = 28;
+export const MEDIUM_LONG_RUN_MIN_MI = 17.5;
+export const MEDIUM_LONG_RUN_PEAK_SHARE = 0.9;
+/** The plan line's / coach's wording of a medium-long week ("long run 24 km — a medium week between peaks"). */
+export const MEDIUM_WEEK_COPY = 'a medium week between peaks';
 /** Every 4th plain build / maintain week is a cutback: a real down week, 25% under the week just run (and a long run eased by the same fraction). */
 export const CUTBACK_EVERY_WEEKS = 4;
 /**
@@ -1506,6 +1518,48 @@ function regainingLongRun(ctx: PlanCtx, w: string, regainState: boolean, lastKm:
 }
 
 /**
+ * Wave 26e group F: is this week the MEDIUM-long week between two marathon peak long runs? A plain build / maintain week of a LONG race (never a cutback, restart, comeback,
+ * rebuild, hold or a week holding a jumped long run) whose peak target has been reached (the longest run of the 14 days is at it) and whose PREVIOUS week's longest run was a
+ * peak-level one: 28 km (17.5 mi) or more and 90% or more of the peak target. The week after a medium week (or a cutback) has a lower previous long run, so it returns to the peak -
+ * and the first arrival at the peak is untouched (a runner still climbing to it, 30 km under a 32 km peak, steps up to it).
+ */
+function isMediumLongWeek(
+  ctx: PlanCtx,
+  kind: EnduranceWeekKind,
+  plain: boolean,
+  lr: { lastKm: number | null; targetPeakKm: number | null },
+  prevWeekLongKm: number | null,
+  held: boolean,
+): boolean {
+  if (!plain || held || (kind !== 'build' && kind !== 'maintain')) return false;
+  if (ctx.raceKm == null || raceClass(ctx.raceKm) !== 'long') return false;
+  if (lr.targetPeakKm == null || lr.lastKm == null || prevWeekLongKm == null) return false;
+  // (round1 in `longRunStats`: a run at the peak target reads within 0.05 km of it.)
+  if (lr.lastKm < lr.targetPeakKm - 0.05) return false;
+  const minKm = ctx.units < 1 ? MEDIUM_LONG_RUN_MIN_MI * KM_PER_MILE : MEDIUM_LONG_RUN_MIN_KM;
+  return prevWeekLongKm >= minKm - 0.05 && prevWeekLongKm >= MEDIUM_LONG_RUN_PEAK_SHARE * lr.targetPeakKm - 0.05;
+}
+
+/**
+ * Wave 26e group F: the week after a medium-long week AND a cutback (the cutback falling right after the medium week) returns to the peak: both weeks ran ~0.75 x the peak, so the
+ * 14-day longest run (`lastKm`) no longer holds the peak long run, and stepping from it would climb 24 -> 26 -> 28 -> 30 again. The peak run of the last 28 days is the base then (regaining a
+ * distance the legs ran four weeks ago). Only after a week the plan itself eased (medium or cutback), only when the 14-day longest is at the medium level, and only for a long race.
+ */
+function returnsToPeak(
+  ctx: PlanCtx,
+  plain: boolean,
+  lr: { lastKm: number | null; peakKm: number | null; targetPeakKm: number | null },
+  prevPlan: EnduranceWeekPlan | null,
+): boolean {
+  if (!plain || prevPlan == null || (prevPlan.longRun.medium !== true && prevPlan.cutback == null)) return false;
+  if (ctx.raceKm == null || raceClass(ctx.raceKm) !== 'long') return false;
+  if (lr.targetPeakKm == null || lr.lastKm == null || lr.peakKm == null) return false;
+  const minKm = ctx.units < 1 ? MEDIUM_LONG_RUN_MIN_MI * KM_PER_MILE : MEDIUM_LONG_RUN_MIN_KM;
+  if (lr.peakKm < Math.max(minKm, MEDIUM_LONG_RUN_PEAK_SHARE * lr.targetPeakKm) - 0.05) return false;
+  return lr.lastKm <= roundLongRunKm(MEDIUM_LONG_RUN_FRACTION * lr.targetPeakKm, ctx.units) + 0.05;
+}
+
+/**
  * The next long run (km) for a plan: min(last + the graded step, the peak target), never
  * above half of the week's target (40% in a restart week; unless the last long
  * run was already above that, then it is held), rounded to 0.5 of the display
@@ -1524,6 +1578,7 @@ function nextLongRun(
   keepLastLong = true,
   taperInfo: RacePhaseInfo | null = null,
   regain = false,
+  medium = false,
 ): number | null {
   switch (kind) {
     case 'baseline':
@@ -1558,6 +1613,8 @@ function nextLongRun(
       if (heldKm != null && !restarting) return roundLongRunKm(heldKm, ctx.units);
       // Wave 26e: without a race there is no peak to build to - the long run stops at the ceiling (21 km / 13 mi), held there when it is already above it.
       // Wave 26e group B: the step is graded by distance; a restart / comeback / rebuild week still under the pre-break long run keeps the old +2 km (`regain`).
+      // Wave 26e group F: a medium-long week between two marathon peak long runs (`isMediumLongWeek`) - not a step from the last long run.
+      if (medium && lr.targetPeakKm != null) return roundLongRunKm(MEDIUM_LONG_RUN_FRACTION * lr.targetPeakKm, ctx.units);
       const stepped = longRunStepKm(lr.lastKm, lr.targetPeakKm, ctx.units, { regain });
       const next = ctx.raceKm == null ? capNoRaceLongRunKm(stepped, lr.lastKm, ctx.units) : stepped;
       // A restart week starts the long run again from the recent longest, but never past 40% of the (gentle) restart week.
@@ -1573,11 +1630,11 @@ function nextLongRun(
 export const RACE_EVE_LINE = 'Race tomorrow — rest or a 15-min shakeout; lay out your kit';
 
 /**
- * The taper's race-pace reps, "3×1 km" ("3×0.5 mi" for miles), with U+00A0 between the number and the unit like every
- * other distance in display copy.
+ * The taper's race-pace reps, "3×1 km" ("2×1 mi" for miles: mile repeats, 3.2 km of race pace - wave 26e group F; it was 3×0.5 mi), with U+00A0 between the number and the
+ * unit like every other distance in display copy.
  */
 export function racePaceReps(unitsPerKm = 1): string {
-  return withUnit(unitsPerKm < 1 ? '3×0.5' : '3×1', distanceUnit(unitsPerKm));
+  return withUnit(unitsPerKm < 1 ? '2×1' : '3×1', distanceUnit(unitsPerKm));
 }
 
 /** "Light week — don't make it up; long run ≤ ~8 km easy, or skip it if you were ill" (units-aware, U+00A0 before the unit). */
@@ -1664,6 +1721,25 @@ const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', '
 /** `km` in display units, rounded DOWN to 0.5 of the unit: the runner is never told to run more than is left. */
 function floorUnits(km: number, units: number): number {
   return Math.floor(km * units * 2 + 1e-9) / 2;
+}
+
+/**
+ * Wave 26e group F: the ONE rounding of the taper's peak week (km): to a tenth, as the API carries it (`taperPeakKm`). The card, the weekly review and the coach all name
+ * "the ~18.6 mi peak" from it - the card used to round to whole miles ("~19 mi") while the coach said "~18.6 mi" on the same day.
+ */
+export function taperPeakKm(peakKm: number): number {
+  return round1(peakKm);
+}
+
+/**
+ * Wave 26e group F: a "keep Sunday's run ≤ N" cap (km) in a taper / race / recovery week, floored to 0.5 of the display unit (≤ 2 mi, not 2.3; ≤ 3.5 km, not 3.7): the runner
+ * is never told to run more than is left, and never gets a decimal to measure. Null under one unit (1 km / 1 mi) - there is no cap to say, the week is all but done.
+ */
+export function windDownCapKm(leftKm: number, unitsPerKm = 1): number | null {
+  const units = Number.isFinite(unitsPerKm) && unitsPerKm > 0 ? unitsPerKm : 1;
+  const shown = floorUnits(leftKm, units);
+  if (!(shown >= 1)) return null;
+  return Math.round((shown / units) * 1000) / 1000;
 }
 
 /**
@@ -1778,7 +1854,9 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
   const lr = plan.longRunKm;
   const lrWord = lr != null ? longRunWord(lr, u) : 'long run';
   const held = plan.longRunJump != null ? " (held after last week's jump)" : '';
-  const lrPart = lr != null ? `${lrWord} ${formatTargetLongRun(lr, u)}${held}` : null;
+  // (Wave 26e group F: a marathon's medium-long week says so - the coach's target line reads the same `MEDIUM_WEEK_COPY`.)
+  const mediumNote = plan.longRun.medium === true && plan.longRunTrim == null ? ` — ${MEDIUM_WEEK_COPY}` : '';
+  const lrPart = lr != null ? `${lrWord} ${formatTargetLongRun(lr, u)}${held}${mediumNote}` : null;
   const strides = plan.strides ? `; ${STRIDES_COPY}` : '';
   // Wave 26e group D: a cutback week's long run is eased, and the plan line says so (the coach's target line reads the same `cutbackLongRunEased`).
   // (Not once the rest-of-week budget has trimmed it to the km left: that long run is the trim's number, and the coach's target line says nothing of the cutback's easing then either.)
@@ -1845,7 +1923,7 @@ function purposeLine(plan: Omit<EnduranceWeekPlan, 'purpose'>): string {
       const race = lrPart ? `${lrPart} easy, plus ${reps} at race pace midweek` : `${reps} at race pace midweek, the rest easy`;
       // Wave 23e P3-m: right after a week at the taper's own number it is no cut - say what it is, as a share of the peak.
       if (plan.taperHold && t != null && plan.wind != null) {
-        return `Taper: hold ~${formatKm(t, u)} this week (${Math.round((t / plan.wind.peakKm) * 100)}% of your ~${formatKm(Math.round(plan.wind.peakKm * u) / u, u)} peak); ${race}`;
+        return `Taper: hold ~${formatKm(t, u)} this week (${Math.round((t / plan.wind.peakKm) * 100)}% of your ~${formatKm(taperPeakKm(plan.wind.peakKm), u)} peak); ${race}`;
       }
       return `Taper: ~${formatKm(t ?? plan.goalKm, u)} this week, cut the volume; ${race}`;
     }
@@ -2363,7 +2441,9 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
   // The long run the week would plan without a light-week cap (the light-week read and the easing-off read both quote it).
   const heldLongRun = longRunJump?.heldKm ?? null;
   const regain = regainingLongRun(ctx, w, restart != null || comeback != null || rebuild != null, lr0.lastKm);
-  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lr0, restart != null, heldLongRun, cutback != null, hold?.ceiling !== true && prevPlan?.hold?.ceiling !== true, info, regain);
+  const medium = isMediumLongWeek(ctx, kind, plain && !regain, lr0, prevLong, heldLongRun != null);
+  const lrForStep = returnsToPeak(ctx, plain && !regain, lr0, prevPlan) ? { ...lr0, lastKm: lr0.peakKm } : lr0;
+  const plannedNextKm = nextLongRun(ctx, kind, targetKm, lrForStep, restart != null, heldLongRun, cutback != null, hold?.ceiling !== true && prevPlan?.hold?.ceiling !== true, info, regain, medium);
 
   // The week before a taper (or race week): the next Monday's phase is wind-down. Easing off is the plan's own next step.
   const nextWindPhase = buildLike && info != null && info.phase === 'build' ? phaseAt(ctx, addDayKey(w, 7))?.phase : undefined;
@@ -2566,7 +2646,9 @@ function computeWeekPlan(ctx: PlanCtx, w: string, depth: number): EnduranceWeekP
     nextKm,
     planKm: trimmedKm ?? plannedNextKm,
     capNoteDue,
-    held: buildLike && (cutback != null || longRunJump != null || (untrimmedNextKm != null && lr0.lastKm != null && untrimmedNextKm <= lr0.lastKm + 1e-9)),
+    // (A medium-long week is lower than the last long run on purpose: it is not "held".)
+    held: buildLike && !medium && (cutback != null || longRunJump != null || (untrimmedNextKm != null && lr0.lastKm != null && untrimmedNextKm <= lr0.lastKm + 1e-9)),
+    ...(medium ? { medium: true as const } : {}),
     share,
     shareDue: share != null && share.weekStart === prevStart && ctx.today === w,
     peakOversized,

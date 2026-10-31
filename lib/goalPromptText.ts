@@ -8,7 +8,7 @@
  */
 
 import type { GoalKind, GoalProgress } from './goalProgress';
-import { CUTBACK_EASED_COPY, RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, cutbackLongRunEased, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, raceWeekShapeClause, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
+import { CUTBACK_EASED_COPY, MEDIUM_WEEK_COPY, RACE_EVE_LINE, RESTART_LONG_RUN_MAX_SHARE, STRIDES_COPY, cutbackLongRunEased, floorLongRunKm, formatRaceTime, formatTargetLongRun, isWindDownPhase, lightWeekLine, longRunCapNote, longRunStepAmountKm, midWeekRestartText, noRaceLongRunMaxKm, racePaceReps, raceWeekShapeClause, recoveryWeek, restOfWeekPhrase, roundLongRunKm, skippedCutbackHoldReason } from './enduranceProgression';
 import type { ProgressionSummary } from './workoutRepository';
 import { plainSpaces } from './displayText';
 import { liftBaselineLabel, liftChange4w, liftLapseMinDays, liftReturnDisplay, pickHeadlineLift, rankLifts } from './liftChange';
@@ -142,7 +142,8 @@ function weekTargetBase(gp: GoalProgress, units: UnitSystem): string | null {
   const t = plan.targetKm != null ? distKm(plan.targetKm, units) : null;
   // (A trimmed long run is said once, by the note `weekTargetLine` adds - "keep Sunday's long run to ~6 km" - not also as "long run 6 km held / eased".)
   const trimmed = plan.longRunTrim != null;
-  const lr = plan.longRunKm != null && !trimmed ? `long run ${longRunText(plan.longRunKm, units)}` : null;
+  // (Wave 26e group F: a marathon's medium-long week says so - the plan line's own `MEDIUM_WEEK_COPY`.)
+  const lr = plan.longRunKm != null && !trimmed ? `long run ${longRunText(plan.longRunKm, units)}${plan.longRunMedium === true ? ` — ${MEDIUM_WEEK_COPY}` : ''}` : null;
   // Wave 26e: without a race the long run stops at a ceiling (21 km / 13 mi): a plan AT it says so plainly, so nothing reads as "it keeps growing".
   const perKm = units === 'imperial' ? 1 / KM_PER_MILE : 1;
   const noRaceLong = gp.race?.distanceKm == null && plan.longRunKm != null && !trimmed ? roundLongRunKm(plan.longRunKm, perKm) : null;

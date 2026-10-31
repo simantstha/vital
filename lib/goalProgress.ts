@@ -169,6 +169,8 @@ import {
   TAPER_GOOD_MIN_FRACTION,
   LONG_RUN_MAX_WEEK_SHARE,
   racePaceReps,
+  taperPeakKm,
+  windDownCapKm,
   findRaceRun,
   formatRaceTime,
   floorLongRunKm,
@@ -366,6 +368,8 @@ export interface GoalWeekPlan {
   raceWeekShape?: { runs: number; runsFrom?: number; capRuns?: number; perRunCapKm: number };
   /** Additive: the week's long run is held (not grown) - a cutback week, or after last week's long-run jump. */
   longRunHeld?: boolean;
+  /** Additive (wave 26e group F, marathon only): the week's long run is the MEDIUM-long one between two peak long runs ("long run 24 km — a medium week between peaks"); never with `longRunHeld`. */
+  longRunMedium?: boolean;
   /** Additive: the target is a careful comeback's ceiling, worded "up to ~18 km". */
   upTo?: boolean;
   /**
@@ -2954,7 +2958,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             comebackKm: plan.comeback != null ? plan.comeback.medianKm : plan.restart != null ? plan.restart.medianKm : null,
             goalReachedBefore: plan.goalReachedBefore,
             lastAtGoal: plan.lastAtGoal,
-            ...(plan.taperHold && plan.wind != null ? { taperHold: true, taperPeakKm: round1(plan.wind.peakKm) } : {}),
+            ...(plan.taperHold && plan.wind != null ? { taperHold: true, taperPeakKm: taperPeakKm(plan.wind.peakKm) } : {}),
             ...(plan.cutback != null ? { cutback: true, cutbackNormalKm: plan.cutback.normalKm } : {}),
             ...(plan.onBreak && plan.kind === 'restart' && plan.targetKm != null && Math.abs(plan.restartKm - plan.targetKm) > 1e-9 ? { restartKm: plan.restartKm } : {}),
             ...(plan.last != null ? { lastKm: plan.last.km } : {}),
@@ -2966,6 +2970,7 @@ function distanceProgress(input: GoalProgressInput): GoalDistanceProgress | null
             ...(plan.strides ? { strides: true } : {}),
             ...(plan.raceWeekShape != null ? { raceWeekShape: plan.raceWeekShape } : {}),
             ...(plan.longRun.held ? { longRunHeld: true } : {}),
+            ...(plan.longRun.medium === true ? { longRunMedium: true } : {}),
             ...(plan.upTo ? { upTo: true } : {}),
             ...(plan.hold?.skippedCutback ? { skippedCutback: true } : {}),
             ...(plan.longRunAhead ? { longRunAhead: true } : {}),
@@ -3385,8 +3390,9 @@ function windDownLine(
       // Two days out the leftover is tomorrow's short run; further out the days before the race are for rest, then a shakeout the day before
       // (never "keep the days before the race <= 7 km" next to "rest 1-2 days" and a 3 km Friday).
       if (toGo !== 2) return { kind: 'race_phase', text: `${label}: ${progress} — rest tomorrow, then a 15-min shakeout the day before the race`, tone: 'neutral' };
-      const cap = Math.min(left, (u < 1 ? 2 : 3) / u);
-      return { kind: 'race_phase', text: `${label}: ${progress} — keep tomorrow's run ≤ ${fmtDistance(input, cap)}`, tone: 'neutral' };
+      // (Wave 26e group F: the cap is floored to the half unit - "≤ 2 mi", not 2.3 - and never under one unit; under one unit left the plan line stands.)
+      const cap = windDownCapKm(Math.min(left, (u < 1 ? 2 : 3) / u), u);
+      if (cap != null) return { kind: 'race_phase', text: `${label}: ${progress} — keep tomorrow's run ≤ ${fmtDistance(input, cap)}`, tone: 'neutral' };
     }
     return { kind: 'race_phase', text: plan.purpose, tone: 'neutral' };
   }
@@ -3394,7 +3400,9 @@ function windDownLine(
   if (toGo == null || toGo > 7) {
     if (doneKm > 0 && doneKm >= target * 0.5 && left >= 1 / u && weekdayOf(input.todayKey) !== 0) {
       const when = weekdayOf(input.todayKey) === 6 ? "Sunday's run" : 'the rest of the week';
-      return { kind: 'race_phase', text: `${label}: ${progress} — keep ${when} ≤ ${fmtDistance(input, left)}`, tone: 'neutral' };
+      // (Wave 26e group F: floored to the half unit, as the race-week cap above.)
+      const cap = windDownCapKm(left, u);
+      if (cap != null) return { kind: 'race_phase', text: `${label}: ${progress} — keep ${when} ≤ ${fmtDistance(input, cap)}`, tone: 'neutral' };
     }
   }
   if (postRace && phase !== 'recovery') return { kind: 'race_phase', text: `Recovery: easy only this week (~${fmtDistance(input, target)} max)`, tone: 'neutral' };

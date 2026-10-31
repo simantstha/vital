@@ -202,11 +202,11 @@ test('strides: the last 2 build weeks before a taper add "plus 4–6 strides aft
   assert.match(plan('2026-10-20'), /plus 4–6 strides after one easy run$/);
 });
 
-test('taper copy on the card joins "3×1 km" / "3×0.5 mi" (and every new line) with U+00A0 - with and without a weekly distance target', () => {
+test('taper copy on the card joins "3×1 km" / "2×1 mi" (and every new line) with U+00A0 - with and without a weekly distance target', () => {
   const race = { date: '2026-10-18', distanceKm: 21.1 };
   const breaking = /\d (km|mi|kg|lb|kcal|min)\b/;
   for (const unitSystem of ['metric', 'imperial'] as const) {
-    const rep = unitSystem === 'metric' ? '3×1 km' : '3×0.5 mi';
+    const rep = unitSystem === 'metric' ? '3×1 km' : '2×1 mi';
     // With a weekly distance target the week plan's purpose line carries the reps; without one the race-phase reason does.
     const withTarget = computeGoalProgressRaw(input(weeks('2026-10-07', [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: '2026-10-07', race, racePeakWeekKm: 30, unitSystem }));
     const noTarget = computeGoalProgressRaw(input(weeks('2026-10-07', [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), {

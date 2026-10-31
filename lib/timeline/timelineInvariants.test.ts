@@ -160,7 +160,7 @@ invariant(ALL, 'every weekly review has a non-empty next week', snaps =>
 // A digit, an ASCII space, then a unit. The app glues them with U+00A0 so a number never wraps away from its unit.
 const ASCII_SPACE_BEFORE_UNIT = /\d (?:kg|km|mi|lb|kcal)\b/;
 
-// Every scenario, taper and race weeks included: the taper line's race-pace reps are "3×1 km" / "3×0.5 mi" with U+00A0 (wave 21e).
+// Every scenario, taper and race weeks included: the taper line's race-pace reps are "3×1 km" / "2×1 mi" with U+00A0 (wave 21e).
 invariant(ALL, 'numbers and units in card and review text are joined by U+00A0 (no ASCII space before kg, km, mi, lb, kcal)', snaps => {
   const out: Violation[] = [];
   for (const snap of snaps) {

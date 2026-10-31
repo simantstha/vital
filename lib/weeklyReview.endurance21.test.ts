@@ -115,10 +115,10 @@ test('a careful comeback is graded against the week before it, never as "5 km sh
   assert.doesNotMatch(shrank.slip ?? '', /short of this week/);
 });
 
-test('the taper plan copy joins "3×1 km" / "3×0.5 mi" with U+00A0 in the card-side review text (no ASCII space between a digit and the unit)', () => {
+test('the taper plan copy joins "3×1 km" / "2×1 mi" with U+00A0 in the card-side review text (no ASCII space between a digit and the unit)', () => {
   for (const unitSystem of ['metric', 'imperial'] as const) {
     const r = raw(planReview([30, 30, 30, 30, 30, 30], { raceDate: '2026-10-18', raceDistanceKm: 21.1, racePeakWeekKm: 40, unitSystem }));
-    assert.match(r.nextWeek, unitSystem === 'metric' ? /3×1 km at race pace midweek/ : /3×0\.5 mi at race pace midweek/);
+    assert.match(r.nextWeek, unitSystem === 'metric' ? /3×1 km at race pace midweek/ : /2×1 mi at race pace midweek/);
     assert.equal(BREAKING_UNIT_SPACE.test(allText(r)), false, allText(r));
   }
   // The strides and cutback copy follow the same rule.

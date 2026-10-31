@@ -132,9 +132,9 @@ test('race eve: the coach line carries no km of the week, only the rest and the 
   assert.match(text, /Start conservatively — the first few km easy/);
 });
 
-test('coach lines keep plain spaces: the taper reps read "3×1 km" / "3×0.5 mi" with an ASCII space (no U+00A0 in the coach)', () => {
+test('coach lines keep plain spaces: the taper reps read "3×1 km" / "2×1 mi" with an ASCII space (no U+00A0 in the coach)', () => {
   const race = { date: '2026-10-18', distanceKm: 21.1 };
-  for (const [unitSystem, units, rep] of [['metric', 'metric', '3×1 km'], ['imperial', 'imperial', '3×0.5 mi']] as const) {
+  for (const [unitSystem, units, rep] of [['metric', 'metric', '3×1 km'], ['imperial', 'imperial', '2×1 mi']] as const) {
     const gp = computeGoalProgress(input(weeks('2026-10-07', [[[1, 6]], wk(30), wk(30), wk(30), wk(30)]), { todayKey: '2026-10-07', race, racePeakWeekKm: 30, unitSystem }));
     const text = coach(gp, units);
     assert.ok(text.includes(`plus ${rep} at race pace midweek`), text);

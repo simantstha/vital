@@ -967,3 +967,177 @@ test('the obedient runner keeps every race-week run within the per-run cap: the 
   const total = runs.reduce((a, b) => a + b, 0);
   assert.ok(total <= 15 * 1.1 && total >= 15 * 0.94, `${total} km of ~15`);
 });
+
+// ── Group F: the marathon peak long run alternates with a medium-long week; imperial copy (reps, caps, the peak figure) ───
+
+const MARATHON = { date: '2026-06-21', distanceKm: 42.2 };
+
+/** The marathon probe: 70 km goal, 5 days, from 50 / 20, obedient (the same runner the spec's probe walks). */
+const marathonSim = () => simulate({ goalKm: 70, baseKm: 50, baseLong: 20, days: [0, 1, 3, 4, 6], weeks: 17, race: MARATHON });
+
+test('marathon: the peak long run is not repeated every week - after a peak week comes a medium-long week (0.75 x the peak), then the peak again; a cutback is the down week', () => {
+  const { plans } = marathonSim();
+  const build = plans.filter(p => p.kind === 'build' || p.kind === 'maintain');
+  // 22, 24, 26, 28 build; the cutback eases 28 -> 21; 30; 32 = the peak (first arrival unchanged); then medium 24, the 10th week's cutback (24), the peak,
+  // a medium week, the peak, and the taper. It was 32, 32, (cutback), 32, 32, 32: five peak long runs in a row.
+  assert.deepEqual(build.map(p => p.longRunKm), [22, 24, 26, 28, 21, 30, 32, 24, 24, 32, 24, 32]);
+  const peaks = build.filter(p => p.longRunKm === 32).length;
+  assert.equal(peaks, 3, `${peaks} weeks at the peak (it was 5)`);
+  for (let i = 1; i < build.length; i++) {
+    assert.ok(!(build[i].longRunKm === 32 && build[i - 1].longRunKm === 32), `${build[i].weekStart}: two peak long runs in a row`);
+  }
+  // Exactly the weeks after a peak week (that are not themselves a cutback) are medium; the flag is additive.
+  const medium = build.filter(p => p.longRun.medium === true).map(p => p.weekStart);
+  assert.deepEqual(medium, ['2026-04-27', '2026-05-18']);
+  for (const p of build) {
+    if (p.longRun.medium === true) assert.equal(p.longRunKm, roundLongRunKm(0.75 * 32), `${p.weekStart}`);
+  }
+});
+
+test('the medium-long week is for the peak of a LONG race only: a half marathon at its peak, a marathon runner under 90% of the peak, and a no-race runner never get one', () => {
+  const half = simulate({ goalKm: 40, baseKm: 24, baseLong: 10, days: [1, 3, 5, 6], weeks: 17, race: { date: '2026-06-21', distanceKm: 21.1 } });
+  assert.ok(half.plans.every(p => p.longRun.medium !== true), 'half marathon');
+  const noRace = simulate({ goalKm: 60, baseKm: 40, baseLong: 14, days: [0, 1, 3, 4, 6], weeks: 14 });
+  assert.ok(noRace.plans.every(p => p.longRun.medium !== true), 'no race');
+  // A 50 km goal: the marathon peak target is 25 km, under the 28 km a medium week needs - the peak is held.
+  const small = simulate({ goalKm: 50, baseKm: 30, baseLong: 12, days: [1, 3, 5, 6], weeks: 17, race: MARATHON });
+  assert.ok(small.plans.every(p => p.longRun.medium !== true), 'marathon at a 50 km goal');
+});
+
+test('imperial marathon: the same alternation, in miles (17.5 mi and 90% of the peak start it; the medium week is 0.75 x the peak to the half mile)', () => {
+  const { plans } = simulate({ goalKm: 44 * KM_PER_MILE, baseKm: 31 * KM_PER_MILE, baseLong: 12 * KM_PER_MILE, days: [0, 1, 3, 4, 6], weeks: 17, race: MARATHON, units: MI });
+  const build = plans.filter(p => p.kind === 'build' || p.kind === 'maintain');
+  const mi = build.map(p => Math.round((p.longRunKm as number) * MI * 2) / 2);
+  const peak = Math.max(...mi);
+  assert.ok(peak >= 17.5, mi.join(', '));
+  for (let i = 1; i < build.length; i++) assert.ok(!(mi[i] === peak && mi[i - 1] === peak), `two peak long runs in a row: ${mi.join(', ')}`);
+  const mediums = build.filter(p => p.longRun.medium === true);
+  assert.ok(mediums.length >= 1, mi.join(', '));
+  for (const p of mediums) assert.equal(Math.round((p.longRunKm as number) * MI * 2) / 2, Math.round(peak * 0.75 * 2) / 2);
+});
+
+/** The marathon Monday after the first peak week (the 2026-04-27 Monday of the probe), as the coach input. */
+function marathonMediumInput(): { gp: GoalProgress; plan: EnduranceWeekPlan } {
+  const { plans, runs } = marathonSim();
+  const medium = plans.find(p => p.longRun.medium === true) as EnduranceWeekPlan;
+  const monday = medium.weekStart;
+  const before: Run[] = runs.filter(r => r.day < monday).map(r => run(r.day, r.km));
+  const input: GoalProgressInput = {
+    ...noRaceInput(before),
+    todayKey: monday,
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 70 },
+    start: { weightKg: null, startedAt: D0 },
+    race: MARATHON,
+    racePeakWeekKm: peakWeekKmBeforeTaper(runs.filter(r => r.day < monday), MARATHON.date, MARATHON.distanceKm),
+  };
+  return { gp: computeGoalProgress(input), plan: medium };
+}
+
+test('the medium-long week is worded the same on the card, the coach and the structured plan - never "held", never "keeps growing"', () => {
+  const { gp, plan } = marathonMediumInput();
+  assert.match(plainSpaces(plan.purpose), /long run 24 km — a medium week between peaks/);
+  const p = gp.distance?.plan;
+  assert.equal(p?.longRunKm, 24);
+  assert.equal(p?.longRunMedium, true);
+  assert.equal(p?.longRunHeld, undefined, 'a lower long run is not "held"');
+  assert.match(p?.purpose ?? '', /long run 24 km — a medium week between peaks/);
+  const target = formatGoalProgressLines(gp, 'metric').find(l => l.startsWith("- This week's target")) ?? '';
+  assert.match(target, /long run 24 km — a medium week between peaks/);
+  assert.doesNotMatch(target, /held|keeps growing/);
+});
+
+// ── Imperial: race-pace reps, wind-down caps, one taper peak ───────────────────────────────────────────────────────────
+
+test('imperial race-pace reps are 2×1 mi (mile repeats, 3.2 km of race pace); the metric 3×1 km is unchanged', async () => {
+  const { racePaceReps } = await import('./enduranceProgression');
+  assert.equal(plainSpaces(racePaceReps(MI)), '2×1 mi');
+  assert.equal(plainSpaces(racePaceReps(1)), '3×1 km');
+});
+
+/** A half marathoner (30 km weeks) in the recovery week 2 of the dump's imperial scenario, Saturday 4 Jul, with `thisWeekKm` run so far. */
+function recoveryInput(thisWeekKm: number, unitSystem: 'metric' | 'imperial'): GoalProgressInput {
+  const runs: Run[] = [];
+  for (let w = 0; w < 8; w++) {
+    const mon = addDayKey('2026-04-27', 7 * w);
+    for (const [d, km] of [[1, 6], [3, 6], [5, 6], [6, 12]] as Array<[number, number]>) runs.push(run(addDayKey(mon, d), km));
+  }
+  runs.push(run('2026-06-23', 4), run('2026-06-25', 4), run('2026-06-27', 4));
+  const third = Math.round((thisWeekKm / 3) * 100) / 100;
+  runs.push(run('2026-06-30', third), run('2026-07-02', third), run('2026-07-04', Math.round((thisWeekKm - 2 * third) * 100) / 100));
+  return {
+    ...noRaceInput(runs),
+    todayKey: '2026-07-04',
+    unitSystem,
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    start: { weightKg: null, startedAt: D0 },
+    race: { date: '2026-06-21', distanceKm: 21.1 },
+    racePeakWeekKm: 30,
+  };
+}
+
+const keepLine = (gp: GoalProgress): string => gp.reasons.find(r => r.kind === 'race_phase')?.text ?? '';
+
+test('imperial wind-down caps are floored to the half mile: "keep Sunday\'s run ≤ 2 mi" (it was 2.3), in the card and in the coach lines', () => {
+  const gp = computeGoalProgress(recoveryInput(18, 'imperial'));
+  assert.equal(keepLine(gp), "Recovery: 11.2 of ~13.5 mi — keep Sunday's run ≤ 2 mi");
+  const coach = formatGoalProgressLines(gp, 'imperial').join('\n');
+  assert.match(coach, /keep Sunday's run ≤ 2 mi/);
+  assert.doesNotMatch(coach + keepLine(gp), /≤ 2\.3/);
+});
+
+test('metric wind-down caps floor to the half km too ("≤ 3.5 km", not 3.7), and a whole-km leftover is unchanged', () => {
+  const frac = computeGoalProgress(recoveryInput(17.3, 'metric'));
+  assert.match(keepLine(frac), /^Recovery: 17\.3 of ~21 km — keep Sunday's run ≤ 3\.5 km$/);
+  const whole = computeGoalProgress(recoveryInput(18, 'metric'));
+  assert.match(keepLine(whole), /keep Sunday's run ≤ 3 km$/);
+});
+
+test('a wind-down cap is never under one step: 1.3 mi left reads "≤ 1 mi"; under a mile left there is no cap line at all (the plan line stands)', () => {
+  const one = computeGoalProgress(recoveryInput(21.73 - 2.09, 'imperial'));
+  assert.match(keepLine(one), /keep Sunday's run ≤ 1 mi$/);
+  const none = computeGoalProgress(recoveryInput(21.73 - 1.2, 'imperial'));
+  assert.doesNotMatch(keepLine(none), /keep Sunday's run/);
+});
+
+/** A half marathoner (30 km weeks, imperial or metric) on the Monday of a taper week that holds last week's volume: the "hold ... of your ~N peak" line. */
+function taperHoldInput(unitSystem: 'metric' | 'imperial'): GoalProgressInput {
+  const monday = '2026-10-12';
+  const runs: Run[] = [];
+  for (let k = 2; k <= 5; k++) for (const [d, km] of [[1, 6], [3, 6], [5, 6], [6, 12]] as Array<[number, number]>) runs.push(run(addDayKey(monday, -7 * k + d), km));
+  // (The taper week is 22.5 km = 14 mi; a week at 22 km in miles / 23 km in km is the "hold".)
+  for (const [d, km] of [[1, 5], [3, 5], [5, 5], [6, unitSystem === 'metric' ? 8 : 7]] as Array<[number, number]>) runs.push(run(addDayKey(monday, -7 + d), km));
+  return {
+    ...noRaceInput(runs),
+    todayKey: monday,
+    unitSystem,
+    target: { weightKg: null, date: null, weeklySessions: null, weeklyDistanceKm: 30 },
+    race: { date: '2026-10-25', distanceKm: 21.1 },
+    racePeakWeekKm: 30,
+  };
+}
+
+test('imperial: the taper peak is ONE figure on the card and in the coach ("~18.6 mi", not ~19 on one and ~18.6 on the other), with the 2×1 mi reps', () => {
+  const gp = computeGoalProgress(taperHoldInput('imperial'));
+  assert.equal(gp.distance?.plan?.taperHold, true);
+  const card = gp.reasons.find(r => r.kind === 'race_phase')?.text ?? '';
+  const plan = gp.distance?.plan?.purpose ?? '';
+  const coach = formatGoalProgressLines(gp, 'imperial').find(l => l.startsWith('- Race phase')) ?? '';
+  const cardPeak = /of your ~([\d.]+ mi) peak/.exec(card)?.[1];
+  const planPeak = /of your ~([\d.]+ mi) peak/.exec(plan)?.[1];
+  const coachPeak = /of the ~([\d.]+ mi) peak/.exec(coach)?.[1];
+  assert.equal(cardPeak, '18.6 mi', card);
+  assert.equal(planPeak, cardPeak);
+  assert.equal(coachPeak, cardPeak, coach);
+  assert.match(card, /2×1 mi at race pace midweek/);
+  assert.match(coach, /2×1 mi at race pace midweek/);
+  assert.doesNotMatch(card + coach, /3×0\.5/);
+});
+
+test('metric: the taper peak stays one figure on the card and in the coach, with the 3×1 km reps', () => {
+  const gp = computeGoalProgress(taperHoldInput('metric'));
+  const card = gp.reasons.find(r => r.kind === 'race_phase')?.text ?? '';
+  const coach = formatGoalProgressLines(gp, 'metric').find(l => l.startsWith('- Race phase')) ?? '';
+  assert.match(card, /of your ~30 km peak/);
+  assert.match(coach, /of the ~30(\.0)? km peak/);
+  assert.match(card, /3×1 km at race pace midweek/);
+});
