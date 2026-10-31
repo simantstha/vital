@@ -876,6 +876,11 @@ export interface RaceWeekShape {
   runs: number;
   /** Set for a runner with no weeks to read a rhythm from ("2–3 short easy runs"): the fewest runs; the cap fits either. */
   runsFrom?: number;
+  /**
+   * Set only when the cap shares the week over MORE runs than `runs` shows: the race-eve day is a usual run day too (its shakeout is not one of the "short easy runs"
+   * the card counts, but the cap keeps its slot, so it stays conservative). `perRunCapKm` = the larger of `targetKm / capRuns` and 40% of the week, rounded down.
+   */
+  capRuns?: number;
   perRunCapKm: number;
 }
 
@@ -1733,8 +1738,8 @@ export function raceWeekPerRunCapKm(targetKm: number, runs: number, unitsPerKm =
 
 /**
  * Wave 26e group E: the shape of the early race week, or null: only from `RACE_WEEK_SHAPE_FROM_DAYS` out, under `RACE_WEEK_SHAPE_UNTIL_SHARE` of the budget run, and in a week of at
- * least 3 km (2 mi). The runs are the runner's usual run days of the week through the day before the race (the race-eve slot counts: it is a short run too, and a Tue + Sat runner
- * has two), counted from Monday so the figures stand all week, at most `RACE_WEEK_SHAPE_MAX_RUNS`. Read from the weeks before this one only (taper and race weeks left out), so it stands all week for the card, the coach and the review.
+ * least 3 km (2 mi). The CAP shares the week over the runner's usual run days of the week through the day before the race (the race-eve slot counts), the runs SHOWN leave the race-eve
+ * day out (it is the shakeout), counted from Monday so the figures stand all week, at most `RACE_WEEK_SHAPE_MAX_RUNS`. Read from the weeks before this one only (taper and race weeks left out), so it stands all week for the card, the coach and the review.
  */
 function raceWeekShapeFor(ctx: PlanCtx, w: string, targetKm: number, daysToGo: number): RaceWeekShape | null {
   const units = ctx.units;
@@ -1743,13 +1748,17 @@ function raceWeekShapeFor(ctx: PlanCtx, w: string, targetKm: number, daysToGo: n
   const done = ctx.runs.filter(r => r.day >= w && r.day <= ctx.today && r.day !== ctx.raceDate).reduce((a, r) => a + r.km, 0);
   if (done >= targetKm * RACE_WEEK_SHAPE_UNTIL_SHARE - 1e-9) return null;
   // (The WEEK's runs, counted from Monday whatever day it is read on: the cap does not creep up on Thursday because Tuesday's run is in. The rhythm reads the weeks before this one.)
-  const lastDow = Math.min(6, dayIndex(ctx.today) - dayIndex(w) + daysToGo - 1);
-  const usual = usualRunDaysLeft(ctx, w, 0, false).filter(d => d <= lastDow).length;
-  if (usual <= 0) {
+  const eveDow = dayIndex(ctx.today) - dayIndex(w) + daysToGo - 1;
+  const lastDow = Math.min(6, eveDow);
+  const days = usualRunDaysLeft(ctx, w, 0, false).filter(d => d <= lastDow);
+  if (days.length <= 0) {
     return { runs: RACE_WEEK_SHAPE_MAX_RUNS, runsFrom: RACE_WEEK_SHAPE_NO_HISTORY_MIN_RUNS, perRunCapKm: raceWeekPerRunCapKm(targetKm, RACE_WEEK_SHAPE_NO_HISTORY_MIN_RUNS, units) };
   }
-  const runs = Math.min(RACE_WEEK_SHAPE_MAX_RUNS, usual);
-  return { runs, perRunCapKm: raceWeekPerRunCapKm(targetKm, runs, units) };
+  // The cap shares the week over every usual run day through the eve (conservative); the runs the card SHOWS leave the race-eve day out - it is the shakeout, said on its own - but
+  // never go under one (a runner whose only usual day is the eve is told one short easy run).
+  const capRuns = Math.min(RACE_WEEK_SHAPE_MAX_RUNS, days.length);
+  const shown = Math.max(1, Math.min(RACE_WEEK_SHAPE_MAX_RUNS, days.length - (days.includes(eveDow) ? 1 : 0)));
+  return { runs: shown, ...(capRuns !== shown ? { capRuns } : {}), perRunCapKm: raceWeekPerRunCapKm(targetKm, capRuns, units) };
 }
 
 /**

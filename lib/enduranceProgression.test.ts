@@ -648,9 +648,9 @@ test('taper, race week and recovery targets come from the peak week; a half tape
   const raceWeek = planFor(runs, 9, { race, racePeakWeekKm: 40 });
   assert.equal(raceWeek.kind, 'race_week');
   assert.equal(raceWeek.targetKm, 20);
-  // (Wave 26e group E: the early race week has a shape - 3 runs of the 4-day week that lead up to the race, none over 40% of the ~20 km.)
-  assert.equal(nbsp(raceWeek.purpose), 'Race week: ~20~km before the race — 3 short easy runs, each ≤ ~8~km; 4–6 strides after the first; rest or a 15-min shakeout the day before');
-  assert.deepEqual(raceWeek.raceWeekShape, { runs: 3, perRunCapKm: 8 });
+  // (Wave 26e group E: the early race week has a shape - 2 runs (Tue, Thu - the Saturday is the race-eve shakeout) of the 4-day week, none over 40% of the ~20 km.)
+  assert.equal(nbsp(raceWeek.purpose), 'Race week: ~20~km before the race — 2 short easy runs, each ≤ ~8~km; 4–6 strides after the first; rest or a 15-min shakeout the day before');
+  assert.deepEqual(raceWeek.raceWeekShape, { runs: 2, capRuns: 3, perRunCapKm: 8 });
   assert.equal(planFor(runs, 10, { race, racePeakWeekKm: 40 }).targetKm, 16);
   assert.equal(planFor(runs, 11, { race, racePeakWeekKm: 40 }).targetKm, 28);
   // Without a measured peak the weekly goal stands in.
@@ -789,7 +789,7 @@ test('race eve and race day: the purpose follows TODAY\'s distance to the race, 
   const runs: PlanRun[] = [{ day: '2026-06-02', km: 12 }, { day: '2026-06-04', km: 12 }, { day: '2026-06-06', km: 12 }, { day: '2026-06-09', km: 10 }, { day: '2026-06-11', km: 10 }];
   const at = (today: string) => enduranceWeekPlan({ runs, weekStart: monday, goalKm: 30, today, race, racePeakWeekKm: 30 });
   // (Wave 26e group E: Wednesday, 4 days out and nothing run this week: the early race week's shape.)
-  assert.equal(at('2026-06-17').purpose.replace(/\u00a0/g, ' '), 'Race week: ~15 km before the race — 3 short easy runs, each ≤ ~6 km; 4–6 strides after the first; rest or a 15-min shakeout the day before');
+  assert.equal(at('2026-06-17').purpose.replace(/\u00a0/g, ' '), 'Race week: ~15 km before the race — 2 short easy runs, each ≤ ~6 km; 4–6 strides after the first; rest or a 15-min shakeout the day before');
   assert.equal(at('2026-06-19').purpose, 'Race week: short easy runs, rest 1–2 days before the race'); // 2 days out: the shape is for the early week
   assert.equal(at('2026-06-20').purpose, RACE_EVE_LINE);
   assert.equal(at('2026-06-20').raceDaysToGo, 1);

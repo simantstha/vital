@@ -361,9 +361,9 @@ export interface GoalWeekPlan {
   strides?: boolean;
   /**
    * Additive (wave 26e group E): the shape of the early race week (race 3+ days out, under half the budget run): `runs` short easy runs (`runsFrom`: the fewest, for a runner with no
-   * rhythm to read), none longer than `perRunCapKm`. The plan line and the coach line say the same two figures; absent from 2 days out and in any other week.
+   * rhythm to read; the race-eve shakeout is not counted, `capRuns` - set only when larger - is the number of run days the cap shares the week over), none longer than `perRunCapKm`. The plan line and the coach line say the same two figures; absent from 2 days out and in any other week.
    */
-  raceWeekShape?: { runs: number; runsFrom?: number; perRunCapKm: number };
+  raceWeekShape?: { runs: number; runsFrom?: number; capRuns?: number; perRunCapKm: number };
   /** Additive: the week's long run is held (not grown) - a cutback week, or after last week's long-run jump. */
   longRunHeld?: boolean;
   /** Additive: the target is a careful comeback's ceiling, worded "up to ~18 km". */

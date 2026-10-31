@@ -710,13 +710,29 @@ function raceWeekReader(o: RaceWeekSetup) {
 const raceWeekLine = (b: string, k: string, cap: string, unit: string): string =>
   `Race week: ~${b} ${unit} before the race — ${k} short easy runs, each ≤ ~${cap} ${unit}; 4–6 strides after the first; rest or a 15-min shakeout the day before`;
 
-test('half marathon race-week Monday: 3 short easy runs, each at most ~6 km of the ~15 km, strides after the first, rest or a shakeout the day before', () => {
+test('half marathon race-week Monday: 2 short easy runs (Tue, Thu - the Saturday is the race-eve shakeout, not a run), each at most ~6 km of the ~15 km, strides after the first', () => {
   const { planAt, raceMonday } = raceWeekReader({ raceKm: 21.1, weekKm: 30, days: [1, 3, 5, 6] });
   const plan = planAt(raceMonday);
   assert.equal(plan.kind, 'race_week');
   assert.equal(plan.targetKm, 15);
-  assert.deepEqual(plan.raceWeekShape, { runs: 3, perRunCapKm: 6 }); // Tue, Thu, Sat; max(15 / 3, 0.4 x 15) = 6
-  assert.equal(plainSpaces(plan.purpose), raceWeekLine('15', '3', '6', 'km'));
+  // Shown: Tue and Thu. The cap still divides the week by 3 (the race-eve Saturday is a slot too): max(15 / 3, 0.4 x 15) = 6.
+  assert.deepEqual(plan.raceWeekShape, { runs: 2, capRuns: 3, perRunCapKm: 6 });
+  assert.equal(plainSpaces(plan.purpose), raceWeekLine('15', '2', '6', 'km'));
+  assert.doesNotMatch(plan.purpose, /3 short easy runs/);
+});
+
+test('the race-eve slot is not a run in the count the card shows: Tue + Sat runner, race on Sunday = 1 short easy run (Saturday is the shakeout), the cap still shares the week over 2', () => {
+  const { planAt, raceMonday } = raceWeekReader({ raceKm: 21.1, weekKm: 38, days: [1, 5] });
+  const plan = planAt(raceMonday);
+  assert.deepEqual(plan.raceWeekShape, { runs: 1, capRuns: 2, perRunCapKm: 9 });
+  assert.match(plainSpaces(plan.purpose), /^Race week: ~19 km before the race — 1 short easy run, ≤ ~9 km; 4–6 strides after it; rest or a 15-min shakeout the day before$/);
+});
+
+test('only the race-eve day is a usual run day before the race: one short easy run, the cap is the whole week (no zero-run line)', () => {
+  const { planAt, raceMonday } = raceWeekReader({ raceKm: 21.1, weekKm: 20, days: [5, 6] }); // Sat + Sun: Saturday is the eve
+  const plan = planAt(raceMonday);
+  assert.deepEqual(plan.raceWeekShape, { runs: 1, perRunCapKm: 10 });
+  assert.match(plainSpaces(plan.purpose), /^Race week: ~10 km before the race — 1 short easy run, ≤ ~10 km; 4–6 strides after it; /);
 });
 
 test('the cap is the larger of an equal share and 40% of the week, rounded DOWN to a whole km (2 runs of a 19 km week: 9.5 -> 9)', () => {
@@ -724,8 +740,8 @@ test('the cap is the larger of an equal share and 40% of the week, rounded DOWN 
   const { planAt, raceMonday } = raceWeekReader({ raceKm: 21.1, weekKm: 38, days: [1, 5] });
   const plan = planAt(raceMonday);
   assert.equal(plan.targetKm, 19);
-  assert.deepEqual(plan.raceWeekShape, { runs: 2, perRunCapKm: 9 });
-  assert.equal(plainSpaces(plan.purpose), raceWeekLine('19', '2', '9', 'km'));
+  assert.deepEqual(plan.raceWeekShape, { runs: 1, capRuns: 2, perRunCapKm: 9 });
+  assert.match(plainSpaces(plan.purpose), /^Race week: ~19 km before the race — 1 short easy run, ≤ ~9 km; /);
 });
 
 test('a 2-day runner gets 2 runs; a runner whose only run day before the race is the long-run day gets 1 (the cap is then the whole week)', () => {
@@ -735,7 +751,7 @@ test('a 2-day runner gets 2 runs; a runner whose only run day before the race is
   assert.equal(planTwo.raceWeekShape?.perRunCapKm, planTwo.targetKm);
   assert.match(plainSpaces(planTwo.purpose), /^Race week: ~10 km before the race — 1 short easy run, ≤ ~10 km; 4–6 strides after it; rest or a 15-min shakeout the day before$/);
   const tueSat = raceWeekReader({ raceKm: 21.1, weekKm: 20, days: [1, 5] });
-  assert.equal(tueSat.planAt(tueSat.raceMonday).raceWeekShape?.runs, 2);
+  assert.equal(tueSat.planAt(tueSat.raceMonday).raceWeekShape?.capRuns, 2); // (Tue + the race-eve Saturday share the cap; the card shows the one run)
 });
 
 test('a runner with 6 usual run days is told 3 runs at most (clamped), cap = 40% of the week', () => {
@@ -783,8 +799,9 @@ test('imperial: the target and the cap are in miles, the cap is a multiple of 0.
   assert.equal(target, 12.5); // half x0.5 of the 25 mi peak week
   const capMi = Math.round((plan.raceWeekShape?.perRunCapKm as number) * MI * 100) / 100;
   assert.equal(capMi, 5); // max(12.5 / 3 = 4.17, 0.4 x 12.5 = 5) -> 5 mi
-  assert.equal(plan.raceWeekShape?.runs, 3);
-  assert.equal(plainSpaces(plan.purpose), raceWeekLine('12.5', '3', '5', 'mi'));
+  assert.equal(plan.raceWeekShape?.runs, 2);
+  assert.equal(plan.raceWeekShape?.capRuns, 3);
+  assert.equal(plainSpaces(plan.purpose), raceWeekLine('12.5', '2', '5', 'mi'));
 });
 
 test('imperial caps round down to the half mile (a 13.5 mi race week, 3 runs: 5.4 -> 5 mi, never 5.5)', () => {
@@ -851,13 +868,13 @@ test('10K runner: the last two build weeks before race week carry strides (the p
   assert.equal(planAt(raceMonday).strides, false); // race week itself: its shape has the strides
 });
 
-test('10K race-week Monday: x0.6 of the peak week in 3 short easy runs with strides after the first', () => {
+test('10K race-week Monday: x0.6 of the peak week in 2 short easy runs (the Saturday is the shakeout) with strides after the first', () => {
   const { planAt, raceMonday } = raceWeekReader({ raceKm: 10, weekKm: 25, days: [1, 3, 5, 6] });
   const plan = planAt(raceMonday);
   assert.equal(plan.kind, 'race_week');
   assert.equal(plan.targetKm, 15); // 10K x0.6
-  assert.deepEqual(plan.raceWeekShape, { runs: 3, perRunCapKm: 6 });
-  assert.equal(plainSpaces(plan.purpose), raceWeekLine('15', '3', '6', 'km'));
+  assert.deepEqual(plan.raceWeekShape, { runs: 2, capRuns: 3, perRunCapKm: 6 });
+  assert.equal(plainSpaces(plan.purpose), raceWeekLine('15', '2', '6', 'km'));
 });
 
 test('5K runner: strides on the last two build weeks and the same race-week shape (class "short" covers both)', () => {
@@ -899,11 +916,11 @@ test('race-week Monday: the card, the coach line and the structured plan say the
   const gp = computeGoalProgress(raceWeekInput());
   const plan = gp.distance?.plan;
   assert.equal(plan?.kind, 'race_week');
-  assert.deepEqual(plan?.raceWeekShape, { runs: 3, perRunCapKm: 6 });
+  assert.deepEqual(plan?.raceWeekShape, { runs: 2, capRuns: 3, perRunCapKm: 6 });
   const cardLine = gp.reasons.find(r => r.kind === 'race_phase')?.text ?? '';
-  assert.equal(cardLine, raceWeekLine('15', '3', '6', 'km'));
+  assert.equal(cardLine, raceWeekLine('15', '2', '6', 'km'));
   const coach = formatGoalProgressLines(gp, 'metric').find(l => l.startsWith('- Race phase')) ?? '';
-  assert.match(coach, /^- Race phase: race week — ~15\.0 km before the race at most; 3 short easy runs, each ≤ ~6 km; 4–6 strides after the first; rest or a 15-min shakeout the day before — no new volume or hard sessions$/);
+  assert.match(coach, /^- Race phase: race week — ~15\.0 km before the race at most; 2 short easy runs, each ≤ ~6 km; 4–6 strides after the first; rest or a 15-min shakeout the day before — no new volume or hard sessions$/);
 });
 
 test('imperial: card and coach name the same runs and the same cap in miles', () => {
