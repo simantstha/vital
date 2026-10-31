@@ -29,8 +29,13 @@ enum MetricRecords {
     static func compute(points: [ChartPoint], mean30: Double?, sd30: Double?) -> Result? {
         guard !points.isEmpty else { return nil }
         let sorted = points.sorted { $0.date < $1.date }
-        guard let highestPoint = sorted.max(by: { $0.value < $1.value }),
-              let lowestPoint = sorted.min(by: { $0.value < $1.value }) else { return nil }
+        // `max(by:)` / `min(by:)` keep the FIRST of equal extremes, so a tie with
+        // today's reading dated the record to an earlier day ("HIGHEST 58 ms Thu"
+        // beside "Today is your highest"). `sorted` is oldest-first, so `>=` / `<=`
+        // walks to the MOST RECENT of equal extremes, which is today when it ties.
+        guard let first = sorted.first else { return nil }
+        let highestPoint = sorted.reduce(first) { $1.value >= $0.value ? $1 : $0 }
+        let lowestPoint = sorted.reduce(first) { $1.value <= $0.value ? $1 : $0 }
 
         let highest = Record(value: highestPoint.value, date: highestPoint.date)
         let lowest = Record(value: lowestPoint.value, date: lowestPoint.date)
