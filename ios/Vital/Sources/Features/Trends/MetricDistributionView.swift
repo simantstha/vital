@@ -81,6 +81,34 @@ enum DistributionStats {
         return (lo - pad)...(hi + pad)
     }
 
+    /// The x-span a bucket's bar is drawn over: the bucket inset by 6% of its
+    /// width each side so neighbouring bars read as separate columns. A
+    /// degenerate (zero-width) bucket - every value identical - gets a fixed
+    /// +/-0.35 unit bar, inside the +/-1 window `xDomain` gives it.
+    static func barSpan(for bucket: Bucket) -> ClosedRange<Double> {
+        let width = bucket.range.upperBound - bucket.range.lowerBound
+        guard width > 0 else {
+            return (bucket.range.lowerBound - 0.35)...(bucket.range.upperBound + 0.35)
+        }
+        let inset = width * 0.06
+        return (bucket.range.lowerBound + inset)...(bucket.range.upperBound - inset)
+    }
+
+    /// A tick label on the histogram's x axis: the value in the metric's own
+    /// unit ("55 ms"; "7h 30m" for sleep, whose duration text carries its unit).
+    static func axisLabel(_ value: Double, spec: MetricSpec, unitSystem: UnitSystem) -> String {
+        if TrendsDeltaFormat.isDuration(spec) { return TrendsDeltaFormat.durationText(hours: value) }
+        let number = TrendsDeltaFormat.formattedNumber(value, decimals: spec.decimals)
+        let unit = spec.unit(unitSystem)
+        return unit.isEmpty ? number : "\(number) \(unit)"
+    }
+
+    /// The one-line key under the chart: what the bars are, and what the
+    /// dashed line is ("Bars: days at each value · dashed line: median 55 ms").
+    static func legendText(result: Result, spec: MetricSpec, unitSystem: UnitSystem) -> String {
+        "Bars: number of days at each value · dashed line: median \(spec.format(result.median, unitSystem))"
+    }
+
     /// Days actually covered by the distribution window: first..last inclusive,
     /// capped at the fixed 90-day fetch. Used to label records/insight lines
     /// ("highest in the last 30 days") so they never claim a longer window
@@ -181,22 +209,42 @@ struct MetricDistributionView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     Chart {
                         ForEach(Array(result.buckets.enumerated()), id: \.offset) { index, bucket in
-                            BarMark(
-                                xStart: .value("Lower", bucket.range.lowerBound),
-                                xEnd: .value("Upper", bucket.range.upperBound),
-                                y: .value("Count", bucket.count)
+                            // A real column from zero up to the count. (A
+                            // `BarMark` with a numeric `y` draws a thin dash
+                            // AT the count, not a bar - that was the bug.)
+                            RectangleMark(
+                                xStart: .value("Lower", DistributionStats.barSpan(for: bucket).lowerBound),
+                                xEnd: .value("Upper", DistributionStats.barSpan(for: bucket).upperBound),
+                                yStart: .value("Base", 0.0),
+                                yEnd: .value("Count", Double(bucket.count))
                             )
                             .foregroundStyle(index == result.latestBucketIndex ? Theme.Colors.accentContent : Theme.Colors.textSecondary.opacity(0.4))
-                            .cornerRadius(2)
                         }
                         RuleMark(x: .value("Median", result.median))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                             .foregroundStyle(Theme.Colors.textSecondary.opacity(0.7))
                     }
                     .chartXScale(domain: DistributionStats.xDomain(values: values, latest: latest))
-                    .chartXAxis(.hidden)
+                    .chartXAxis {
+                        AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                            AxisTick()
+                            AxisValueLabel {
+                                if let number = value.as(Double.self) {
+                                    Text(DistributionStats.axisLabel(number, spec: spec, unitSystem: unitSystem))
+                                        .scaledFont(size: 10)
+                                        .foregroundStyle(Theme.Colors.textTertiary)
+                                        .lineLimit(1)
+                                        .fixedSize()
+                                }
+                            }
+                        }
+                    }
                     .chartYAxis(.hidden)
-                    .frame(height: 84)
+                    .frame(height: 104)
+
+                    Text(DistributionStats.legendText(result: result, spec: spec, unitSystem: unitSystem))
+                        .scaledFont(size: 11)
+                        .foregroundStyle(Theme.Colors.textTertiary)
 
                     Text(DistributionStats.todaySentence(result: result, latest: latest, values: values, windowDays: windowDays))
                         .scaledFont(Theme.Typography.bodySmall)

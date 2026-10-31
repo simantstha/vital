@@ -144,4 +144,42 @@ final class DistributionStatsTests: XCTestCase {
         let d = DistributionStats.xDomain(values: [70, 70], latest: 70)
         XCTAssertEqual(d, 69...71)
     }
+
+    // MARK: - Bars, axis and legend (HRV distribution drew dashes, not bars)
+
+    func testBarSpanInsetsTheBucketAndStaysInsideIt() {
+        let bucket = DistributionStats.Bucket(range: 40...50, count: 3)
+        let span = DistributionStats.barSpan(for: bucket)
+        XCTAssertEqual(span.lowerBound, 40.6, accuracy: 0.0001)
+        XCTAssertEqual(span.upperBound, 49.4, accuracy: 0.0001)
+        XCTAssertGreaterThan(span.upperBound, span.lowerBound)
+    }
+
+    func testBarSpanOfADegenerateBucketHasWidthInsideTheDomain() {
+        let bucket = DistributionStats.Bucket(range: 70...70, count: 4)
+        let span = DistributionStats.barSpan(for: bucket)
+        XCTAssertEqual(span.upperBound - span.lowerBound, 0.7, accuracy: 0.0001)
+        let domain = DistributionStats.xDomain(values: [70, 70], latest: 70)
+        XCTAssertTrue(domain.contains(span.lowerBound))
+        XCTAssertTrue(domain.contains(span.upperBound))
+    }
+
+    func testAxisLabelCarriesTheMetricUnit() throws {
+        let hrv = try XCTUnwrap(MetricCatalog.spec(for: "hrv_sdnn"))
+        XCTAssertEqual(DistributionStats.axisLabel(55, spec: hrv, unitSystem: .metric), "55 ms")
+    }
+
+    func testAxisLabelForSleepIsADuration() throws {
+        let sleep = try XCTUnwrap(MetricCatalog.spec(for: "sleep_minutes"))
+        XCTAssertEqual(DistributionStats.axisLabel(7.5, spec: sleep, unitSystem: .metric), "7h 30m")
+    }
+
+    func testLegendNamesTheBarsAndTheDashedMedianLine() throws {
+        let hrv = try XCTUnwrap(MetricCatalog.spec(for: "hrv_sdnn"))
+        let result = try XCTUnwrap(DistributionStats.compute(values: [50, 52, 55, 58, 60], latest: 58))
+        let text = DistributionStats.legendText(result: result, spec: hrv, unitSystem: .metric)
+        XCTAssertTrue(text.contains("dashed line"))
+        XCTAssertTrue(text.contains("median 55 ms"))
+        XCTAssertTrue(text.contains("number of days"))
+    }
 }
