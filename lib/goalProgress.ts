@@ -151,6 +151,7 @@ import {
   type LiftReturnState,
 } from './liftChange';
 import { weekStartKeyForDay } from './localDay';
+import { INJURY_REASON_KIND, injuryCheckInApplies, injuryCheckInLine, type InjuryCheckIn } from './injuryCheckIn';
 import { KM_PER_MILE } from './metricFormat';
 import {
   PEAK_PLAN_SLACK_KM,
@@ -632,6 +633,13 @@ export interface GoalProgress {
    * lift is in rotation; absent for every other goal.
    */
   headlineLift?: string | null;
+  /**
+   * Additive, wave 27: the user's most recent active Injury fact (logged within the last 28 days, lib/injuryCheckIn.ts), set
+   * only when the card carries the neutral check-in reason (kind 'injury', first of the reasons) — endurance and strength
+   * goals, general health when the user trains; never weight loss. `text` is the body part ("knee pain"), `since` the local
+   * day it was logged. Absent otherwise (payloads without an injury are byte-identical). The plan numbers are not changed.
+   */
+  injuryCheckIn?: InjuryCheckIn | null;
   dataSufficiency: { weighIns: number; needed: number; sessionsLast28d: number };
 }
 
@@ -756,6 +764,12 @@ export interface GoalProgressInput {
    * ('imperial' → lb, otherwise kg). Structured numeric fields stay in kg.
    */
   unitSystem?: 'metric' | 'imperial' | null;
+  /**
+   * Additive, wave 27: the user's most recent ACTIVE Injury fact within the check-in window (lib/injuryCheckIn.ts
+   * `pickInjuryCheckIn`; the loader supplies it). With it the card gains one neutral check-in reason beside the plan.
+   * Absent / null: no injury, no line.
+   */
+  activeInjury?: InjuryCheckIn | null;
 }
 
 // ── Small helpers ───────────────────────────────────────────────────────────
@@ -4125,6 +4139,16 @@ function lastSessionDaysAgo(input: GoalProgressInput): number | null {
   return newest == null ? null : dayNumber(input.todayKey) - dayNumber(newest);
 }
 
+// ── Injury check-in (wave 27) ───────────────────────────────────────────────
+
+/** The active injury this goal's card should ask about, or null: none given, or a goal whose plan has no session to swap. */
+function injuryCheckInFor(input: GoalProgressInput): InjuryCheckIn | null {
+  const injury = input.activeInjury;
+  if (!injury) return null;
+  const hasTrainingCues = input.target.weeklySessions != null || input.trainingDays.length > 0;
+  return injuryCheckInApplies(input.goal, { hasTrainingCues }) ? injury : null;
+}
+
 // ── Public entry point ──────────────────────────────────────────────────────
 
 export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
@@ -4147,6 +4171,15 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
   const race = raceProgress(input);
   const dist = input.goal === 'endurance' ? distanceProgress(input) : null;
   if (race && !outcome.raceHandled) outcome = withRaceLifecycle(input, outcome, race);
+
+  // Wave 27: a logged injury is asked about on the card, beside the plan (the plan numbers are not touched). The check-in
+  // leads the reasons: safety outranks every other line, praise included. The cap of 3 holds, so the LAST reason makes room
+  // (the builders already order theirs by importance, so it is the least important one).
+  const injury = injuryCheckInFor(input);
+  if (injury) {
+    const line: GoalProgressReason = { kind: INJURY_REASON_KIND, text: injuryCheckInLine(input.goal, injury), tone: 'neutral' };
+    outcome = { ...outcome, reasons: [line, ...outcome.reasons].slice(0, 3) };
+  }
 
   const safeBand =
     input.goal === 'weight_loss' ? { ...FAT_LOSS_BAND }
@@ -4216,6 +4249,7 @@ export function computeGoalProgress(input: GoalProgressInput): GoalProgress {
     // Muscle only (absent for every other goal, so their payloads are byte-identical to before).
     ...(input.goal === 'muscle' ? { liftReturns: liftReturns.length > 0 ? liftReturns : null, headlineLift: headlineLiftKey(input.progression, input.todayKey) } : {}),
     lastSessionOn: lastSessionDay(input),
+    ...(injury ? { injuryCheckIn: injury } : {}),
     dataSufficiency: { weighIns: w.weighIns, needed: WEIGH_INS_NEEDED, sessionsLast28d },
   };
 }

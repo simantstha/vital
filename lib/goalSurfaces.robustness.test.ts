@@ -68,6 +68,7 @@ import {
   type WeeklyReviewInput,
 } from './weeklyReview';
 import { weeklyReviewAlert } from './weeklyReviewWorker';
+import { injuryCheckInApplies, injuryCheckInLine, pickInjuryCheckIn, type InjuryFactDay } from './injuryCheckIn';
 import { buildBriefGoalSection, formatGoalProgressLines, type BriefGoalFocus, type WeeklyVolumeRow } from './goalPromptText';
 import { goalFallbackOpener, goalOpenerLine, newUserGoalOpener, requiredOpenerLine, returningUserOpener } from './brain/openerText';
 import { isWindDownPhase, peakWeekEndDaysOut, peakWeekKmBeforeTaper, racePhase } from './enduranceProgression';
@@ -183,6 +184,8 @@ interface FuzzUser {
   restingHr: DayValue[];
   hrv: DayValue[];
   sleepMinutes: DayValue[];
+  /** Wave 27: the user's active Injury facts (labels as stored, the day logged): none, one, several, messy, future-dated. Drawn from its own PRNG so no other draw moves. */
+  injuries: InjuryFactDay[];
 }
 
 // ── history shape: which days a user is "around" ────────────────────────────────────────────────────────
@@ -550,7 +553,30 @@ function makeUser(kind: GoalKind, index: number): FuzzUser {
     seed, kind, index, tags, todayKey, units, sex,
     user: { targetWeightKg, targetDate, weeklySessions, weeklyDistanceKm, raceDate, raceDistanceKm, goalStartWeightKg, goalStartedDay, createdDay, sleepGoalMinutes },
     budget, weights: readings, workouts, sets, intake, ...vitals,
+    injuries: genInjuries(seed, todayKey, tags),
   };
+}
+
+// ── injury facts (wave 27; lib/injuryCheckInLoader.ts) ───────────────────────────────────────────────
+
+const INJURY_LABELS = [
+  'Knee pain since Oct 20', 'Torn ACL', 'ACL tear', 'Sore left Achilles', 'Lower back strain, since last Tuesday', 'Shoulder pain', 'since Oct 20', '   ', '',
+  'Plantar   fasciitis', 'Chronic pain in the outside of my left knee that flares up on downhill running and stairs', 'K', 'Ünïcode knée 🦵', 'Hip -- since', 'since',
+];
+
+/** Its own PRNG (seed-derived), so adding injuries moved none of the other generated data. */
+function genInjuries(seed: number, todayKey: string, tags: string[]): InjuryFactDay[] {
+  const r = makeRandom(seed ^ 0x27a11ce5);
+  if (chance(r, 0.55)) return [];
+  const n = weighted(r, [[1, 70], [2, 22], [3, 8]]);
+  const facts: InjuryFactDay[] = [];
+  for (let i = 0; i < n; i++) {
+    // Mostly inside the 28-day window; some older, a few dated after today (a timezone switch) or malformed.
+    const ago = weighted<number>(r, [[int(r, 0, 28), 60], [int(r, 29, 120), 25], [-int(r, 1, 3), 7], [int(r, 0, 28), 8]]);
+    facts.push({ label: pick(r, INJURY_LABELS), loggedDay: chance(r, 0.03) ? 'not-a-day' : addDays(todayKey, -ago) });
+  }
+  tags.push(`injuries:${facts.length}`);
+  return facts;
 }
 
 // ═══ Loader mirrors: rows -> surface inputs ═════════════════════════════════════════════════════════════
@@ -716,6 +742,8 @@ function buildGoalInput(u: FuzzUser, todayKey: string, realNow: string): GoalPro
     sleepMinutes: hkSeries(u.sleepMinutes),
     sleepGoalMinutes: u.user.sleepGoalMinutes,
     unitSystem: u.units,
+    // lib/goalProgressLoader.ts (wave 27): no lookup for a weight-loss goal.
+    activeInjury: u.kind === 'weight_loss' ? null : pickInjuryCheckIn(u.injuries, todayKey),
   };
 }
 
@@ -780,6 +808,8 @@ function buildReviewInput(
     unitSystem: u.units,
     exerciseDisplay: buildExerciseDisplay(displayRows),
     signupDay: signupLocalDay(new Date(`${u.user.createdDay}T10:00:00.000Z`), TZ),
+    // lib/weeklyReviewLoader.ts (wave 27): as of the day the review runs.
+    activeInjury: u.kind === 'weight_loss' ? null : pickInjuryCheckIn(u.injuries, runDay),
   };
 }
 
@@ -853,6 +883,28 @@ function checkCard(out: Failure[], surface: string, gp: GoalProgress): void {
   JSON.stringify(gp); // the card is served as JSON
 }
 
+/**
+ * Wave 27: the card carries the check-in when the loader found an injury and the goal gets one - first reason, one wording, within the caps -
+ * and never on a weight-loss goal or without an injury. (A general-health card needs training cues the generator does not expose, so for it
+ * either outcome is allowed; if the line is there it must be the right one.)
+ */
+function checkInjury(out: Failure[], surface: string, u: FuzzUser, gp: GoalProgress): void {
+  const injury = u.kind === 'weight_loss' ? null : pickInjuryCheckIn(u.injuries, u.todayKey);
+  const reason = gp.reasons.find(r => r.kind === 'injury');
+  if (injury == null) {
+    if (reason || gp.injuryCheckIn) out.push({ surface, check: 'shape', where: 'card.injuryCheckIn', detail: 'an injury check-in with no injury (or on a weight-loss goal)' });
+    return;
+  }
+  const mayBeAbsent = u.kind === 'general';
+  if (reason == null && gp.injuryCheckIn == null) {
+    if (!injuryCheckInApplies(u.kind, { hasTrainingCues: false }) && mayBeAbsent) return;
+    out.push({ surface, check: 'shape', where: 'card.injuryCheckIn', detail: `no check-in for "${injury.text}"` });
+    return;
+  }
+  if (gp.reasons[0]?.kind !== 'injury' || gp.reasons[0].text !== injuryCheckInLine(u.kind, injury)) out.push({ surface, check: 'shape', where: 'card.reasons[0]', detail: `not the check-in: ${JSON.stringify(gp.reasons[0])}` });
+  if (JSON.stringify(gp.injuryCheckIn) !== JSON.stringify(injury)) out.push({ surface, check: 'shape', where: 'card.injuryCheckIn', detail: JSON.stringify(gp.injuryCheckIn) });
+}
+
 function checkReview(out: Failure[], surface: string, review: WeeklyReview): void {
   scanValue(out, surface, review, 'review');
   if (typeof review.headline !== 'string' || review.headline.trim() === '') out.push({ surface, check: 'shape', where: 'review.headline', detail: `headline is empty: ${JSON.stringify(review.headline)}` });
@@ -897,6 +949,7 @@ function runUser(u: FuzzUser): UserResult {
   const card = guard(out, 'card', 'computeGoalProgress', () => computeGoalProgress(buildGoalInput(u, u.todayKey, u.todayKey)));
   if (card) {
     checkCard(out, 'card', card);
+    checkInjury(out, 'card', u, card);
 
     const coach = guard(out, 'coach', 'formatGoalProgressLines', () => formatGoalProgressLines(card, u.units));
     if (coach) scanValue(out, 'coach', coach, 'coach');

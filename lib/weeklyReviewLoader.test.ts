@@ -83,6 +83,7 @@ mock.module('@/lib/goalProgressLoader', {
     loadGoalProgress: async () => ({ verdict: 'reached', reachedAt: WEEK[2], target: { weightKg: 84 }, longRun: null, liftReturn: null }),
   },
 });
+mock.module('@/lib/injuryCheckInLoader', { namedExports: { loadActiveInjury: async () => null } });
 mock.module('@/lib/racePeakLoader', { namedExports: { loadRacePeakWeekKm: async () => null } });
 mock.module('@/lib/runHistoryLoader', { namedExports: { loadRunHistory: async () => undefined } });
 

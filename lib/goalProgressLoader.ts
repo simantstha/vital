@@ -20,6 +20,7 @@ import { resolveUnitSystem } from '@/lib/units';
 import { readCoreProfile } from '@/lib/coreProfileStore';
 import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
 import { loadRunHistory } from '@/lib/runHistoryLoader';
+import { loadActiveInjury } from '@/lib/injuryCheckInLoader';
 import { mondayOfDay } from '@/lib/enduranceProgression';
 import { parseProfileDetails } from '@/lib/profileDetails';
 import {
@@ -68,7 +69,7 @@ export async function loadGoalProgress(
 
   const [
     weightReadings, intakeByDay, budget, profileMd,
-    progressionSets, workoutEntries, restingHr, hrv, sleep, racePeakWeekKm, runHistory,
+    progressionSets, workoutEntries, restingHr, hrv, sleep, racePeakWeekKm, runHistory, activeInjury,
   ] = await Promise.all([
     getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
     resolveDailyIntake(userId, goal === 'weight_loss' ? trailingDayKeys(todayKey, INTAKE_HISTORY_DAYS) : dayKeys, tz),
@@ -86,6 +87,8 @@ export async function loadGoalProgress(
       : Promise.resolve(null),
     // The week plan looks back further than the 28-day window above (restart median, spike -> hold, baseline).
     goal === 'endurance' ? loadRunHistory(userId, todayKey) : Promise.resolve(undefined),
+    // Wave 27: a recent active Injury fact adds a neutral check-in beside the plan (a weight-loss card prescribes no session to swap).
+    goal === 'weight_loss' ? Promise.resolve(null) : loadActiveInjury(userId, todayKey, tz),
   ]);
 
   const profile = parseProfileDetails(profileMd);
@@ -164,5 +167,6 @@ export async function loadGoalProgress(
     sleepMinutes: sleep.map(p => ({ day: p.date, value: p.value })),
     sleepGoalMinutes: user.sleep_goal_minutes ?? DEFAULT_SLEEP_GOAL_MIN,
     unitSystem: resolveUnitSystem(user.unit_system),
+    activeInjury,
   });
 }

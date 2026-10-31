@@ -21,6 +21,7 @@ import { resolveUnitSystem } from '@/lib/units';
 import { loadGoalProgress } from '@/lib/goalProgressLoader';
 import { loadRacePeakWeekKm } from '@/lib/racePeakLoader';
 import { loadRunHistory } from '@/lib/runHistoryLoader';
+import { loadActiveInjury } from '@/lib/injuryCheckInLoader';
 import { isStrengthWorkoutType, type DayValue, type GoalProgressBudget } from '@/lib/goalProgress';
 import { endOfLocalWeek, shouldRecomputeReview } from '@/lib/weeklyReviewFreshness';
 import { buildExerciseDisplay, computeWeeklyReview, lastCompletedWeekStart, signupLocalDay, type WeeklyReview } from '@/lib/weeklyReview';
@@ -89,7 +90,7 @@ export async function computeLastWeekReview(
   const daySet = new Set(dayKeys);
 
   const goal = normalizeGoal(user.goal);
-  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm, previousNextWeek, runHistory, comingWeekProgress] =
+  const [progress, weightReadings, intakeByDay, budget, progression, sets, workoutEntries, restingHr, hrv, sleep, displayRows, racePeakWeekKm, previousNextWeek, runHistory, comingWeekProgress, activeInjury] =
     await Promise.all([
       loadGoalProgress(userId, { tz, now: endOfLocalWeek(weekStart, tz) }),
       getWeightReadings(userId, WEIGHT_LOOKBACK_DAYS, tz),
@@ -118,6 +119,9 @@ export async function computeLastWeekReview(
       // Weight loss: the card as it reads NOW, in the week after the reviewed one — its week plan is the review's "Next week"
       // and its verdict (lib/weightWeekPlan.ts), so the review and the card give the same instruction.
       goal === 'weight_loss' ? loadGoalProgress(userId, { tz, now }) : Promise.resolve(null),
+      // Wave 27: a recent active Injury fact, as of the day the review is computed ("Next week" is advice for the days
+      // ahead, so it asks about what the user has logged by now, not as of the reviewed Sunday). Not for weight loss.
+      goal === 'weight_loss' ? Promise.resolve(null) : loadActiveInjury(userId, localDayKey(now, tz), tz),
     ]);
   const comingWeekPlan = comingWeekProgress?.weightRead?.plan;
   const weightPlan = comingWeekPlan != null && comingWeekPlan.weekStart === addDays(weekStart, 7) ? comingWeekPlan : null;
@@ -192,6 +196,7 @@ export async function computeLastWeekReview(
     unitSystem: resolveUnitSystem(user.unit_system),
     exerciseDisplay: buildExerciseDisplay(displayRows),
     signupDay: signupLocalDay(user.created_at, tz),
+    activeInjury,
   });
 }
 
