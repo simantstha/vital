@@ -92,7 +92,8 @@ function racePhaseLine(gp: GoalProgress, units: UnitSystem): string | null {
       if (gp.distance?.plan?.raceWeekShape != null) {
         return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; ${plainSpaces(raceWeekShapeClause(gp.distance.plan.raceWeekShape, units === 'imperial' ? 1 / KM_PER_MILE : 1))} — no new volume or hard sessions`;
       }
-      return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; short easy runs, rest 1–2 days before race day — no new volume or hard sessions`;
+      // (Wave 26e P3-2: the race-eve wording is the card's and the shape clause's: "rest or a 15-min shakeout the day before", all week.)
+      return `- Race phase: race week${target ? ` — ~${target} before the race at most` : ''}; short easy runs, rest or a 15-min shakeout the day before — no new volume or hard sessions`;
     case 'recovery': {
       const done = race.completed && (race.daysSince ?? 99) <= 1 ? `just raced (${racedText(race.completed, units)}) — congratulate them; ` : '';
       const week = recoveryWeek(race.daysSince ?? 1);

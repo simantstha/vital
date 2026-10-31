@@ -5843,3 +5843,18 @@ invariant(RUNNERS, 'item 10: the hold-week card says "Your cutback became a norm
   });
 }
 
+// ── P3-2: race week's coach line says the SAME race-eve wording as the card, all week (it reverted to "rest 1-2 days before race day" from Thursday) ──
+invariant(RUNNERS, 'wave 26e P3-2: the coach\'s race-week line says "rest or a 15-min shakeout the day before" on every day of race week with the race 2+ days out, never "rest 1–2 days before race day"', (snaps, name) => {
+  const out: Violation[] = [];
+  let checked = 0;
+  for (const snap of snaps) {
+    const toGo = snap.card?.race?.daysToGo;
+    if (snap.card?.race?.phase !== 'race_week' || toGo == null || toGo < 2) continue;
+    const line = (snap.coach ?? []).map(plain).find(t => t.startsWith('- Race phase: race week'));
+    if (!line) continue;
+    checked++;
+    if (/rest 1–2 days before race day/.test(line) || !/rest or a 15-min shakeout the day before/.test(line)) out.push({ snap, detail: `"${line}"` });
+  }
+  if (!['runner_no_race', 'runner_comeback_spike', 'runner_comeback_obedient'].includes(name)) assert.ok(checked > 0, `${name}: no race-week coach line was checked`);
+  return out;
+});

@@ -255,7 +255,7 @@ test('race lifecycle: taper / race week / recovery each get ONE phase line with 
     race: { date: '2026-10-09', distanceKm: 21.1, label: 'Half marathon', weeksToGo: 0, daysToGo: 3, phase: 'race_week' },
   }), 'metric').join('\n');
   assert.match(raceWeek, /- Race: Half marathon on 2026-10-09 \(in 3 days\)/);
-  assert.match(raceWeek, /- Race phase: race week — ~16\.0 km before the race at most; short easy runs, rest 1–2 days before race day — no new volume or hard sessions/);
+  assert.match(raceWeek, /- Race phase: race week — ~16\.0 km before the race at most; short easy runs, rest or a 15-min shakeout the day before — no new volume or hard sessions/);
 
   const recovery = formatGoalProgressLines(gp({
     goal: 'endurance',
