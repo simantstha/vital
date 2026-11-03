@@ -69,6 +69,44 @@ export function notificationFresh(args: {
   return { fresh: windowMs <= 0 || localDayKey(args.now, args.timezone) === args.localDate, basis: 'local_date', ageMs: null };
 }
 
+export const ANALYSIS_MAX_AGE_MS = 48 * 60 * 60_000;
+
+/**
+ * Reads `PROACTIVE_ANALYSIS_MAX_AGE_HOURS` (default 48h); `0` disables the
+ * age limit. Malformed/negative values fall back to the default.
+ */
+export function analysisMaxAgeMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.PROACTIVE_ANALYSIS_MAX_AGE_HOURS;
+  if (raw === undefined) return ANALYSIS_MAX_AGE_MS;
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours < 0) return ANALYSIS_MAX_AGE_MS;
+  return hours * 60 * 60_000;
+}
+
+/**
+ * True when a job is too old to be worth a model call (it can never push).
+ * Workout with a parseable end: age of the end instant. Sleep, or an
+ * unparseable end: whole local days between `localDate` and today in
+ * `timezone`, times 24h. Future/clock-skew reads as not old. `maxAgeMs <= 0`
+ * disables the limit.
+ */
+export function analysisTooOld(args: {
+  kind: 'workout' | 'sleep';
+  input: unknown;
+  localDate: string;
+  timezone: string;
+  now: Date;
+  maxAgeMs?: number;
+}): boolean {
+  const maxAgeMs = args.maxAgeMs ?? ANALYSIS_MAX_AGE_MS;
+  if (maxAgeMs <= 0) return false;
+  const end = args.kind === 'workout' ? workoutEndedAt(args.input) : null;
+  if (end) return args.now.getTime() - end.getTime() > maxAgeMs;
+  const dayMs = (key: string) => { const [y, m, d] = key.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+  const ageMs = dayMs(localDayKey(args.now, args.timezone)) - dayMs(args.localDate);
+  return Number.isFinite(ageMs) && ageMs > maxAgeMs;
+}
+
 export interface RetryTransition { retryCount: number; terminal: boolean; nextAttemptAt: Date }
 export function retryTransition(retryCount: number, now: Date, maxRetries = MAX_DELIVERY_RETRIES): RetryTransition {
   const next = retryCount + 1;

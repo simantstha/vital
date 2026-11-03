@@ -271,8 +271,23 @@ test('onNotify is never called when claimNotification returns null', async () =>
   assert.equal(onNotifyCount, 0, 'onNotify must never be called when claimNotification returns null');
 });
 
+test('an old job is suppressed without a model call or push; a fresh one still analyses', async () => {
+  const calls: string[] = [];
+  const repo = fakeRepository(calls, true);
+  const analyze = async () => { calls.push('analyze'); return valid; };
+  const push = async () => { calls.push('push'); return { outcome: 'sent' as const, retireToken: false }; };
+  const now = new Date('2026-07-15T12:00:00Z');
+  const old = { ...job(), input: { startTime: '2026-07-10T10:00:00.000Z', durationMin: 30 } };
+  await runClaimedAnalysis(old, repo, analyze, push, now);
+  assert.deepEqual(calls, ['suppress']);
+  calls.length = 0;
+  const fresh = { ...job(), input: { startTime: '2026-07-15T10:00:00.000Z', durationMin: 30 } };
+  await runClaimedAnalysis(fresh, fakeRepository(calls, true), analyze, push, now);
+  assert.equal(calls.includes('analyze'), true);
+});
+
 function job(): AnalysisJob {
-  return { id: 'j1', kind: 'workout', userId: 'u1', localDate: '2026-07-12', input: {}, retryCount: 0, notificationRetryCount: 0, leaseToken: 'lease' };
+  return { id: 'j1', kind: 'workout', userId: 'u1', localDate: new Date().toISOString().slice(0, 10), input: {}, retryCount: 0, notificationRetryCount: 0, leaseToken: 'lease' };
 }
 
 function fakeRepository(calls: string[], enabled: boolean): WorkerRepository {
