@@ -320,11 +320,12 @@ export function toolResultSummary(
 
     case 'query_events': {
       const parsed = tryParseJson(resultString);
-      if (!Array.isArray(parsed)) return undefined;
+      if (!isRecord(parsed) || !Array.isArray(parsed.events)) return undefined;
       const type = String(input.type ?? '');
       const days = Number(input.rangeDays ?? 7);
       const label = EVENT_TYPE_LABELS[type] ?? 'entries';
-      return truncate(`${parsed.length} ${label} · last ${days}d`);
+      const count = parsed.truncated === true ? '100+' : String(parsed.events.length);
+      return truncate(`${count} ${label} · last ${days}d`);
     }
 
     case 'get_training_history': {
@@ -425,8 +426,9 @@ export function toolResultSummary(
 
     case 'query_ontology': {
       const parsed = tryParseJson(resultString);
-      if (!Array.isArray(parsed)) return undefined;
-      return truncate(`${parsed.length} note${parsed.length === 1 ? '' : 's'}`);
+      if (!isRecord(parsed) || !Array.isArray(parsed.facts)) return undefined;
+      const shown = parsed.truncated === true ? '100+' : String(parsed.facts.length);
+      return truncate(`${shown} note${parsed.facts.length === 1 ? '' : 's'}`);
     }
 
     case 'read_entity': {
@@ -498,9 +500,10 @@ export function extractMemorySources(name: string, resultString: string): Memory
 
   if (name === 'query_ontology') {
     const parsed = tryParseJson(resultString);
-    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    const facts = isRecord(parsed) && Array.isArray(parsed.facts) ? parsed.facts : [];
+    if (facts.length === 0) return undefined;
     const sources: MemorySource[] = [];
-    for (const row of parsed.slice(0, MAX_SOURCES)) {
+    for (const row of facts.slice(0, MAX_SOURCES)) {
       if (!isRecord(row)) continue;
       const properties = isRecord(row.properties) ? row.properties : null;
       const evidence = properties && typeof properties.evidence === 'string' ? properties.evidence : '';

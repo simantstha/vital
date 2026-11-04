@@ -166,13 +166,14 @@ async function main(): Promise<void> {
      * Canned tool-result responder for the agentic round-trip below. Never a
      * real handler — no DB, no lib/brain/tools.ts executor — just a plausible
      * string so the model has something to react to on round 2+. Default
-     * (when omitted): 'query_ontology' returns '[]' (nothing found), every
-     * other tool returns '{"ok":true}'.
+     * (when omitted): 'query_ontology' returns '{"facts":[],"truncated":false}'
+     * (nothing found), every other tool returns '{"ok":true}'.
      */
     respond?: (name: string, input: Record<string, unknown>) => string;
   }
 
-  const defaultRespond = (name: string): string => (name === 'query_ontology' ? '[]' : '{"ok":true}');
+  const defaultRespond = (name: string): string =>
+    (name === 'query_ontology' ? '{"facts":[],"truncated":false}' : '{"ok":true}');
 
   const hasCall = (calls: ToolUse[], name: string, pred?: (input: Record<string, unknown>) => boolean) =>
     calls.some((c) => c.name === name && (!pred || pred(c.input)));
@@ -246,7 +247,7 @@ async function main(): Promise<void> {
       // query_ontology finds nothing — no existing father/diabetes nodes —
       // so the model (having checked, per memoryCuration.ts's "check before
       // you write" rule) should proceed to write on the next round.
-      respond: (name) => (name === 'query_ontology' ? '[]' : '{"ok":true}'),
+      respond: (name) => (name === 'query_ontology' ? '{"facts":[],"truncated":false}' : '{"ok":true}'),
       // A father's diabetes is legitimately TWO facts, not one: a
       // remember_fact/propose_fact about the father himself (nodeType
       // Condition, subject: "Father") AND, separately, an unattributed
@@ -303,19 +304,25 @@ async function main(): Promise<void> {
       // If the model checks first (query_ontology), hand back the same
       // active Injury node the hard-constraints block already told it about
       // — a plausible id it can pass straight to resolve_fact({id}) instead
-      // of matching by label alone.
+      // of matching by label alone. Shaped like lib/brain/tools.ts's
+      // query_ontology result: { facts, truncated } with the 8 returned fields.
       respond: (name) =>
         name === 'query_ontology'
-          ? JSON.stringify([
-              {
-                id: 'b6e1f2a0-6c3d-4b2a-9e7f-1a2b3c4d5e6f',
-                type: 'Injury',
-                label: 'Torn ACL',
-                status: 'active',
-                weight: 0.9,
-                source: 'coach',
-              },
-            ])
+          ? JSON.stringify({
+              facts: [
+                {
+                  id: 'b6e1f2a0-6c3d-4b2a-9e7f-1a2b3c4d5e6f',
+                  type: 'Injury',
+                  label: 'Torn ACL',
+                  properties: null,
+                  source: 'coach',
+                  weight: 0.9,
+                  created_at: '2026-01-01T00:00:00.000Z',
+                  subject_node_id: null,
+                },
+              ],
+              truncated: false,
+            })
           : '{"ok":true}',
       check: (calls) => {
         const resolved = hasCall(calls, 'resolve_fact');

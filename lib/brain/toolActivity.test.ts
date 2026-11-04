@@ -160,9 +160,19 @@ test('toolResultSummary: compare_periods reports percent change', async () => {
 
 test('toolResultSummary: query_events counts rows for the requested type', async () => {
   const { toolResultSummary } = await activityPromise;
-  const result = JSON.stringify([{ timestamp: '2026-01-01', payload: {} }]);
+  const result = JSON.stringify({ events: [{ timestamp: '2026-01-01', payload: {} }], truncated: false });
   const summary = toolResultSummary('query_events', { type: 'hrv_reading', rangeDays: 7 }, result, 'metric');
   assert.equal(summary, '1 HRV readings · last 7d');
+});
+
+test('toolResultSummary: query_events shows 100+ when the result was truncated', async () => {
+  const { toolResultSummary } = await activityPromise;
+  const events = Array.from({ length: 100 }, (_, i) => ({ timestamp: `2026-01-${i}`, payload: {} }));
+  const result = JSON.stringify({ events, truncated: true });
+  assert.equal(
+    toolResultSummary('query_events', { type: 'hrv_reading', rangeDays: 7 }, result, 'metric'),
+    '100+ HRV readings · last 7d',
+  );
 });
 
 test('toolResultSummary: get_training_history — by exercise vs summary', async () => {
@@ -236,8 +246,24 @@ test('toolResultSummary: get_schedule', async () => {
 
 test('toolResultSummary: query_ontology counts notes', async () => {
   const { toolResultSummary } = await activityPromise;
-  const result = JSON.stringify([{ id: '1', label: 'Peanut allergy' }, { id: '2', label: 'Marathon runner' }]);
+  const result = JSON.stringify({
+    facts: [{ id: '1', label: 'Peanut allergy' }, { id: '2', label: 'Marathon runner' }],
+    truncated: false,
+  });
   assert.equal(toolResultSummary('query_ontology', {}, result, 'metric'), '2 notes');
+});
+
+test('toolResultSummary: query_ontology shows 100+ notes when truncated', async () => {
+  const { toolResultSummary } = await activityPromise;
+  const facts = Array.from({ length: 100 }, (_, i) => ({ id: String(i), label: `Fact ${i}` }));
+  const result = JSON.stringify({ facts, truncated: true });
+  assert.equal(toolResultSummary('query_ontology', {}, result, 'metric'), '100+ notes');
+});
+
+test('toolResultSummary: query_ontology with a single fact says note', async () => {
+  const { toolResultSummary } = await activityPromise;
+  const result = JSON.stringify({ facts: [{ id: '1', label: 'Peanut allergy' }], truncated: false });
+  assert.equal(toolResultSummary('query_ontology', {}, result, 'metric'), '1 note');
 });
 
 test('toolResultSummary: read_entity reads the label + fact count', async () => {
@@ -328,21 +354,21 @@ test('toolResultSummary: remember_fact / propose_fact / confirm_fact / resolve_f
 
 test('extractMemorySources: query_ontology returns up to 3, using evidence over label', async () => {
   const { extractMemorySources } = await activityPromise;
-  const result = JSON.stringify([
+  const result = JSON.stringify({ truncated: false, facts: [
     { id: '1', label: 'Peanut allergy', properties: { evidence: 'allergic to peanuts' }, created_at: '2026-01-01T00:00:00.000Z' },
     { id: '2', label: 'Marathon runner', properties: null, created_at: '2026-02-01T00:00:00.000Z' },
     { id: '3', label: 'Vegetarian', properties: { evidence: 'no meat' }, created_at: '2026-03-01T00:00:00.000Z' },
     { id: '4', label: 'Fourth (dropped, only 3 max)', properties: null, created_at: '2026-04-01T00:00:00.000Z' },
-  ]);
+  ] });
   const sources = extractMemorySources('query_ontology', result);
   assert.equal(sources?.length, 3);
   assert.deepEqual(sources![0], { text: 'allergic to peanuts', date: '2026-01-01' });
   assert.deepEqual(sources![1], { text: 'Marathon runner', date: '2026-02-01' });
 });
 
-test('extractMemorySources: query_ontology with no rows is undefined', async () => {
+test('extractMemorySources: query_ontology with no facts is undefined', async () => {
   const { extractMemorySources } = await activityPromise;
-  assert.equal(extractMemorySources('query_ontology', '[]'), undefined);
+  assert.equal(extractMemorySources('query_ontology', '{"facts":[],"truncated":false}'), undefined);
 });
 
 test('extractMemorySources: read_entity parses evidence + recorded date from the rendered doc', async () => {
