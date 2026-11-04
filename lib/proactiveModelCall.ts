@@ -1,4 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
+import { thinkingOffFor } from './aiModels';
 import { AnalysisContentError } from './proactiveAnalysisGrounding';
 
 /**
@@ -23,14 +24,15 @@ export function buildAnalysisRequest(model: string, request: ProactiveModelReque
   return {
     model,
     max_tokens: ANALYSIS_MAX_TOKENS,
-    // Sonnet 5 runs adaptive thinking by default when this is omitted (Sonnet
+    // Sonnet 5+ runs adaptive thinking by default when this is omitted (Sonnet
     // 4.6 did not), and thinking tokens count against max_tokens. With a large
     // analysis context the thinking ate most of the budget, the JSON was cut
     // off mid-object, and both the first call and the repair call fell back to
     // the "couldn't put together a read" copy. This call is a single-turn,
-    // schema-constrained JSON answer — disable explicitly, as lib/claude.ts and
-    // lib/brain/coach.ts do.
-    thinking: { type: 'disabled' },
+    // schema-constrained JSON answer — turn thinking off explicitly, as
+    // lib/claude.ts and lib/brain/coach.ts do. thinkingOffFor picks the form
+    // the model accepts (5.5 rejects `disabled`).
+    thinking: thinkingOffFor(model),
     system: request.system,
     messages: [{ role: 'user', content: request.content }],
   };
@@ -42,7 +44,7 @@ export function buildNudgeRequest(model: string, request: ProactiveModelRequest)
     max_tokens: NUDGE_MAX_TOKENS,
     // Same reason as buildAnalysisRequest, and worse at 500 tokens: adaptive
     // thinking could consume the whole budget and leave no text block at all.
-    thinking: { type: 'disabled' },
+    thinking: thinkingOffFor(model),
     system: request.system,
     messages: [{ role: 'user', content: request.content }],
   };

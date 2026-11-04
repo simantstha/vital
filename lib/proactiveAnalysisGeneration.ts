@@ -7,10 +7,11 @@ import {
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
 import { formatAnalysisSource } from './proactiveAnalysisFormatting';
 import { type UnitSystem } from './units';
+import { CLAUDE_SONNET_MODEL } from './aiModels';
 
 export { AnalysisContentError, type AnalysisFailureCategory } from './proactiveAnalysisGrounding';
 
-export const DEFAULT_PROACTIVE_ANALYSIS_MODEL = 'claude-sonnet-5';
+export const DEFAULT_PROACTIVE_ANALYSIS_MODEL = CLAUDE_SONNET_MODEL;
 export type AnalysisAttempt = 'initial' | 'repair';
 export type AnalysisFailureOutcome = 'repair_started' | 'repair_succeeded' | 'repair_exhausted';
 

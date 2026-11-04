@@ -8,7 +8,7 @@
  *   (NutritionResult) needs no changes; see it in
  *   ios/Vital/Sources/Core/APIClient.swift.
  *
- * v2 (lib/nutrition/estimator.ts): ONE claude-sonnet-5 vision call reasons
+ * v2 (lib/nutrition/estimator.ts): ONE claude-sonnet-5-5 vision call reasons
  * directly about realistic per-item portions (plate/bowl/utensil size,
  * cooked-vs-raw, visible oil) instead of writing a free-text query that got
  * thrown away and re-guessed by a second, cruder text parser — see

@@ -11,7 +11,7 @@ import test from 'node:test';
  * can have its JSON (or its only text block) eaten by thinking — that is what
  * turned every proactive workout/sleep analysis into the "couldn't put together
  * a read" fallback. Every other Sonnet 5 call in the repo sets
- * `thinking: { type: 'disabled' }` explicitly (lib/claude.ts, lib/brain/coach.ts,
+ * `thinking: thinkingOffFor(model)` explicitly (lib/claude.ts, lib/brain/coach.ts,
  * lib/nutrition/estimator.ts); this test makes that a rule instead of a habit.
  *
  * How it works: find each `messages.create(` / `messages.stream(` call in
@@ -28,7 +28,7 @@ import test from 'node:test';
  * unbalanced call fails the scan loudly rather than passing silently).
  */
 
-/** Builders in lib/proactiveModelCall.ts set `thinking: { type: 'disabled' }`; lib/proactiveModelCall.test.ts proves it. */
+/** Builders in lib/proactiveModelCall.ts set `thinking: thinkingOffFor(model)`; lib/proactiveModelCall.test.ts proves it. */
 const THINKING_SETTING_BUILDERS = /\bbuild(?:Analysis|Nudge)Request\s*\(/;
 
 const SONNET_5_IDENTIFIER = /\b(?:CLAUDE_SONNET_MODEL|DEFAULT_PROACTIVE_ANALYSIS_MODEL|proactiveAnalysisModel)\b/;
@@ -180,7 +180,7 @@ test('every Sonnet/Opus 5-family messages.create/stream call sets thinking expli
   assert.deepEqual(
     violations,
     [],
-    `These Sonnet/Opus 5-family calls omit \`thinking\`, so Sonnet 5 runs adaptive thinking and thinking tokens eat max_tokens. Add \`thinking: { type: 'disabled' }\` (see lib/proactiveModelCall.ts):\n${violations.join('\n')}`,
+    `These Sonnet/Opus 5-family calls omit \`thinking\`, so Sonnet 5 runs adaptive thinking and thinking tokens eat max_tokens. Add \`thinking: thinkingOffFor(model)\` (see lib/proactiveModelCall.ts):\n${violations.join('\n')}`,
   );
 });
 

@@ -2,7 +2,7 @@
  * lib/nutrition/estimator.eval.ts — meal-estimator accuracy eval
  *
  * Runs ~30 common free-text meal phrases through the REAL
- * lib/nutrition/estimator.ts (step 1: real claude-sonnet-5 parse) against
+ * lib/nutrition/estimator.ts (step 1: real claude-sonnet-5-5 parse) against
  * reference kcal ranges derived from USDA per-100g values and realistic
  * serving sizes, and prints each phrase's absolute % error against the
  * range midpoint, plus the median across all cases.

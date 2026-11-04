@@ -62,7 +62,7 @@ import {
   toolCallForPersistence,
   type HandoffCardPayload,
 } from '@/lib/specialists/coachIntegration';
-import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
+import { CLAUDE_SONNET_MODEL, thinkingOffFor } from '@/lib/aiModels';
 import {
   doneLabel,
   extractMemoryOp,
@@ -413,13 +413,14 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
       const stream = client.messages.stream({
         model:      configuration.model,
         max_tokens: MAX_TOKENS,
-        // Sonnet 5 runs adaptive thinking by default when this is omitted
+        // Sonnet 5+ runs adaptive thinking by default when this is omitted
         // (Sonnet 4.6 did not). This loop only yields on text_delta below —
         // thinking_delta is silently dropped — so leaving thinking enabled
         // would render as a silent pause before any text appears, and
-        // thinking tokens would eat into MAX_TOKENS. Disable explicitly to
-        // preserve today's behavior rather than adopting a new mode blind.
-        thinking:   { type: 'disabled' },
+        // thinking tokens would eat into MAX_TOKENS. Turn it off explicitly
+        // (thinkingOffFor picks the form this model accepts) to preserve
+        // today's behavior rather than adopting a new mode blind.
+        thinking:   thinkingOffFor(configuration.model),
         output_config: { effort: 'medium' },
         system:     configuration.system,
         tools:      configuration.tools,

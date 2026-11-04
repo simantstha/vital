@@ -215,7 +215,7 @@ it to `.env.local` and fill in real values. Highlights:
 
 - `DATABASE_URL` — local dev Postgres, or a Supabase Session-pooler URL (port **5432**, not 6543).
 - `ANTHROPIC_API_KEY` — coach, meal reactions, proactive analysis, daily brief.
-- `PROACTIVE_ANALYSIS_MODEL` — optional; code default is `claude-sonnet-5`
+- `PROACTIVE_ANALYSIS_MODEL` — optional; code default is `claude-sonnet-5-5`
   (`DEFAULT_PROACTIVE_ANALYSIS_MODEL` in `lib/proactiveAnalysisGeneration.ts`). **In
   production this is set as a Fly secret and the env var overrides the code default** — changing
   the code constant alone has no production effect.
@@ -352,7 +352,7 @@ Releases are **automatic on every push to `main`** via `.github/workflows/releas
   **two processes** (`app` + `worker`)
 - **Database:** Postgres (Supabase) via drizzle-orm 0.45.x + postgres.js — event-sourced
   ontology model, 26 tables
-- **AI:** Anthropic `claude-sonnet-5` (`@anthropic-ai/sdk` ^0.95) — coach (tool-use + SSE),
+- **AI:** Anthropic `claude-sonnet-5-5` (`@anthropic-ai/sdk` ^0.95) — coach (tool-use + SSE),
   daily brief, proactive analysis, meal-photo Vision
 - **Auth:** Sign in with Apple + session JWTs (`jose`)
 - **Nutrition:** USDA FoodData Central + Open Food Facts (barcode) + CalorieNinjas (text
