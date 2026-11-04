@@ -150,7 +150,16 @@ class FakeTokenStore implements WhoopTokenStore, WhoopTokenStoreTx {
   constructor(private row: WhoopConnectionSnapshot | null) {}
 
   async transaction<T>(fn: (tx: WhoopTokenStoreTx) => Promise<T>): Promise<T> {
-    return fn(this);
+    // Behave like a real transaction: if fn throws, every write it made is rolled back.
+    const snapshot = { row: this.row, saved: [...this.saved], errored: [...this.errored] };
+    try {
+      return await fn(this);
+    } catch (err) {
+      this.row = snapshot.row;
+      this.saved = snapshot.saved;
+      this.errored = snapshot.errored;
+      throw err;
+    }
   }
   async lockConnection(): Promise<WhoopConnectionSnapshot | null> {
     return this.row;

@@ -405,13 +405,13 @@ export async function withValidToken<T>(
   connection: WhoopConnectionHandle,
   fn: (accessToken: string) => Promise<T>,
 ): Promise<T> {
-  const accessToken = await connection.store.transaction(async (tx) => {
+  const outcome = await connection.store.transaction(async (tx) => {
     const row = await tx.lockConnection(connection.id);
     if (!row) throw new Error(`WHOOP connection ${connection.id} not found`);
     if (row.status !== 'active') throw new WhoopConnectionInactiveError(connection.id, row.status);
 
     if (row.expires_at.getTime() - Date.now() > REFRESH_MARGIN_MS) {
-      return row.access_token;
+      return { accessToken: row.access_token };
     }
 
     try {
@@ -422,7 +422,7 @@ export async function withValidToken<T>(
         refresh_token: tokens.refresh_token,
         expires_at: expiresAt,
       });
-      return tokens.access_token;
+      return { accessToken: tokens.access_token };
     } catch (err) {
       // A refresh-token grant that comes back 400/401/403 is dead — WHOOP
       // will never accept this refresh token again, `code` notwithstanding
@@ -433,10 +433,13 @@ export async function withValidToken<T>(
       if (err instanceof WhoopTokenError && (err.status === 400 || err.status === 401 || err.status === 403)) {
         console.error(`[whoop] refresh failed permanently for connection ${connection.id} (status=${err.status}, code=${err.code ?? 'unknown'}); marking status=error`);
         await tx.markError(connection.id);
+        // Return rather than throw: a throw rolls back the transaction and undoes markError.
+        return { deadGrant: err };
       }
       throw err;
     }
   });
 
-  return fn(accessToken);
+  if ('deadGrant' in outcome) throw outcome.deadGrant;
+  return fn(outcome.accessToken);
 }
