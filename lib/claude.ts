@@ -9,7 +9,7 @@ import type { RecoveryConfidence, RecoveryGap, RecoveryHistoryDay } from '@/lib/
 import { localDayKey } from '@/lib/localDay';
 import type { WeightTrendResult } from '@/lib/weightTrend';
 import { formatWeightSignalsSection, weeklyWeightRead, type WeightSignal } from '@/lib/brain/weightSignals';
-import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
+import { CLAUDE_SONNET_MODEL, thinkingOffFor } from '@/lib/aiModels';
 import { buildBriefGoalSection, type BriefGoalFocus } from '@/lib/goalPromptText';
 
 // ── Inline types (formerly imported from lib/whoop + lib/strava) ──────────────
@@ -368,16 +368,18 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   const message = await client.messages.create({
     model: CLAUDE_SONNET_MODEL,
     max_tokens: 2100,
-    // Sonnet 5 runs adaptive thinking by default when this is omitted (Sonnet
-    // 4.6 did not) — disable explicitly to keep this single-turn JSON call
-    // behavior-identical to before the model swap. `effort: 'low'` matches a
-    // short, non-agentic, schema-constrained call.
-    thinking: { type: 'disabled' },
+    // Sonnet 5+ runs adaptive thinking by default when this is omitted (Sonnet
+    // 4.6 did not) — turn it off explicitly (thinkingOffFor picks the form the
+    // model accepts) to keep this single-turn JSON call behavior-identical to
+    // before the model swap. `effort: 'low'` matches a short, non-agentic,
+    // schema-constrained call.
+    thinking: thinkingOffFor(CLAUDE_SONNET_MODEL),
     output_config: { effort: 'low' },
     messages: [{ role: 'user', content: prompt }],
   });
 
-  const raw = message.content[0].type === 'text' ? message.content[0].text : '';
+  const textBlock = message.content.find((b) => b.type === 'text');
+  const raw = textBlock?.type === 'text' ? textBlock.text : '';
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   const parsed = JSON.parse(text);
 

@@ -6,7 +6,7 @@ import {
   estimatorItemsMatchTotals,
   groundItem,
   namesOverlap,
-  parseReportToolInput,
+  parseMealItems,
   pickHistoryPer100g,
   validateEstimatorItems,
   MAX_KCAL_PER_100G,
@@ -17,10 +17,10 @@ import {
   type ParsedItem,
 } from './estimator';
 
-// ─── parseReportToolInput ───────────────────────────────────────────────────
+// ─── parseMealItems ───────────────────────────────────────────────────
 
-test('parseReportToolInput reads a well-formed report_meal_items call', () => {
-  const items = parseReportToolInput({
+test('parseMealItems reads a well-formed structured-output payload', () => {
+  const items = parseMealItems({
     items: [
       {
         food: 'white rice, cooked', grams: 380, prep: 'steamed', confidence: 'high',
@@ -41,8 +41,8 @@ test('parseReportToolInput reads a well-formed report_meal_items call', () => {
   });
 });
 
-test('parseReportToolInput drops entries with no food name or a non-positive/garbage grams', () => {
-  const items = parseReportToolInput({
+test('parseMealItems drops entries with no food name or a non-positive/garbage grams', () => {
+  const items = parseMealItems({
     items: [
       { food: '', grams: 100, prep: '', confidence: 'low', portionNote: '', fallbackKcal100g: 0, fallbackC100g: 0, fallbackP100g: 0, fallbackF100g: 0 },
       { food: 'ghost food', grams: 0, prep: '', confidence: 'low', portionNote: '', fallbackKcal100g: 0, fallbackC100g: 0, fallbackP100g: 0, fallbackF100g: 0 },
@@ -54,17 +54,17 @@ test('parseReportToolInput drops entries with no food name or a non-positive/gar
   assert.equal(items[0].food, 'real food');
 });
 
-test('parseReportToolInput defaults an invalid/missing confidence to "low" and handles a non-array/missing items field', () => {
-  const items = parseReportToolInput({
+test('parseMealItems defaults an invalid/missing confidence to "low" and handles a non-array/missing items field', () => {
+  const items = parseMealItems({
     items: [
       { food: 'mystery item', grams: 50, prep: '', confidence: 'extremely sure', portionNote: '', fallbackKcal100g: 0, fallbackC100g: 0, fallbackP100g: 0, fallbackF100g: 0 },
     ],
   });
   assert.equal(items[0].confidence, 'low');
 
-  assert.deepEqual(parseReportToolInput({}), []);
-  assert.deepEqual(parseReportToolInput(null), []);
-  assert.deepEqual(parseReportToolInput({ items: 'not an array' }), []);
+  assert.deepEqual(parseMealItems({}), []);
+  assert.deepEqual(parseMealItems(null), []);
+  assert.deepEqual(parseMealItems({ items: 'not an array' }), []);
 });
 
 // ─── namesOverlap ────────────────────────────────────────────────────────────

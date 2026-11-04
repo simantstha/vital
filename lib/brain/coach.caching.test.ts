@@ -33,15 +33,14 @@ process.env.SPECIALISTS_ENABLED = 'false';
 /**
  * Minimum cacheable prefix, below which the API caches nothing.
  *
- * claude-sonnet-4-6's documented minimum is 2048 tokens. claude-sonnet-5 is
- * not listed in Anthropic's per-model minimum-prefix table as of this
- * writing — its exact minimum is unconfirmed. We use the highest minimum
- * documented for any current model (4096, the Opus 4.5/4.6/4.7/4.8 +
+ * claude-sonnet-4-6's documented minimum is 2048 tokens. The claude-api skill's
+ * prompt-caching table lists claude-sonnet-5-5 at 512 tokens (flagged "check the
+ * prompt caching docs before relying on their values"). We keep the highest
+ * minimum documented for any current model (4096, the Opus 4.5/4.6/4.7/4.8 +
  * Haiku 4.5 tier) as a conservative stand-in: this repo's real tools+system
  * prefix measures ~8,269 tokens, which clears 4096 with room to spare, so
  * simulating against the stricter number still proves caching survives the
- * model swap either way. If Anthropic publishes Sonnet 5's actual minimum,
- * replace this with the real figure.
+ * model swap either way.
  */
 const CACHE_MIN_TOKENS = 4096;
 /** The API's hard cap on cache_control breakpoints in one request. */
@@ -80,7 +79,7 @@ interface StreamParams {
 }
 
 // Every round's `thinking` param, captured so we can prove the coach path
-// keeps thinking explicitly disabled. Sonnet 5 runs adaptive thinking by
+// keeps thinking explicitly turned off. Sonnet 5+ runs adaptive thinking by
 // default when the field is omitted (Sonnet 4.6 did not) — a future refactor
 // that silently drops this field would re-enable thinking in a streaming
 // loop that only yields text_delta, and this is the test that would catch it.
@@ -295,14 +294,14 @@ test('a multi-round turn writes the tools+system prefix once, then reads it back
   assert.ok(total(third) >= total(first), 'later rounds carry MORE prompt, just cheaper');
 });
 
-test('every round explicitly disables thinking, so it cannot silently re-enable on a model that defaults it on', () => {
+test('every round explicitly turns thinking off, so it cannot silently re-enable on a model that defaults it on', () => {
   assert.equal(thinkingParams.length, 3, 'expected one captured thinking param per round');
   for (const thinking of thinkingParams) {
     assert.deepEqual(
       thinking,
-      { type: 'disabled' },
-      'coach.ts must pass thinking: {type: "disabled"} on every round — ' +
-        'omitting it lets Sonnet 5 default to adaptive thinking, which this ' +
+      { type: 'between_tools' },
+      'coach.ts must pass thinking: thinkingOffFor(model) on every round — ' +
+        'omitting it lets Sonnet 5.5 default to adaptive thinking, which this ' +
         'streaming loop cannot render (it only yields text_delta) and which ' +
         'would eat into MAX_TOKENS',
     );

@@ -9,7 +9,7 @@
  * model's calorie guess.
  *
  * Two steps:
- *   1. `parseMeal` — claude-sonnet-5, tool-use forced to REPORT_TOOL, turns
+ *   1. `parseMeal` — claude-sonnet-5-5, structured output (json_schema), turns
  *      free text and/or a meal photo into `items[]`: a canonical food name,
  *      edible (as-served, cooked) grams, prep method, a confidence, a human
  *      portionNote, and the model's own per-100g macro guess as a fallback.
@@ -26,13 +26,13 @@
  * order, and clamping are all exercised with zero network/DB access.
  */
 
-import type { ContentBlockParam, MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages';
+import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { and, desc, eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { client } from '@/lib/brain/anthropicClient';
 import { normalizeName, lookupProviderPer100g } from './candidates';
 import type { PortionMemoryEntry } from './portionMemory';
-import { CLAUDE_SONNET_MODEL } from '@/lib/aiModels';
+import { CLAUDE_SONNET_MODEL, thinkingOffFor } from '@/lib/aiModels';
 
 const MODEL = CLAUDE_SONNET_MODEL;
 const MAX_TOKENS = 1500;
@@ -234,58 +234,55 @@ export interface EstimatorDeps {
   loadPortionMemory(userId: string): Promise<PortionMemoryEntry[]>;
 }
 
-// ─── Step 1: parse (claude-sonnet-5, forced tool-use) ─────────────────────────
+// ─── Step 1: parse (claude-sonnet-5-5, structured output) ─────────────────────
 
-const REPORT_TOOL: Tool = {
-  name: 'report_meal_items',
-  description:
-    'Report every distinct food in this meal with a realistic as-served portion in grams.',
-  input_schema: {
-    type: 'object' as const,
-    properties: {
+const MEAL_ITEMS_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      description: 'One entry per distinct food. Never combine different foods into one item.',
       items: {
-        type: 'array',
-        description: 'One entry per distinct food. Never combine different foods into one item.',
-        items: {
-          type: 'object',
-          properties: {
-            food: {
-              type: 'string',
-              description: 'Canonical food name, e.g. "white rice, cooked" — not the user\'s raw words.',
-            },
-            grams: {
-              type: 'number',
-              description: 'Edible weight AS SERVED (cooked/prepared, not raw), in grams.',
-            },
-            prep: {
-              type: 'string',
-              description: 'Cooking method, e.g. "steamed", "pan-fried", "grilled", "raw".',
-            },
-            confidence: {
-              type: 'string',
-              enum: ['low', 'med', 'high'],
-              description: 'How sure you are of this portion estimate.',
-            },
-            portionNote: {
-              type: 'string',
-              description:
-                'The household-measure reasoning behind the gram estimate, e.g. "standard dinner ' +
-                'plate, ~1.5 cups" or "2 medium rotis, ~40g each".',
-            },
-            fallbackKcal100g: { type: 'number', description: 'Your own best kcal-per-100g estimate for this food, as a fallback.' },
-            fallbackC100g: { type: 'number', description: 'Your own best carbs-grams-per-100g estimate.' },
-            fallbackP100g: { type: 'number', description: 'Your own best protein-grams-per-100g estimate.' },
-            fallbackF100g: { type: 'number', description: 'Your own best fat-grams-per-100g estimate.' },
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          food: {
+            type: 'string',
+            description: 'Canonical food name, e.g. "white rice, cooked" — not the user\'s raw words.',
           },
-          required: [
-            'food', 'grams', 'prep', 'confidence', 'portionNote',
-            'fallbackKcal100g', 'fallbackC100g', 'fallbackP100g', 'fallbackF100g',
-          ],
+          grams: {
+            type: 'number',
+            description: 'Edible weight AS SERVED (cooked/prepared, not raw), in grams.',
+          },
+          prep: {
+            type: 'string',
+            description: 'Cooking method, e.g. "steamed", "pan-fried", "grilled", "raw".',
+          },
+          confidence: {
+            type: 'string',
+            enum: ['low', 'med', 'high'],
+            description: 'How sure you are of this portion estimate.',
+          },
+          portionNote: {
+            type: 'string',
+            description:
+              'The household-measure reasoning behind the gram estimate, e.g. "standard dinner ' +
+              'plate, ~1.5 cups" or "2 medium rotis, ~40g each".',
+          },
+          fallbackKcal100g: { type: 'number', description: 'Your own best kcal-per-100g estimate for this food, as a fallback.' },
+          fallbackC100g: { type: 'number', description: 'Your own best carbs-grams-per-100g estimate.' },
+          fallbackP100g: { type: 'number', description: 'Your own best protein-grams-per-100g estimate.' },
+          fallbackF100g: { type: 'number', description: 'Your own best fat-grams-per-100g estimate.' },
         },
+        required: [
+          'food', 'grams', 'prep', 'confidence', 'portionNote',
+          'fallbackKcal100g', 'fallbackC100g', 'fallbackP100g', 'fallbackF100g',
+        ],
       },
     },
-    required: ['items'],
   },
+  required: ['items'],
 };
 
 // Kept as a single exported constant (not inlined) so estimator.eval.ts and
@@ -315,7 +312,7 @@ For every item also give your own best per-100g kcal/carbs/protein/fat estimate 
 only used if no real nutrition-database match is found for that food, so make it a genuine best guess, not a \
 placeholder.
 
-Call report_meal_items with one entry per distinct food actually present. Never combine different foods into \
+Report one entry per distinct food actually present. Never combine different foods into \
 one item, and never invent a food that isn't described or visible.`;
 
 function portionMemoryBlock(portionMemory: PortionMemoryEntry[]): string {
@@ -327,8 +324,8 @@ function portionMemoryBlock(portionMemory: PortionMemoryEntry[]): string {
   return `\n\nThis user's own remembered portions (from past corrections):\n${lines}`;
 }
 
-/** Reads report_meal_items' raw tool input into a validated ParsedItem[], dropping any entry missing a positive `grams`. */
-export function parseReportToolInput(raw: unknown): ParsedItem[] {
+/** Reads the model's parsed JSON output into a validated ParsedItem[], dropping any entry missing a positive `grams`. */
+export function parseMealItems(raw: unknown): ParsedItem[] {
   const items = (raw as { items?: unknown[] } | null)?.items;
   if (!Array.isArray(items)) return [];
 
@@ -386,19 +383,23 @@ export async function parseMealWithClaude(input: ParseMealInput): Promise<Parsed
   const msg = await client.messages.create({
     model: MODEL,
     max_tokens: MAX_TOKENS,
-    thinking: { type: 'disabled' },
-    output_config: { effort: 'medium' },
+    thinking: thinkingOffFor(MODEL),
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: MEAL_ITEMS_SCHEMA } },
     system: SYSTEM_PROMPT,
-    tools: [REPORT_TOOL],
-    tool_choice: { type: 'tool', name: REPORT_TOOL.name },
     messages,
   });
 
-  const toolUse = msg.content.find(
-    (b): b is Extract<typeof b, { type: 'tool_use' }> => b.type === 'tool_use',
+  // A refusal or truncation (max_tokens) yields no valid JSON — same as a missing tool block before.
+  if (msg.stop_reason === 'refusal' || msg.stop_reason === 'max_tokens') return [];
+  const textBlock = msg.content.find(
+    (b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text',
   );
-  if (!toolUse) return [];
-  return parseReportToolInput(toolUse.input);
+  if (!textBlock) return [];
+  try {
+    return parseMealItems(JSON.parse(textBlock.text));
+  } catch {
+    return [];
+  }
 }
 
 // ─── Step 2: grounding (pure — unit-testable without network) ────────────────

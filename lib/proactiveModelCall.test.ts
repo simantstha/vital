@@ -13,7 +13,7 @@ import {
 const request = { system: 'system prompt', content: '{"kind":"workout"}' };
 
 function response(stopReason: Anthropic.StopReason | null, content: Array<Record<string, unknown>>): Anthropic.Message {
-  return { id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-5', stop_reason: stopReason, stop_sequence: null, content } as unknown as Anthropic.Message;
+  return { id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', stop_reason: stopReason, stop_sequence: null, content } as unknown as Anthropic.Message;
 }
 const text = (value: string) => ({ type: 'text', text: value, citations: null });
 const thinking = { type: 'thinking', thinking: 'hmm', signature: 'sig' };
@@ -27,16 +27,20 @@ function assertAnalysisError(fn: () => unknown, detail: string): void {
   });
 }
 
-test('analysis request disables adaptive thinking and carries the prompt through', () => {
-  const params = buildAnalysisRequest('claude-sonnet-5', request);
-  assert.deepEqual(params.thinking, { type: 'disabled' });
-  assert.equal(params.model, 'claude-sonnet-5');
+test('analysis request turns adaptive thinking off and carries the prompt through', () => {
+  const params = buildAnalysisRequest('claude-sonnet-5-5', request);
+  assert.deepEqual(params.thinking, { type: 'between_tools' });
+  assert.equal(params.model, 'claude-sonnet-5-5');
   assert.equal(params.max_tokens, ANALYSIS_MAX_TOKENS);
   assert.equal(params.system, request.system);
   assert.deepEqual(params.messages, [{ role: 'user', content: request.content }]);
 });
 
-test('nudge request disables adaptive thinking and carries the prompt through', () => {
+test('analysis request uses disabled thinking on a model that is not Sonnet 5.5', () => {
+  assert.deepEqual(buildAnalysisRequest('claude-sonnet-5', request).thinking, { type: 'disabled' });
+});
+
+test('nudge request turns adaptive thinking off and carries the prompt through', () => {
   const params = buildNudgeRequest('custom-model', request);
   assert.deepEqual(params.thinking, { type: 'disabled' });
   assert.equal(params.model, 'custom-model');

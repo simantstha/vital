@@ -53,11 +53,12 @@ async function main(): Promise<void> {
   const { client } = await import('../lib/brain/anthropicClient');
   const { assemblePersona } = await import('../lib/brain/persona');
   const { BRAIN_TOOLS } = await import('../lib/brain/tools');
+  const { CLAUDE_SONNET_MODEL, thinkingOffFor } = await import('../lib/aiModels');
   const { randomUUID } = await import('node:crypto');
   type OntologyNodeType = import('@/db/schema').OntologyNode;
   type MessageParamType = import('@anthropic-ai/sdk/resources/messages').MessageParam;
 
-  const MODEL = process.env.EVAL_MODEL ?? 'claude-sonnet-5'; // lib/brain/coach.ts:66
+  const MODEL = process.env.EVAL_MODEL ?? CLAUDE_SONNET_MODEL; // lib/brain/coach.ts:66
   const MAX_TOKENS = 512;
   const EVAL_RUNS = Math.max(1, Number(process.env.EVAL_RUNS ?? '1') || 1);
   // Bounded agentic loop: production (lib/brain/coach.ts) keeps going until
@@ -585,7 +586,7 @@ async function main(): Promise<void> {
           const response = await client.messages.create({
             model: MODEL,
             max_tokens: MAX_TOKENS,
-            thinking: { type: 'disabled' },
+            thinking: thinkingOffFor(MODEL),
             system,
             tools: BRAIN_TOOLS,
             messages,

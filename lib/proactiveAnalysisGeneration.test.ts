@@ -53,7 +53,7 @@ function payloadOf(request: AnalysisGenerationRequest): Record<string, unknown> 
 const validResponse = (): string => JSON.stringify(valid);
 
 test('defaults to Sonnet model and preserves the environment override', () => {
-  assert.equal(proactiveAnalysisModel({} as NodeJS.ProcessEnv), 'claude-sonnet-5');
+  assert.equal(proactiveAnalysisModel({} as NodeJS.ProcessEnv), 'claude-sonnet-5-5');
   assert.equal(proactiveAnalysisModel({ PROACTIVE_ANALYSIS_MODEL: 'custom-model' } as unknown as NodeJS.ProcessEnv), 'custom-model');
 });
 
@@ -147,7 +147,7 @@ test('synthetic live proactive analysis returns typed digit-free output', {
   const resolved = await generateAnalysis({
     source,
     generate: async (request) => {
-      // The worker's exact request (thinking disabled, same max_tokens), so this live check can't pass on a call the worker never makes.
+      // The worker's exact request (thinking off, same max_tokens), so this live check can't pass on a call the worker never makes.
       const response = await anthropic.messages.create(buildAnalysisRequest(proactiveAnalysisModel(process.env), request));
       return textFromResponse(response, 'analysis');
     },
