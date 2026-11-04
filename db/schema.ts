@@ -118,7 +118,7 @@ export const users = p.pgTable('users', {
   p.check('users_primary_workout_device_check', sql`${t.primary_workout_device} in ('apple', 'whoop')`),
   p.check('users_primary_sleep_device_check', sql`${t.primary_sleep_device} in ('apple', 'whoop')`),
   p.check('users_primary_recovery_device_check', sql`${t.primary_recovery_device} in ('apple', 'whoop')`),
-]);
+]).enableRLS();
 
 // ─── events (append-only) ────────────────────────────────────────────────────
 // The immutable ledger. Nothing is ever updated or deleted here.
@@ -136,7 +136,7 @@ export const events = p.pgTable('events', {
 }, (t) => [
   p.index('events_user_timestamp_idx').on(t.user_id, t.timestamp),
   p.index('events_user_type_timestamp_idx').on(t.user_id, t.type, t.timestamp),
-]);
+]).enableRLS();
 
 // ─── nodes (ontology) ────────────────────────────────────────────────────────
 // Entities Vital knows about the user.
@@ -197,7 +197,7 @@ export const nodes = p.pgTable('nodes', {
   p.index('nodes_user_status_idx').on(t.user_id, t.status),
   p.index('nodes_user_subject_idx').on(t.user_id, t.subject_node_id),
   p.check('nodes_status_check', sql`${t.status} in ('active', 'resolved', 'superseded')`),
-]);
+]).enableRLS();
 
 // ─── edges (ontology) ────────────────────────────────────────────────────────
 // Relationships between ontology nodes.
@@ -225,7 +225,7 @@ export const edges = p.pgTable('edges', {
 }, (t) => [
   p.index('edges_user_from_predicate_idx').on(t.user_id, t.from_node, t.predicate),
   p.index('edges_user_to_predicate_idx').on(t.user_id, t.to_node, t.predicate),
-]);
+]).enableRLS();
 
 // ─── specialist_sessions ────────────────────────────────────────────────────
 // Durable handoff lifecycle for scoped specialist consultations. Only proposal
@@ -263,7 +263,7 @@ export const specialist_sessions = p.pgTable('specialist_sessions', {
     .on(t.user_id)
     .where(sql`${t.status} in ('proposed', 'active', 'return_proposed')`),
   p.index('specialist_sessions_user_updated_idx').on(t.user_id, t.updated_at),
-]);
+]).enableRLS();
 
 // Idempotency ledger for explicit specialist-card actions. The stored result
 // lets retries return the exact same ordered SSE payload without reapplying a
@@ -281,7 +281,7 @@ export const specialist_actions = p.pgTable('specialist_actions', {
 }, (t) => [
   p.uniqueIndex('specialist_actions_user_action_idx').on(t.user_id, t.action_id),
   p.index('specialist_actions_session_idx').on(t.session_id),
-]);
+]).enableRLS();
 
 // ─── messages ────────────────────────────────────────────────────────────────
 // Full conversation history. Both role values: 'user' | 'assistant'
@@ -317,7 +317,7 @@ export const messages = p.pgTable('messages', {
   // additive-safe for every existing/legacy row (client_turn_id null) and
   // only enforces uniqueness once a client actually sends one.
   p.uniqueIndex('messages_user_client_turn_idx').on(t.user_id, t.client_turn_id),
-]);
+]).enableRLS();
 
 // ─── pending_facts (confirmation-gated learning) ─────────────────────────────
 // When the coach proposes a new fact via propose_fact(), it lands here as
@@ -338,7 +338,7 @@ export const pending_facts = p.pgTable('pending_facts', {
   resolved_at:   p.timestamp('resolved_at', { withTimezone: true }),             // nullable until confirmed or rejected
 }, (t) => [
   p.index('pending_facts_user_status_idx').on(t.user_id, t.status),
-]);
+]).enableRLS();
 
 // ─── daily_metrics ───────────────────────────────────────────────────────────
 // Day-keyed HealthKit summaries, backfill + ongoing sync land here (not the
@@ -358,7 +358,7 @@ export const daily_metrics = p.pgTable('daily_metrics', {
   updated_at: p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.uniqueIndex('daily_metrics_user_date_metric_idx').on(t.user_id, t.date, t.metric),
-]);
+]).enableRLS();
 
 // ─── baselines ───────────────────────────────────────────────────────────────
 // One row per (user, metric) — recomputed from daily_metrics after every
@@ -375,7 +375,7 @@ export const baselines = p.pgTable('baselines', {
   computed_at: p.timestamp('computed_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.uniqueIndex('baselines_user_metric_idx').on(t.user_id, t.metric),
-]);
+]).enableRLS();
 
 // ─── pending_nudges ──────────────────────────────────────────────────────────
 // Nudges scheduled by the proactive heuristics cron (steps drop, HRV trend, etc.)
@@ -399,7 +399,7 @@ export const pending_nudges = p.pgTable('pending_nudges', {
   p.index('pending_nudges_user_scheduled_idx').on(t.user_id, t.scheduled_for),
   p.index('pending_nudges_user_kind_sent_idx').on(t.user_id, t.finding_kind, t.sent_at),
   p.uniqueIndex('pending_nudges_user_local_day_idx').on(t.user_id, t.local_day),
-]);
+]).enableRLS();
 
 // ─── insight_findings ────────────────────────────────────────────────────────
 // Per-run memory for the proactive insight engine. Every finding that survives
@@ -420,7 +420,7 @@ export const insight_findings = p.pgTable('insight_findings', {
 }, (t) => [
   p.uniqueIndex('insight_findings_user_signature_day_idx').on(t.user_id, t.signature, t.computed_for),
   p.index('insight_findings_user_signature_idx').on(t.user_id, t.signature),
-]);
+]).enableRLS();
 
 // ─── proactive health analysis + push delivery ─────────────────────────────
 
@@ -438,7 +438,7 @@ export const push_devices = p.pgTable('push_devices', {
   p.uniqueIndex('push_devices_installation_idx').on(t.installation_id),
   p.uniqueIndex('push_devices_token_environment_idx').on(t.device_token, t.environment),
   p.index('push_devices_user_active_idx').on(t.user_id, t.invalidated_at),
-]);
+]).enableRLS();
 
 export const notification_preferences = p.pgTable('notification_preferences', {
   user_id:                       p.uuid('user_id').primaryKey().references(() => users.id),
@@ -476,7 +476,7 @@ export const notification_preferences = p.pgTable('notification_preferences', {
     'notification_preferences_meal_dinner_time_check',
     sql`${t.meal_dinner_time_minutes} between 0 and 1439`,
   ),
-]);
+]).enableRLS();
 
 export const workout_analyses = p.pgTable('workout_analyses', {
   id:                 p.uuid('id').primaryKey().defaultRandom(),
@@ -529,7 +529,7 @@ export const workout_analyses = p.pgTable('workout_analyses', {
   p.uniqueIndex('workout_analyses_user_hk_uuid_idx').on(t.user_id, t.hk_uuid),
   p.index('workout_analyses_queue_idx').on(t.status, t.next_attempt_at),
   p.foreignKey({ columns: [t.merged_into_id], foreignColumns: [t.id], name: 'workout_analyses_merged_into_id_fk' }),
-]);
+]).enableRLS();
 
 export const sleep_analyses = p.pgTable('sleep_analyses', {
   id:                 p.uuid('id').primaryKey().defaultRandom(),
@@ -572,7 +572,7 @@ export const sleep_analyses = p.pgTable('sleep_analyses', {
   p.check('sleep_analyses_secondary_source_check', sql`${t.secondary_source} in ('healthkit', 'whoop')`),
   p.uniqueIndex('sleep_analyses_user_wake_date_idx').on(t.user_id, t.wake_date),
   p.index('sleep_analyses_queue_idx').on(t.status, t.next_attempt_at),
-]);
+]).enableRLS();
 
 export const morning_notification_slots = p.pgTable('morning_notification_slots', {
   id:              p.uuid('id').primaryKey().defaultRandom(),
@@ -593,7 +593,7 @@ export const morning_notification_slots = p.pgTable('morning_notification_slots'
   p.check('morning_notification_slots_status_check', sql`${t.status} in ('claimed', 'sent', 'failed')`),
   p.uniqueIndex('morning_notification_slots_user_date_idx').on(t.user_id, t.local_date),
   p.uniqueIndex('morning_notification_slots_idempotency_idx').on(t.idempotency_key),
-]);
+]).enableRLS();
 
 export const push_attempts = p.pgTable('push_attempts', {
   id:              p.uuid('id').primaryKey().defaultRandom(),
@@ -612,7 +612,7 @@ export const push_attempts = p.pgTable('push_attempts', {
   p.check('push_attempts_status_check', sql`${t.status} in ('pending', 'sent', 'transient_failure', 'permanent_failure')`),
   p.uniqueIndex('push_attempts_idempotency_attempt_idx').on(t.idempotency_key, t.attempt_number),
   p.index('push_attempts_user_attempted_idx').on(t.user_id, t.attempted_at),
-]);
+]).enableRLS();
 
 // ─── notification_inbox ────────────────────────────────────────────────────────
 // The user-facing delivery record: what we told the user, kept so it's
@@ -647,7 +647,7 @@ export const notification_inbox = p.pgTable('notification_inbox', {
   // worker retries delivery.
   p.uniqueIndex('notification_inbox_user_type_target_idx').on(t.user_id, t.type, t.target_id),
   p.index('notification_inbox_user_created_idx').on(t.user_id, t.created_at),
-]);
+]).enableRLS();
 
 // ─── daily_briefs ────────────────────────────────────────────────────────────
 // Persisted Today-screen daily brief (insight + meal plan from
@@ -677,7 +677,7 @@ export const daily_briefs = p.pgTable('daily_briefs', {
   updated_at:   p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.uniqueIndex('daily_briefs_user_day_units_idx').on(t.user_id, t.local_day, t.unit_system),
-]);
+]).enableRLS();
 
 // ─── weekly_reviews ──────────────────────────────────────────────────────────
 // One persisted "how did your week go toward your goal" review per user per
@@ -695,7 +695,7 @@ export const weekly_reviews = p.pgTable('weekly_reviews', {
   pushed_at:  p.timestamp('pushed_at', { withTimezone: true }),
 }, (t) => [
   p.uniqueIndex('weekly_reviews_user_week_idx').on(t.user_id, t.week_start),
-]);
+]).enableRLS();
 
 // ─── plan_items ──────────────────────────────────────────────────────────────
 // Server-persisted rows for the Today "plan" timeline (redesign v3 Phase 2).
@@ -724,7 +724,7 @@ export const plan_items = p.pgTable('plan_items', {
   updated_at:   p.timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.index('plan_items_user_day_idx').on(t.user_id, t.local_day),
-]);
+]).enableRLS();
 
 // ─── daily_coach_recommendations ─────────────────────────────────────────────
 // ORPHANED: Coach Workspace feature was removed. This table is no longer read
@@ -749,7 +749,7 @@ export const daily_coach_recommendations = p.pgTable('daily_coach_recommendation
 }, (t) => [
   p.check('daily_coach_recommendations_category_check', sql`${t.category} in ('training', 'recovery', 'sleep', 'calibration')`),
   p.uniqueIndex('daily_coach_recommendations_user_day_idx').on(t.user_id, t.local_day),
-]);
+]).enableRLS();
 
 // ORPHANED: Coach Workspace feature was removed. This table is no longer read
 // or written by any code, but is retained deliberately to prevent drizzle-kit
@@ -776,7 +776,7 @@ export const coach_recommendation_interactions = p.pgTable('coach_recommendation
   p.uniqueIndex('coach_recommendation_interactions_occurrence_seq_idx').on(t.occurrence_seq),
   p.index('coach_recommendation_interactions_recommendation_idx').on(t.recommendation_id),
   p.index('coach_recommendation_interactions_recommendation_occurrence_idx').on(t.recommendation_id, t.occurrence_seq),
-]);
+]).enableRLS();
 
 // ─── calendar_blocks ─────────────────────────────────────────────────────────
 // Coach calendar awareness (see docs Calendar Integration plan). iOS syncs
@@ -796,7 +796,7 @@ export const calendar_blocks = p.pgTable('calendar_blocks', {
   synced_at:  p.timestamp('synced_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   p.index('calendar_blocks_user_start_idx').on(t.user_id, t.start_at),
-]);
+]).enableRLS();
 
 // ─── food_cache ──────────────────────────────────────────────────────────────
 // Shared provider data cache (USDA FDC, OpenFoodFacts). Indexed by
@@ -822,7 +822,7 @@ export const food_cache = p.pgTable('food_cache', {
   p.uniqueIndex('food_cache_provider_food_idx').on(t.provider, t.provider_food_id),
   p.index('food_cache_barcode_idx').on(t.barcode),
   p.index('food_cache_name_idx').on(t.name),
-]);
+]).enableRLS();
 
 // ─── whoop_connections ───────────────────────────────────────────────────────
 // One row per user's linked WHOOP account (stage 1 of the WHOOP integration —
@@ -853,7 +853,7 @@ export const whoop_connections = p.pgTable('whoop_connections', {
 }, (t) => [
   p.uniqueIndex('whoop_connections_user_idx').on(t.user_id),
   p.uniqueIndex('whoop_connections_whoop_user_idx').on(t.whoop_user_id),
-]);
+]).enableRLS();
 
 // ─── workout_sets ────────────────────────────────────────────────────────────
 // Structured strength-training log (roadmap 1.3 / ux-spec-v4 §5.4, delivery
@@ -897,7 +897,7 @@ export const workout_sets = p.pgTable('workout_sets', {
   p.index('workout_sets_user_exercise_performed_idx').on(t.user_id, t.exercise, t.performed_at),
   p.index('workout_sets_user_session_idx').on(t.user_id, t.session_id),
   p.uniqueIndex('workout_sets_session_set_idx').on(t.session_id, t.set_index),
-]);
+]).enableRLS();
 
 // ─── Inferred TypeScript types ────────────────────────────────────────────────
 // Named to avoid collision with built-in DOM globals (Event, Node).
