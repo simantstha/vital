@@ -77,9 +77,13 @@ const toolsPromise = import('./tools');
 
 test('query_ontology excludes a superseded row', async () => {
   const tools = await toolsPromise;
-  const result = JSON.parse(await tools.executeToolCall('query_ontology', {}, 'user-1')) as FakeNodeRow[];
+  const result = JSON.parse(await tools.executeToolCall('query_ontology', {}, 'user-1')) as {
+    facts: Array<{ id: string }>;
+    truncated: boolean;
+  };
 
-  assert.equal(result.length, 1);
-  assert.equal(result[0].id, 'node-active');
-  assert.ok(!result.some((r) => r.id === 'node-superseded'));
+  assert.equal(result.facts.length, 1);
+  assert.equal(result.facts[0].id, 'node-active');
+  assert.ok(!result.facts.some((r) => r.id === 'node-superseded'));
+  assert.equal(result.truncated, false);
 });

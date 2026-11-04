@@ -540,6 +540,12 @@ async function* streamCoachTurn(userId: string, seed: TurnSeed): AsyncGenerator<
           console.error('coach tool call failed', { tool: block.name, error });
           result = `Error: the ${block.name} tool failed; tell the user it didn't work and don't retry.`;
         }
+        console.info('coach_lifecycle', {
+          event: 'coach_tool_result',
+          userId,
+          tool: block.name,
+          chars: result.length,
+        });
       }
 
       // Chat-activity contract §1: computed once per call, from the tool's

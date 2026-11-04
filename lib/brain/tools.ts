@@ -92,7 +92,9 @@ export const BRAIN_TOOLS: Tool[] = [
     name: 'query_events',
     description:
       'Query the user\'s event ledger for a specific event type over a date range. ' +
-      'Returns JSON array of { timestamp, payload } objects ordered newest first.',
+      'Returns { events, truncated }: events is a JSON array of { timestamp, payload } ' +
+      'objects ordered newest first, at most 100, with meal thumbnail images removed from ' +
+      'payloads. truncated: true means older or lower-priority rows were left out.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -114,7 +116,10 @@ export const BRAIN_TOOLS: Tool[] = [
     name: 'query_ontology',
     description:
       'Query the user\'s ontology (structured facts: goals, allergies, conditions, ' +
-      'preferences, medications, injuries). Optionally filter by node type or label.',
+      'preferences, medications, injuries). Optionally filter by node type or label. ' +
+      'Returns { facts, truncated }: at most 100 facts, each with only id, type, label, ' +
+      'properties, source, weight, created_at, subject_node_id. truncated: true means ' +
+      'older or lower-priority rows were left out.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1372,6 +1377,77 @@ export async function queryWorkouts(userId: string, days: number): Promise<Worko
   return workouts;
 }
 
+/** Most rows a coach read tool returns to the model. Callers fetch one extra
+ * row so `truncated` can say whether anything was left out. */
+export const MODEL_ROW_CAP = 100;
+
+/** Drops HealthKit-internal fields a workout carries that the model never needs. */
+export function trimWorkoutsForModel(workouts: WorkoutEntry[]): WorkoutEntry[] {
+  return workouts.map((workout) => {
+    const trimmed: WorkoutEntry = { ...workout };
+    delete trimmed.hrSeries;
+    delete trimmed.hkUuid;
+    delete trimmed.sourceBundleId;
+    return trimmed;
+  });
+}
+
+export interface EventRowForModel {
+  timestamp: Date;
+  payload: unknown;
+}
+
+/** Caps event rows at MODEL_ROW_CAP and strips meal thumbnails from payloads.
+ * Pass the rows newest first, fetched with a limit of MODEL_ROW_CAP + 1. */
+export function shapeEventRowsForModel(rows: EventRowForModel[]): {
+  events: EventRowForModel[];
+  truncated: boolean;
+} {
+  const truncated = rows.length > MODEL_ROW_CAP;
+  const events = rows.slice(0, MODEL_ROW_CAP).map((row) => {
+    if (!isRecordValue(row.payload) || !('imageThumb' in row.payload)) return row;
+    const payload = { ...row.payload };
+    delete payload.imageThumb;
+    return { timestamp: row.timestamp, payload };
+  });
+  return { events, truncated };
+}
+
+export interface FactRowForModel {
+  id: string;
+  type: string;
+  label: string;
+  properties: unknown;
+  source: string;
+  weight: number;
+  created_at: Date;
+  subject_node_id: string | null;
+}
+
+/** Keeps the fields the model needs from each ontology node and caps the list
+ * at MODEL_ROW_CAP. Pass rows already filtered and in the order to return. */
+export function shapeFactRowsForModel(rows: FactRowForModel[]): {
+  facts: FactRowForModel[];
+  truncated: boolean;
+} {
+  const truncated = rows.length > MODEL_ROW_CAP;
+  const facts = rows.slice(0, MODEL_ROW_CAP).map((row) => ({
+    id: row.id,
+    type: row.type,
+    label: row.label,
+    properties: row.properties,
+    source: row.source,
+    weight: row.weight,
+    created_at: row.created_at,
+    subject_node_id: row.subject_node_id,
+  }));
+  return { facts, truncated };
+}
+
+function isRecordValue(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+
 export interface PeriodComparison {
   metric:     string;
   periodDays: number;
@@ -1563,9 +1639,9 @@ export async function executeToolCall(
         ),
       )
       .orderBy(desc(schema.events.timestamp))
-      .limit(100);
+      .limit(MODEL_ROW_CAP + 1);
 
-    return JSON.stringify(rows);
+    return JSON.stringify(shapeEventRowsForModel(rows));
   }
 
   // ── query_ontology ────────────────────────────────────────────────────────
@@ -1582,7 +1658,7 @@ export async function executeToolCall(
     if (nodeType) rows = rows.filter(n => n.type === nodeType);
     if (labelContains) rows = rows.filter(n => n.label.toLowerCase().includes(labelContains));
 
-    return JSON.stringify(rows);
+    return JSON.stringify(shapeFactRowsForModel(rows));
   }
 
   // ── read_entity ───────────────────────────────────────────────────────────
@@ -2081,7 +2157,7 @@ export async function executeToolCall(
   // ── get_workouts ──────────────────────────────────────────────────────────
   if (name === 'get_workouts') {
     const days = Number(input.days ?? 7);
-    return JSON.stringify(await queryWorkouts(userId, days));
+    return JSON.stringify(trimWorkoutsForModel(await queryWorkouts(userId, days)));
   }
 
   // ── get_baseline ──────────────────────────────────────────────────────────
