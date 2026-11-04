@@ -3,7 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { morningKey, notificationKey, type AnalysisJob, type CoachAnalysis, type PushDevice, type PushOutcome, type WorkerRepository } from './proactiveHealthWorker';
 import { rawSqlTimeBindings, rawSqlTimestamp, staleNotificationEvent } from './proactiveHealthWorkerSupport';
-import { claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, reservedSleepCapacity } from './proactiveHealthTransitions';
+import { claimMorningSlot, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, reservedSleepCapacity, sortDueCandidateRows } from './proactiveHealthTransitions';
 import { resolveUnitSystem } from './units';
 import { buildSubjectLabelMap, resolveSubjectLabel, withSubjectSuffix } from './brain/factSubject';
 
@@ -137,7 +137,7 @@ export async function listReadyNotificationCandidates(now: Date, limit = 40): Pr
 export interface MorningBriefClaim { slotId: string; userId: string; localDate: string; timezone: string; idempotencyKey: string; leaseToken: string; retryCount: number }
 export function buildDueMorningBriefCandidatesQuery(now: Date) {
   const nowSql = rawSqlTimestamp(now);
-  return sql<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: Date }>`
+  return sql<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: string }>`
     select p.user_id, p.timezone, (${nowSql} at time zone p.timezone)::date::text local_date,
       ((extract(hour from (${nowSql} at time zone p.timezone))::int * 60 + extract(minute from (${nowSql} at time zone p.timezone))::int) - p.morning_brief_time_minutes) overdue_minutes, p.updated_at
     from ${schema.notification_preferences} p
@@ -149,7 +149,7 @@ export function buildDueMorningBriefCandidatesQuery(now: Date) {
 export async function claimDueMorningBriefs(now: Date, limit = 20): Promise<MorningBriefClaim[]> {
   const nowSql = rawSqlTimestamp(now);
   const candidates = await db.execute(buildDueMorningBriefCandidatesQuery(now));
-  const due = (candidates as unknown as Array<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: Date }>).sort((a, b) => compareDueCandidates({ overdueMinutes: Number(a.overdue_minutes), updatedAt: a.updated_at }, { overdueMinutes: Number(b.overdue_minutes), updatedAt: b.updated_at })).map((row) => ({ userId: row.user_id, timezone: row.timezone, localDate: row.local_date, idempotencyKey: morningKey(row.user_id, row.local_date) }));
+  const due = sortDueCandidateRows(candidates as unknown as Array<{ user_id: string; timezone: string; local_date: string; overdue_minutes: number; updated_at: string }>).map((row) => ({ userId: row.user_id, timezone: row.timezone, localDate: row.local_date, idempotencyKey: morningKey(row.user_id, row.local_date) }));
   const claims: MorningBriefClaim[] = [];
   for (const candidate of due) {
     const token = randomUUID(); const lease = new Date(now.getTime() + LEASE_MS);

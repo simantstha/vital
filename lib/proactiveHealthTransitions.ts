@@ -122,6 +122,9 @@ export interface DueCandidate { overdueMinutes: number; updatedAt: Date }
 export function compareDueCandidates(a: DueCandidate, b: DueCandidate): number {
   return b.overdueMinutes - a.overdueMinutes || a.updatedAt.getTime() - b.updatedAt.getTime();
 }
+export function sortDueCandidateRows<T extends { overdue_minutes: number | string; updated_at: Date | string }>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) => compareDueCandidates({ overdueMinutes: Number(a.overdue_minutes), updatedAt: new Date(a.updated_at) }, { overdueMinutes: Number(b.overdue_minutes), updatedAt: new Date(b.updated_at) }));
+}
 
 export interface MorningClaimAdapter<T> {
   tryInsert(actor: 'sleep' | 'brief'): Promise<T | null>;

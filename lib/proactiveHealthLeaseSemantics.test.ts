@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ANALYSIS_MAX_AGE_MS, NOTIFICATION_FRESHNESS_MS, analysisMaxAgeMs, analysisTooOld, claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, ownsLease, reservedSleepCapacity, shouldPersistDefaultPreferences, workoutEndedAt } from './proactiveHealthTransitions';
+import { ANALYSIS_MAX_AGE_MS, NOTIFICATION_FRESHNESS_MS, analysisMaxAgeMs, analysisTooOld, claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, ownsLease, reservedSleepCapacity, shouldPersistDefaultPreferences, sortDueCandidateRows, workoutEndedAt } from './proactiveHealthTransitions';
 
 type Row = { owner: string | null; expires: number; state: 'pending' | 'processing' | 'ready' | 'sending' | 'sent'; retries: number };
 function claim(row: Row, owner: string, now: number): boolean {
@@ -55,6 +55,14 @@ test('due candidates are fair by overdue duration then oldest update', () => {
   const older = { overdueMinutes: 10, updatedAt: new Date('2026-07-12T10:00:00Z') };
   const mostOverdue = { overdueMinutes: 30, updatedAt: new Date('2026-07-12T12:00:00Z') };
   assert.deepEqual([newer, older, mostOverdue].sort(compareDueCandidates), [mostOverdue, older, newer]);
+});
+
+test('due candidate rows with string timestamps and overdue minutes sort without throwing', () => {
+  const rows = [
+    { user_id: 'b', overdue_minutes: '10', updated_at: '2026-07-12T11:00:00Z' },
+    { user_id: 'a', overdue_minutes: '10', updated_at: '2026-07-12T10:00:00Z' },
+  ];
+  assert.deepEqual(sortDueCandidateRows(rows).map((row) => row.user_id), ['a', 'b']);
 });
 
 test('sustained workout backlog always reserves sleep capacity while remaining work-conserving', () => {
