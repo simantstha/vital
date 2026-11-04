@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NOTIFICATION_FRESHNESS_MS, claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, ownsLease, reservedSleepCapacity, shouldPersistDefaultPreferences, workoutEndedAt } from './proactiveHealthTransitions';
+import { ANALYSIS_MAX_AGE_MS, NOTIFICATION_FRESHNESS_MS, analysisMaxAgeMs, analysisTooOld, claimMorningSlot, compareDueCandidates, failOwnedMorningSlot, freshnessWindowMs, notificationClaimable, notificationFresh, ownsLease, reservedSleepCapacity, shouldPersistDefaultPreferences, workoutEndedAt } from './proactiveHealthTransitions';
 
 type Row = { owner: string | null; expires: number; state: 'pending' | 'processing' | 'ready' | 'sending' | 'sent'; retries: number };
 function claim(row: Row, owner: string, now: number): boolean {
@@ -169,4 +169,33 @@ test('freshnessWindowMs reads PROACTIVE_NOTIFICATION_FRESHNESS_HOURS, defaults t
   assert.equal(freshnessWindowMs({ PROACTIVE_NOTIFICATION_FRESHNESS_HOURS: '3' } as unknown as NodeJS.ProcessEnv), 3 * 60 * 60_000);
   assert.equal(freshnessWindowMs({ PROACTIVE_NOTIFICATION_FRESHNESS_HOURS: 'not-a-number' } as unknown as NodeJS.ProcessEnv), NOTIFICATION_FRESHNESS_MS);
   assert.equal(freshnessWindowMs({ PROACTIVE_NOTIFICATION_FRESHNESS_HOURS: '-1' } as unknown as NodeJS.ProcessEnv), NOTIFICATION_FRESHNESS_MS);
+});
+
+test('analysisTooOld: workout boundary is inclusive at 48h and exclusive one ms past', () => {
+  const input = { startTime: '2026-07-10T00:00:00.000Z', durationMin: 0 };
+  const base = { kind: 'workout' as const, input, localDate: '2026-07-10', timezone: 'UTC' };
+  assert.equal(analysisTooOld({ ...base, now: new Date('2026-07-12T00:00:00.000Z') }), false);
+  assert.equal(analysisTooOld({ ...base, now: new Date('2026-07-12T00:00:00.001Z') }), true);
+  assert.equal(analysisTooOld({ ...base, now: new Date('2026-07-09T00:00:00.000Z') }), false, 'future end reads as fresh');
+});
+
+test('analysisTooOld: sleep and unparseable-end workouts compare localDate to the local day, 2 days allowed', () => {
+  const now = new Date('2026-07-13T10:00:00Z');
+  const sleep = (localDate: string) => analysisTooOld({ kind: 'sleep', input: {}, localDate, timezone: 'UTC', now });
+  assert.equal(sleep('2026-07-13'), false);
+  assert.equal(sleep('2026-07-11'), false);
+  assert.equal(sleep('2026-07-10'), true);
+  assert.equal(sleep('2026-07-20'), false, 'future date reads as fresh');
+  assert.equal(analysisTooOld({ kind: 'workout', input: { startTime: 'garbage' }, localDate: '2026-07-10', timezone: 'UTC', now }), true);
+  // Chicago is still on 07-12 at 03:00Z on 07-13.
+  assert.equal(analysisTooOld({ kind: 'sleep', input: {}, localDate: '2026-07-10', timezone: 'America/Chicago', now: new Date('2026-07-13T03:00:00Z') }), false);
+});
+
+test('analysisMaxAgeMs: default 48h, 0 disables, invalid falls back, override honoured', () => {
+  assert.equal(analysisMaxAgeMs({} as NodeJS.ProcessEnv), ANALYSIS_MAX_AGE_MS);
+  assert.equal(analysisMaxAgeMs({ PROACTIVE_ANALYSIS_MAX_AGE_HOURS: '0' } as unknown as NodeJS.ProcessEnv), 0);
+  assert.equal(analysisMaxAgeMs({ PROACTIVE_ANALYSIS_MAX_AGE_HOURS: '-1' } as unknown as NodeJS.ProcessEnv), ANALYSIS_MAX_AGE_MS);
+  assert.equal(analysisMaxAgeMs({ PROACTIVE_ANALYSIS_MAX_AGE_HOURS: 'abc' } as unknown as NodeJS.ProcessEnv), ANALYSIS_MAX_AGE_MS);
+  assert.equal(analysisMaxAgeMs({ PROACTIVE_ANALYSIS_MAX_AGE_HOURS: '12' } as unknown as NodeJS.ProcessEnv), 12 * 3_600_000);
+  assert.equal(analysisTooOld({ kind: 'sleep', input: {}, localDate: '2020-01-01', timezone: 'UTC', now: new Date('2026-07-13T10:00:00Z'), maxAgeMs: 0 }), false);
 });

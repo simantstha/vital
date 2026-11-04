@@ -1,6 +1,7 @@
 import { localDayKey } from './localDay';
 import { type CoachAnalysis } from './proactiveAnalysisSchema';
 import { AnalysisContentError } from './proactiveAnalysisGrounding';
+import { analysisMaxAgeMs, analysisTooOld } from './proactiveHealthTransitions';
 import { workerErrorEvent } from './proactiveHealthWorkerSupport';
 import { type UnitSystem } from './units';
 
@@ -115,6 +116,7 @@ export async function runClaimedAnalysis(
     if (!await repository.renewAnalysisLease(job, now)) return;
     const context = await repository.getContext(job);
     if (!context.enabled) { await repository.suppress(job); return; }
+    if (analysisTooOld({ kind: job.kind, input: job.input, localDate: job.localDate, timezone: context.timezone, now, maxAgeMs: analysisMaxAgeMs(process.env) })) { await repository.suppress(job); return; }
     const result = await analyze(job, context);
     if (!await repository.renewAnalysisLease(job, new Date())) return;
     if (!await repository.storeReady(job, result)) return;
