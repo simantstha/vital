@@ -40,6 +40,14 @@ primary_region = "ord"
   size = "shared-cpu-1x"
   memory = "1gb"
   cpus = 1
+  processes = ["app"]
+
+# The worker peaked at 111 MB when measured on 2026-11-04, so 1 GB was unnecessary.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpus = 1
+  processes = ["worker"]
 
 [[restart]]
   policy = "always"
