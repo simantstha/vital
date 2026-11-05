@@ -1,27 +1,30 @@
 import SwiftUI
 
-/// Today's endurance goal hero (docs/ux-spec-v4.md §4.1): a readiness word
-/// derived only from the existing gated verdicts, a one-line HRV/Sleep/RHR
-/// reason, today's session from the plan, and a "this week" line. Weekly
-/// volume and the session dots are fed by `GET /api/training/summary`
-/// (#202, `TodayViewModel.trainingSummary`) and hidden whenever that data
-/// is absent — never fabricated (P4).
+/// Today's endurance goal context, now a flat block (no card): the race line,
+/// a rest-day note when nothing is planned, the readiness-vs-plan
+/// reconciliation, and the "this week" row. The readiness WORD is the page
+/// title and the reason line is the recovery strip, so neither is repeated
+/// here (only the "Calibrating" override still renders). Today's session is
+/// the first stop of the "Rest of today" timeline. Weekly volume and the
+/// session dots are fed by `GET /api/training/summary` (#202,
+/// `TodayViewModel.trainingSummary`) and hidden whenever that data is absent
+/// — never fabricated (P4). Renders nothing when it has nothing to say.
 struct EnduranceHeroView: View {
-    /// `nil` while still calibrating — the headline then shows
-    /// `calibratingText` instead of a word derived from possibly-ungated
-    /// verdicts.
-    let readinessWord: EnduranceHeroLogic.ReadinessWord?
+    /// "Calibrating · day X of 14" — `nil` once calibrated. While it is set
+    /// the page title stays the greeting (no readiness word from possibly
+    /// ungated verdicts), so this line is the only readiness-ish text.
     let calibratingText: String?
-    let reasonLine: String?
     /// "Half marathon · 12 weeks to go · long run 14/18 km" — only when a race
     /// is set (the long-run tail only when the race has a long-run target).
     var raceText: String? = nil
     /// True while the race line is still loading (goal progress pending, race
-    /// not ruled out): reserves exactly one line of height so the hero doesn't
-    /// jump when the race text arrives. Ignored once `raceText` is set.
+    /// not ruled out): reserves exactly one line of height so the block doesn't
+    /// jump when the race text arrives. Ignored once `raceText` is set, and
+    /// never makes an otherwise-empty block render.
     var reserveRaceLine = false
 
-    /// Today's move-kind plan item, or `nil` for a rest day.
+    /// Today's move-kind plan item, or `nil` for a rest day (the rest-day note
+    /// shows only then; a session lives in the timeline below).
     let session: PlanItem?
     /// Done/total for the "● ● ○ ○" dot row — same rule and source data as
     /// the muscle hero (`TodayViewModel.trainingSessionDots`).
@@ -40,20 +43,29 @@ struct EnduranceHeroView: View {
     var reconciliationText: String? = nil
     var onTapReconciliation: () -> Void = {}
 
-    var onTapSession: (PlanItem) -> Void
-
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    private var showsWeekRow: Bool {
+        sessionDots != nil || weeklyOverviewText != nil || distanceProgress != nil
+    }
+
+    private var hasContent: Bool {
+        EnduranceHeroLogic.hasHeroContent(
+            calibratingText: calibratingText, raceText: raceText, hasSession: session != nil,
+            reconciliationText: reconciliationText, hasWeekRow: showsWeekRow
+        )
+    }
+
     var body: some View {
-        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.xl) {
+        if hasContent {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 if let raceText {
                     Text(raceText)
                         .scaledFont(size: 12, weight: .semibold)
-                        .foregroundStyle(Theme.Colors.accentContent)
+                        .foregroundStyle(Theme.Colors.textSecondary)
                         // One line, like the blank line reserved for it: the
-                        // long-run tail makes this the longest string in the
-                        // hero, so it shrinks a little before it ever truncates.
+                        // long-run tail makes this the longest string here, so
+                        // it shrinks a little before it ever truncates.
                         // Accessibility text sizes get a second line instead —
                         // shrinking 75% of an AX size still truncates.
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
@@ -65,22 +77,18 @@ struct EnduranceHeroView: View {
                         .scaledFont(size: 12, weight: .semibold)
                         .accessibilityHidden(true)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue)
-                        .scaledFont(size: 20, weight: .bold, design: .rounded)
+
+                if let calibratingText {
+                    Text(calibratingText)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
-                    if calibratingText == nil, let reasonLine {
-                        Text(reasonLine)
-                            .scaledFont(size: 13)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
                 }
 
-                Rectangle()
-                    .fill(Theme.Colors.glassBorder)
-                    .frame(height: 1)
-
-                sessionSection
+                if session == nil {
+                    Text(EnduranceHeroLogic.restDayText)
+                        .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                }
 
                 if let reconciliationText {
                     Button(action: onTapReconciliation) {
@@ -95,20 +103,22 @@ struct EnduranceHeroView: View {
                                 .scaledFont(size: 12, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.textTertiary)
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityHint("Opens the coach")
                     .accessibilityIdentifier("today.enduranceHero.reconcile")
                 }
 
-                if sessionDots != nil || weeklyOverviewText != nil || distanceProgress != nil {
+                if showsWeekRow {
                     weekRow
                         .transition(.opacity)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
     }
 
     /// Dot row (if plan data exists) or combined overview line.
@@ -121,7 +131,7 @@ struct EnduranceHeroView: View {
                     .foregroundStyle(Theme.Colors.textPrimary)
                     .monospacedDigit()
                     .accessibilityIdentifier("today.enduranceHero.distanceText")
-                VitalProgressBar(fraction: distanceProgress.fraction, tint: Theme.Colors.accent, height: 6)
+                VitalProgressBar(fraction: distanceProgress.fraction, tint: Theme.Colors.textPrimary, height: 6)
             }
             AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
                 if let sessionDots {
@@ -137,43 +147,18 @@ struct EnduranceHeroView: View {
         }
         .accessibilityIdentifier("today.enduranceHero.weekRow")
     }
+}
 
-    @ViewBuilder
-    private var sessionSection: some View {
-        if let session {
-            Button { onTapSession(session) } label: {
-                HStack(alignment: .center, spacing: Theme.Spacing.sm) {
-                    Image(systemName: "figure.run")
-                        .scaledFont(size: 15, weight: .semibold)
-                        .foregroundStyle(Theme.Colors.accentContent)
-                    Text(session.title)
-                        .scaledFont(size: 15, weight: .semibold)
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                    Spacer(minLength: Theme.Spacing.sm)
-                    Image(systemName: "chevron.right")
-                        .scaledFont(size: 13, weight: .semibold)
-                        .foregroundStyle(Theme.Colors.textTertiary)
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("today.enduranceHero.session")
-        } else {
-            Text(EnduranceHeroLogic.restDayText)
-                .scaledFont(size: 15, weight: .semibold)
-                .foregroundStyle(Theme.Colors.textPrimary)
-        }
-    }
-
-    private var accessibilityLabel: String {
-        var parts: [String] = []
-        if let raceText { parts.append(raceText) }
-        parts.append(calibratingText ?? readinessWord?.rawValue ?? EnduranceHeroLogic.ReadinessWord.goodToTrain.rawValue)
-        if calibratingText == nil, let reasonLine { parts.append(reasonLine) }
-        parts.append(session?.title ?? EnduranceHeroLogic.restDayText)
-        if let reconciliationText { parts.append(reconciliationText) }
-        if let distanceProgress { parts.append(distanceProgress.text) }
-        if let weeklyOverviewText { parts.append(weeklyOverviewText) }
-        return parts.joined(separator: ". ")
+extension EnduranceHeroLogic {
+    /// Whether `EnduranceHeroView` has anything to draw. A rest day always has
+    /// its note, so the block is only empty on a planned day with no race,
+    /// calibration line, reconciliation or week row. `TodayView` asks this
+    /// first so an empty block leaves no gap in the stack.
+    static func hasHeroContent(
+        calibratingText: String?, raceText: String?, hasSession: Bool,
+        reconciliationText: String?, hasWeekRow: Bool
+    ) -> Bool {
+        raceText != nil || calibratingText != nil || !hasSession
+            || reconciliationText != nil || hasWeekRow
     }
 }

@@ -283,6 +283,32 @@ final class TodayViewModel: ObservableObject {
         enduranceTrendsBatch?.series[key]?.baseline?.mean30
     }
 
+    /// Display data for the endurance recovery strip (HRV / Resting HR /
+    /// Sleep): each metric's value plus — only for a gated `.normal` /
+    /// `.above` / `.below` verdict — its range bar and delta. Reuses
+    /// `enduranceVerdict`, so the strip can never judge what the readiness
+    /// word wouldn't. Sleep is in hours, like its trends series.
+    var recoveryStripItems: [RecoveryStripLogic.Item] {
+        func input(
+            _ kind: RecoveryStripLogic.Kind, key: String, value: Double?, text: String, unit: String
+        ) -> RecoveryStripLogic.Input {
+            let baseline = enduranceTrendsBatch?.series[key]?.baseline
+            return RecoveryStripLogic.Input(
+                kind: kind, value: value, valueText: text, unit: unit,
+                verdict: enduranceVerdict(key: key, latest: value),
+                mean30: baseline?.mean30, sd30: baseline?.sd30
+            )
+        }
+        return RecoveryStripLogic.items([
+            input(.hrv, key: "hrv_sdnn", value: hrv.value.map(Double.init),
+                  text: hrv.displayValue, unit: hrv.displayUnit),
+            input(.restingHR, key: "resting_hr", value: restingHR.bpm.map(Double.init),
+                  text: restingHR.displayValue, unit: restingHR.displayUnit),
+            input(.sleep, key: "sleep_minutes", value: sleepHoursValue,
+                  text: sleep.formatted, unit: ""),
+        ])
+    }
+
     /// "HRV −6 ms · RHR +5 bpm · Sleep 5h 48m" — only the metrics that
     /// actually have a value today; `nil` if none do. Deltas are absolute
     /// (ms / bpm vs the 30-day normal), matching Trends, the metric detail and
@@ -293,6 +319,19 @@ final class TodayViewModel: ObservableObject {
             hrv: hrv.value.map(Double.init), hrvNormal: enduranceNormal(key: "hrv_sdnn"),
             restingHR: restingHR.bpm.map(Double.init), restingHRNormal: enduranceNormal(key: "resting_hr"),
             sleepText: sleep.hours != nil && sleep.minutes != nil ? sleep.formatted : nil
+        )
+    }
+
+    /// Whether the endurance hero block has anything to show (see
+    /// `EnduranceHeroLogic.hasHeroContent`).
+    var showsEnduranceHero: Bool {
+        EnduranceHeroLogic.hasHeroContent(
+            calibratingText: enduranceCalibratingText,
+            raceText: enduranceRaceText,
+            hasSession: todayMoveSession != nil,
+            reconciliationText: enduranceReconciliationText,
+            hasWeekRow: trainingSessionDots != nil || enduranceWeeklyOverviewText != nil
+                || enduranceDistanceProgress != nil
         )
     }
 
@@ -651,6 +690,17 @@ final class TodayViewModel: ObservableObject {
     /// not-done 7am breakfast is not "next up" at 3pm).
     var nextUpItem: PlanItem? {
         WeightHeroLogic.nextUpItem(from: planItems, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
+    }
+
+    /// How many rows Today's "Rest of today" timeline shows.
+    static let upcomingLimit = 3
+
+    /// The next few not-done items (same filter as `nextUpItem`), by time —
+    /// feeds the "Rest of today" timeline.
+    var upcomingItems: [PlanItem] {
+        WeightHeroLogic.upcomingItems(
+            from: planItems, nowMinutes: Self.minutesSinceMidnight(AppClock.now), limit: Self.upcomingLimit
+        )
     }
 
     /// New-user first-run checklist (§4.2) replaces the three biometric

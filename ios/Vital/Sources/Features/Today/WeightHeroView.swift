@@ -148,6 +148,11 @@ struct WeightHeroView: View {
                                         // Hero number: cap growth so a 4-digit
                                         // figure still fits the card at AX5.
                                         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                                        // One line, never "1,06 / 0": shrink before
+                                        // wrapping and win width over the trend column.
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.6)
+                                        .layoutPriority(1)
                                     Text("kcal left")
                                         .scaledFont(size: 15, weight: .semibold)
                                         .foregroundStyle(Theme.Colors.textSecondary)
