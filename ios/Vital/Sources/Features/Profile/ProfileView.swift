@@ -430,35 +430,25 @@ private extension ProfileView {
             SectionHeader(title: title)
 
             // One column at accessibility text sizes: half a screen is too
-            // narrow for an AX-size figure.
-            let columns = dynamicTypeSize.isAccessibilitySize
-                ? [GridItem(.flexible(), spacing: Theme.Spacing.sm)]
-                : [GridItem(.flexible(), spacing: Theme.Spacing.sm),
-                   GridItem(.flexible(), spacing: Theme.Spacing.sm)]
+            // narrow for an AX-size figure. Grid (not LazyVGrid) so both tiles
+            // in a row share the row's height.
+            let perRow = dynamicTypeSize.isAccessibilitySize ? 1 : 2
+            let rows = stride(from: 0, to: cells.count, by: perRow).map {
+                Array(cells[$0..<min($0 + perRow, cells.count)])
+            }
 
-            LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
-                ForEach(cells) { cell in
-                    VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
-                        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                            HStack {
-                                Image(systemName: cell.sfSymbol)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(Theme.Colors.accentContent)
-                                Spacer()
-                            }
-                            Text(cell.value)
-                                .scaledFont(Theme.Typography.numericLarge(24))
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                            Text(cell.label)
-                                .scaledFont(Theme.Typography.labelSmall)
-                                .foregroundStyle(Theme.Colors.textSecondary)
+            Grid(horizontalSpacing: Theme.Spacing.sm, verticalSpacing: Theme.Spacing.sm) {
+                ForEach(rows.indices, id: \.self) { r in
+                    GridRow {
+                        ForEach(rows[r]) { cell in
+                            ProfileStatTile(cell: cell)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if rows[r].count < perRow {
+                            Color.clear.frame(maxWidth: .infinity)
+                        }
                     }
-                    .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -620,4 +610,30 @@ private extension ProfileView {
             .frame(maxWidth: .infinity, alignment: .center)
     }
 
+}
+
+/// One Activity stat tile. The max-height frame sits INSIDE the card so the
+/// background stretches to the row height; the icon has a fixed scaled height
+/// so values and labels line up across a row regardless of glyph size.
+private struct ProfileStatTile: View {
+    let cell: ProfileStatCell
+    @ScaledMetric(relativeTo: .caption) private var iconHeight: CGFloat = 18
+
+    var body: some View {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Image(systemName: cell.sfSymbol)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .frame(height: iconHeight)
+                Text(cell.value)
+                    .scaledFont(Theme.Typography.numericLarge(24))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text(cell.label)
+                    .scaledFont(Theme.Typography.labelSmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
 }

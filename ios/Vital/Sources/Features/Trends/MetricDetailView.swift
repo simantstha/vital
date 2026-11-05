@@ -734,8 +734,7 @@ private extension MetricDetailView {
             statButton(.low, label: "Low", value: formattedStat(rangeLowPoint?.value))
             statButton(.average, label: "Avg · \(vm.range.label)", value: formattedStat(rangeAverage))
             statButton(.high, label: "High", value: formattedStat(rangeHighPoint?.value))
-            StatBadge(label: "Normal range", value: normalRangeText)
-                .frame(maxHeight: .infinity, alignment: .top)
+            StatBadge(label: "Normal range", value: normalRangeText, fillsHeight: true)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
