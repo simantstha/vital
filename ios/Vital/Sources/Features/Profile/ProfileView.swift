@@ -617,13 +617,14 @@ private extension ProfileView {
 /// so values and labels line up across a row regardless of glyph size.
 private struct ProfileStatTile: View {
     let cell: ProfileStatCell
-    @ScaledMetric(relativeTo: .caption) private var iconHeight: CGFloat = 18
+    // Same curve as the 14pt icon's scaledFont (.subheadline) so the frame never clips it.
+    @ScaledMetric(relativeTo: .subheadline) private var iconHeight: CGFloat = 18
 
     var body: some View {
         VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Image(systemName: cell.sfSymbol)
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .foregroundStyle(Theme.Colors.accentContent)
                     .frame(height: iconHeight)
                 Text(cell.value)
