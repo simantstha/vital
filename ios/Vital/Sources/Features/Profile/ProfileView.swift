@@ -7,6 +7,7 @@ struct ProfileView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var notificationManager = NotificationManager.shared
     @ObservedObject private var unitPref = UnitPreference.shared
+    @State private var statusBarBackdropVisible = false
     @State private var showSignOutConfirm = false
     @State private var showDeleteAccountPrompt = false
     @State private var deleteConfirmationText = ""
@@ -89,6 +90,16 @@ struct ProfileView: View {
                     .padding(.bottom, 40)
                 }
                 .scrollIndicators(.hidden)
+                .onScrollGeometryChange(for: Double.self) { geo in
+                    geo.contentOffset.y + geo.contentInsets.top
+                } action: { _, new in
+                    let scrolled = new > TodayStatusBarBackdrop.scrolledThreshold
+                    if scrolled != statusBarBackdropVisible { statusBarBackdropVisible = scrolled }
+                }
+
+                // Content scrolls under the status bar, so once scrolled a thin
+                // material covers just that strip (same as Today).
+                TodayStatusBarBackdrop(isVisible: statusBarBackdropVisible)
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showGoalEditor) {
@@ -444,8 +455,10 @@ private extension ProfileView {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 

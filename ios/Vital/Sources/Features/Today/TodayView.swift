@@ -874,7 +874,7 @@ private struct TodayScrollOffsets: Equatable {
 /// scroll straight under the clock. Zero-height and top-anchored — the
 /// background extends only into the top safe area — so it never changes the
 /// layout, hit-testing or any identifier.
-private struct TodayStatusBarBackdrop: View {
+struct TodayStatusBarBackdrop: View {
     /// Scroll offset (pt) past which the content has left its resting place.
     static let scrolledThreshold: Double = 2
 
