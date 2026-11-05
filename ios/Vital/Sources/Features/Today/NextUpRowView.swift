@@ -82,6 +82,8 @@ struct NextUpRowView: View {
                 .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.Colors.accentContent)
                 .padding(.horizontal, Theme.Spacing.xxs)
+                .frame(minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }

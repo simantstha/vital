@@ -621,8 +621,7 @@ private extension TodayView {
                             Text("Yes, remember")
                                 .scaledFont(size: 13, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.onAccent)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, minHeight: 44)
                                 .background(Theme.Colors.accent)
                                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm,
                                                             style: .continuous))
@@ -634,8 +633,7 @@ private extension TodayView {
                             Text("Not quite")
                                 .scaledFont(size: 13, weight: .medium)
                                 .foregroundStyle(Theme.Colors.textSecondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, minHeight: 44)
                                 .background(Theme.Colors.glassFill)
                                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm,
                                                             style: .continuous))

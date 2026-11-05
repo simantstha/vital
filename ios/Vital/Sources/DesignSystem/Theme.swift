@@ -78,18 +78,20 @@ enum Theme {
                 : UIColor(red: 0.090, green: 0.094, blue: 0.102, alpha: 1)
         })
 
-        /// Secondary / muted text — dark: #7A8694 / light: #75767A (v3)
+        /// Secondary / muted text — dark: #7A8694 / light: #5C5D61 (v3; light darkened
+        /// from #75767A to meet 4.5:1 on canvas). Contrast ≥4.5:1 on card and canvas.
         static let textSecondary = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
                 ? UIColor(red: 0.478, green: 0.525, blue: 0.580, alpha: 1)
-                : UIColor(red: 0.459, green: 0.463, blue: 0.478, alpha: 1)
+                : UIColor(red: 0.361, green: 0.365, blue: 0.380, alpha: 1)
         })
 
-        /// Tertiary / faint text (placeholders, disabled) — light: #A6A7AB / dark: ~#5A6472.
+        /// Tertiary / faint text (placeholders, disabled) — light: #6E6F73 / dark: #788492.
+        /// Contrast ≥4.5:1 on both card and canvas in each mode (WCAG AA body text).
         static let textTertiary = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.353, green: 0.392, blue: 0.447, alpha: 1)
-                : UIColor(red: 0.651, green: 0.655, blue: 0.671, alpha: 1)
+                ? UIColor(red: 0.471, green: 0.518, blue: 0.573, alpha: 1)
+                : UIColor(red: 0.431, green: 0.435, blue: 0.451, alpha: 1)
         })
 
         /// Muted chart fill for below-threshold values (e.g. short-sleep bars) —
