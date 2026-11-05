@@ -42,7 +42,9 @@ struct ProfileView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
+            // `.top` alignment: the status-bar backdrop is zero-height and must
+            // sit at the top edge (a centred ZStack put it mid-screen).
+            ZStack(alignment: .top) {
                 Theme.Colors.canvas.ignoresSafeArea()
 
                 ScrollView {
