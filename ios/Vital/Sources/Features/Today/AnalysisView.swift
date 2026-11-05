@@ -79,7 +79,8 @@ struct AnalysisView: View {
                 GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     Text(value.result.headline).scaledFont(Theme.Typography.titleMedium)
                     Text(value.result.narrative)
-                }}
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)}
                 analysisList("What stood out", value.result.observations)
                 analysisList("Next steps", value.result.nextSteps)
                 Button("Discuss with Coach") {
@@ -87,6 +88,7 @@ struct AnalysisView: View {
                     router.route = nil
                 }
                 .buttonStyle(.borderedProminent).tint(Theme.Colors.accent).frame(maxWidth: .infinity)
+                .foregroundStyle(Theme.Colors.onAccent)
             }.padding(Theme.Spacing.xl)
         }
     }
@@ -98,8 +100,15 @@ struct AnalysisView: View {
         } else {
             GlassCard { VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text(title).scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
-                ForEach(rows, id: \.self) { Text("• \($0)").foregroundStyle(Theme.Colors.textSecondary) }
-            }}
+                ForEach(rows, id: \.self) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                        Text("•")
+                        Text(row)
+                    }
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)}
         }
     }
 

@@ -3,6 +3,8 @@ import SwiftUI
 struct StatBadge: View {
     let label: String
     let value: String
+    /// Stretch the card to the row's height (content pinned top-leading).
+    var fillsHeight: Bool = false
 
     var body: some View {
         VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.md) {
@@ -17,7 +19,7 @@ struct StatBadge: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: .topLeading)
         }
     }
 }

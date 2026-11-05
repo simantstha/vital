@@ -103,33 +103,36 @@ struct NotificationsView: View {
     }
 
     private var navRow: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .frame(width: 44, height: 44, alignment: .leading)
-            }
-
-            Spacer()
-
+        ZStack {
             Text("Notifications")
                 .scaledFont(size: 17, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textPrimary)
 
-            Spacer()
+            HStack {
+                Button { dismiss() } label: {
+                    Text("Close")
+                        .scaledFont(size: 15, weight: .semibold)
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .lineLimit(1)
+                        .frame(minHeight: 44)
+                        .fixedSize()
+                }
 
-            Button {
-                Task { await vm.markAllRead() }
-            } label: {
-                Text("Mark all read")
-                    .scaledFont(size: 13, weight: .semibold)
-                    .foregroundStyle(Theme.Colors.accentContent)
-                    .frame(width: 44, height: 44, alignment: .trailing)
-                    .fixedSize()
+                Spacer()
+
+                Button {
+                    Task { await vm.markAllRead() }
+                } label: {
+                    Text("Mark all read")
+                        .scaledFont(size: 13, weight: .semibold)
+                        .foregroundStyle(Theme.Colors.accentContent)
+                        .lineLimit(1)
+                        .frame(minHeight: 44)
+                        .fixedSize()
+                }
+                .opacity(vm.unreadCount == 0 ? 0 : 1)
+                .disabled(vm.unreadCount == 0)
             }
-            .opacity(vm.unreadCount == 0 ? 0 : 1)
-            .disabled(vm.unreadCount == 0)
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.top, Theme.Spacing.sm)

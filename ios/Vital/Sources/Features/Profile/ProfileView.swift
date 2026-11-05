@@ -7,6 +7,7 @@ struct ProfileView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var notificationManager = NotificationManager.shared
     @ObservedObject private var unitPref = UnitPreference.shared
+    @State private var statusBarBackdropVisible = false
     @State private var showSignOutConfirm = false
     @State private var showDeleteAccountPrompt = false
     @State private var deleteConfirmationText = ""
@@ -41,7 +42,9 @@ struct ProfileView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
+            // `.top` alignment: the status-bar backdrop is zero-height and must
+            // sit at the top edge (a centred ZStack put it mid-screen).
+            ZStack(alignment: .top) {
                 Theme.Colors.canvas.ignoresSafeArea()
 
                 ScrollView {
@@ -89,6 +92,16 @@ struct ProfileView: View {
                     .padding(.bottom, 40)
                 }
                 .scrollIndicators(.hidden)
+                .onScrollGeometryChange(for: Double.self) { geo in
+                    geo.contentOffset.y + geo.contentInsets.top
+                } action: { _, new in
+                    let scrolled = new > TodayStatusBarBackdrop.scrolledThreshold
+                    if scrolled != statusBarBackdropVisible { statusBarBackdropVisible = scrolled }
+                }
+
+                // Content scrolls under the status bar, so once scrolled a thin
+                // material covers just that strip (same as Today).
+                TodayStatusBarBackdrop(isVisible: statusBarBackdropVisible)
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showGoalEditor) {
@@ -419,30 +432,22 @@ private extension ProfileView {
             SectionHeader(title: title)
 
             // One column at accessibility text sizes: half a screen is too
-            // narrow for an AX-size figure.
-            let columns = dynamicTypeSize.isAccessibilitySize
-                ? [GridItem(.flexible(), spacing: Theme.Spacing.sm)]
-                : [GridItem(.flexible(), spacing: Theme.Spacing.sm),
-                   GridItem(.flexible(), spacing: Theme.Spacing.sm)]
+            // narrow for an AX-size figure. Grid (not LazyVGrid) so both tiles
+            // in a row share the row's height.
+            let perRow = dynamicTypeSize.isAccessibilitySize ? 1 : 2
+            let rows = stride(from: 0, to: cells.count, by: perRow).map {
+                Array(cells[$0..<min($0 + perRow, cells.count)])
+            }
 
-            LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
-                ForEach(cells) { cell in
-                    VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
-                        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                            HStack {
-                                Image(systemName: cell.sfSymbol)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(Theme.Colors.accentContent)
-                                Spacer()
-                            }
-                            Text(cell.value)
-                                .scaledFont(Theme.Typography.numericLarge(24))
-                                .foregroundStyle(Theme.Colors.textPrimary)
-                            Text(cell.label)
-                                .scaledFont(Theme.Typography.labelSmall)
-                                .foregroundStyle(Theme.Colors.textSecondary)
+            Grid(horizontalSpacing: Theme.Spacing.sm, verticalSpacing: Theme.Spacing.sm) {
+                ForEach(rows.indices, id: \.self) { r in
+                    GridRow {
+                        ForEach(rows[r]) { cell in
+                            ProfileStatTile(cell: cell)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if rows[r].count < perRow {
+                            Color.clear.frame(maxWidth: .infinity)
+                        }
                     }
                 }
             }
@@ -607,4 +612,31 @@ private extension ProfileView {
             .frame(maxWidth: .infinity, alignment: .center)
     }
 
+}
+
+/// One Activity stat tile. The max-height frame sits INSIDE the card so the
+/// background stretches to the row height; the icon has a fixed scaled height
+/// so values and labels line up across a row regardless of glyph size.
+private struct ProfileStatTile: View {
+    let cell: ProfileStatCell
+    // Same curve as the 14pt icon's scaledFont (.subheadline) so the frame never clips it.
+    @ScaledMetric(relativeTo: .subheadline) private var iconHeight: CGFloat = 18
+
+    var body: some View {
+        VitalCard(padding: Theme.Spacing.lg, cornerRadius: Theme.Radius.md) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Image(systemName: cell.sfSymbol)
+                    .scaledFont(size: 14)
+                    .foregroundStyle(Theme.Colors.accentContent)
+                    .frame(height: iconHeight)
+                Text(cell.value)
+                    .scaledFont(Theme.Typography.numericLarge(24))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                Text(cell.label)
+                    .scaledFont(Theme.Typography.labelSmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
 }

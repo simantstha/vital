@@ -734,8 +734,9 @@ private extension MetricDetailView {
             statButton(.low, label: "Low", value: formattedStat(rangeLowPoint?.value))
             statButton(.average, label: "Avg · \(vm.range.label)", value: formattedStat(rangeAverage))
             statButton(.high, label: "High", value: formattedStat(rangeHighPoint?.value))
-            StatBadge(label: "Normal range", value: normalRangeText)
+            StatBadge(label: "Normal range", value: normalRangeText, fillsHeight: true)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     func statButton(_ selection: StatSelection, label: String, value: String) -> some View {
@@ -755,7 +756,7 @@ private extension MetricDetailView {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(Theme.Spacing.md)
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
