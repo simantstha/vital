@@ -22,7 +22,7 @@ struct TodayView: View {
     @State private var showLiftLogger = false
     /// Goal-progress detail sheet — opened from the one-line verdict under the hero.
     @State private var showGoalProgress = false
-    /// Voice FAB shrinks while Today scrolls down (see `VoiceFABScroll`).
+    /// Voice FAB dims while Today scrolls down (see `VoiceFABScroll`).
     @State private var fabCompact = false
     /// True once Today has scrolled off its resting position: fades in a
     /// blurred status-bar backdrop so content never reads through the clock.
@@ -156,29 +156,36 @@ struct TodayView: View {
                             }
 
                             if vm.isEnduranceGoal {
-                                EnduranceHeroView(
-                                    readinessWord: vm.enduranceReadinessWord,
-                                    calibratingText: vm.enduranceCalibratingText,
-                                    reasonLine: vm.enduranceReasonLine,
-                                    raceText: vm.enduranceRaceText,
-                                    reserveRaceLine: vm.enduranceRaceLineReserved,
-                                    session: vm.todayMoveSession,
-                                    sessionDots: vm.trainingSessionDots,
-                                    weeklyOverviewText: vm.enduranceWeeklyOverviewText,
-                                    distanceProgress: vm.enduranceDistanceProgress,
-                                    reconciliationText: vm.enduranceReconciliationText,
-                                    onTapReconciliation: {
-                                        // Same hand-off as the analysis screens'
-                                        // "Ask coach" links: RootTabView observes
-                                        // `router.coachContext`, prefills the coach
-                                        // input and switches to the Coach tab.
-                                        if let prompt = vm.enduranceReconciliationCoachPrompt {
-                                            router.coachContext = prompt
+                                // The recovery strip replaces the three tiles
+                                // (same condition as `showMetricTiles`, so
+                                // while calibrating the tiles stay).
+                                if !vm.showMetricTiles {
+                                    RecoveryStripView(items: vm.recoveryStripItems)
+                                        .staggeredAppear(index: 1)
+                                }
+
+                                if vm.showsEnduranceHero {
+                                    EnduranceHeroView(
+                                        calibratingText: vm.enduranceCalibratingText,
+                                        raceText: vm.enduranceRaceText,
+                                        reserveRaceLine: vm.enduranceRaceLineReserved,
+                                        session: vm.todayMoveSession,
+                                        sessionDots: vm.trainingSessionDots,
+                                        weeklyOverviewText: vm.enduranceWeeklyOverviewText,
+                                        distanceProgress: vm.enduranceDistanceProgress,
+                                        reconciliationText: vm.enduranceReconciliationText,
+                                        onTapReconciliation: {
+                                            // Same hand-off as the analysis screens'
+                                            // "Ask coach" links: RootTabView observes
+                                            // `router.coachContext`, prefills the coach
+                                            // input and switches to the Coach tab.
+                                            if let prompt = vm.enduranceReconciliationCoachPrompt {
+                                                router.coachContext = prompt
+                                            }
                                         }
-                                    },
-                                    onTapSession: { actionsItem = $0 }
-                                )
-                                .staggeredAppear(index: 1)
+                                    )
+                                    .staggeredAppear(index: 1)
+                                }
                             }
 
                             // One-line "am I on track?" verdict (v5 Wave 2) under
@@ -195,7 +202,7 @@ struct TodayView: View {
                                     sessionsDoneThisWeek: vm.sessionsDoneThisWeek,
                                     onTap: { showGoalProgress = true }
                                 )
-                                .padding(.top, -Theme.Spacing.md)
+                                .padding(.top, goalLineHugsHero ? -Theme.Spacing.md : 0)
                                 .transition(.opacity)
                             }
 
@@ -209,11 +216,38 @@ struct TodayView: View {
                                 )
                             }
 
+                            // The coach's note sits directly under the hero, above the
+                            // plan (it is the point of the app).
+                            if !CoachNote.isEmpty(vm.coachInsight) {
+                                CoachNote(message: vm.coachInsight)
+                                    .staggeredAppear(index: 2)
+                            }
+
+                            // "Rest of today" replaces the full plan list for every
+                            // goal (owner decision, 2026-09-23) — guarded here
+                            // (not just inside the view) so an empty payload
+                            // doesn't leave a floating `Theme.Spacing.xl` gap.
+                            // Shown whenever there's ANY plan item, not only
+                            // when one is upcoming (screenshot-review fix,
+                            // 2026-09-23) — "See full plan" must stay
+                            // reachable even once everything remaining today
+                            // has already passed `WeightHeroLogic`'s
+                            // next-up grace window.
+                            if !vm.planItems.isEmpty {
+                                NextUpRowView(
+                                    items: vm.upcomingItems,
+                                    onTap: { actionsItem = $0 },
+                                    onSeeFullPlan: { showFullPlan = true }
+                                )
+                                .staggeredAppear(index: 2)
+                            }
+
                             // FuelStripView is hidden for weight_loss — the
                             // hero above already covers calories (§4).
                             if !vm.isWeightLossGoal {
                                 FuelStripView(
                                     kcalRemaining: vm.diet.kcalRemaining,
+                                    kcalFraction: vm.diet.kcalFraction,
                                     proteinHave: vm.diet.protein.current,
                                     proteinGoal: vm.diet.protein.target,
                                     // The muscle hero already shows a protein
@@ -229,28 +263,9 @@ struct TodayView: View {
                                 .staggeredAppear(index: 4)
                             }
 
-                            // "Next up" replaces the full plan list for every
-                            // goal (owner decision, 2026-09-23) — guarded here
-                            // (not just inside the view) so an empty payload
-                            // doesn't leave a floating `Theme.Spacing.xl` gap.
-                            // Shown whenever there's ANY plan item, not only
-                            // when one is upcoming (screenshot-review fix,
-                            // 2026-09-23) — "See full plan" must stay
-                            // reachable even once everything remaining today
-                            // has already passed `vm.nextUpItem`'s grace
-                            // window.
-                            if !vm.planItems.isEmpty {
-                                NextUpRowView(
-                                    item: vm.nextUpItem,
-                                    onTap: { actionsItem = $0 },
-                                    onSeeFullPlan: { showFullPlan = true }
-                                )
-                                .staggeredAppear(index: 2)
-                            }
-
                             // Weekly review (v5 Wave 3): the "how did your week go"
                             // moment, Mon-Wed while unseen. Compact card, placed
-                            // below the fuel strip / next-up row so the daily
+                            // below the next-up row / fuel strip so the daily
                             // essentials stay above the fold; the full report
                             // lives in the detail sheet.
                             if WeeklyReviewLogic.shouldShowCard(
@@ -268,9 +283,6 @@ struct TodayView: View {
 
                             pendingFactsBanner
 
-                            if !CoachBubble.isEmpty(vm.coachInsight) {
-                                CoachBubble(message: vm.coachInsight)
-                            }
                             if vm.showHealthKitRecoveryBanner {
                                 healthKitRecoveryBanner
                             }
@@ -279,8 +291,8 @@ struct TodayView: View {
                             // the first-run checklist at the TOP of the screen
                             // instead (see above the goal hero).
                             if !vm.showFirstRunChecklist {
-                                // Endurance's hero already prints HRV / Sleep /
-                                // RHR in its readiness line — don't repeat them.
+                                // Endurance shows HRV / Sleep / RHR in its recovery
+                                // strip above the hero — don't repeat them as tiles.
                                 if vm.showMetricTiles {
                                     metricsGrid
                                         .staggeredAppear(index: 3)
@@ -324,10 +336,10 @@ struct TodayView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 if !isAnySheetOpen {
-                    // Keep in sync with `VoiceFABView`: FAB (60pt) + its bottom
-                    // margin (`Spacing.xxxl`) + 16pt breathing room, plus slack
-                    // for the tab bar, so the last card scrolls fully above the FAB.
-                    Color.clear.frame(height: 60 + Theme.Spacing.xxxl + 16 + 50)
+                    // Tracks `VoiceFABView.size` (46pt): FAB + its bottom margin
+                    // (`Spacing.xxxl`) + 16pt breathing room, plus slack for the
+                    // tab bar, so the last card scrolls fully above the FAB.
+                    Color.clear.frame(height: VoiceFABView.size + Theme.Spacing.xxxl + 16 + 50)
                 }
             }
             .refreshable { await vm.loadHealthData() }
@@ -593,66 +605,64 @@ private extension TodayView {
 
     // ── Pending-fact banner ──────────────────────────────────────────────────
 
+    /// A quiet confirm row, not a card: the question, the server's label
+    /// verbatim, the reason when there is one, and two hugging buttons.
     @ViewBuilder
     var pendingFactsBanner: some View {
         ForEach(vm.pendingFacts) { fact in
-            GlassCard(padding: Theme.Spacing.lg) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "sparkles")
-                            .scaledFont(size: 14, weight: .semibold)
-                            .foregroundStyle(Theme.Colors.accentContent)
-                        Text("Vital noticed")
-                            .scaledFont(Theme.Typography.labelSmall)
-                            .foregroundStyle(Theme.Colors.accentContent)
-                            .tracking(0.6)
-                        Spacer()
-                    }
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("Did I get this right?")
+                    .scaledFont(Theme.Typography.bodySmall)
+                    .foregroundStyle(Theme.Colors.textSecondary)
 
-                    Text(fact.proposedNode.label)
-                        .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
+                Text(fact.proposedNode.label)
+                    .scaledFont(Theme.Typography.bodyLarge.weight(.medium))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                    if let reason = fact.reason,
-                       !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(reason)
-                            .scaledFont(Theme.Typography.bodySmall)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Button {
-                            Task { await vm.resolveFact(id: fact.id, action: "confirm") }
-                        } label: {
-                            Text("Yes, remember")
-                                .scaledFont(size: 13, weight: .semibold)
-                                .foregroundStyle(Theme.Colors.onAccent)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .background(Theme.Colors.accent)
-                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm,
-                                                            style: .continuous))
-                        }
-
-                        Button {
-                            Task { await vm.resolveFact(id: fact.id, action: "reject") }
-                        } label: {
-                            Text("Not quite")
-                                .scaledFont(size: 13, weight: .medium)
-                                .foregroundStyle(Theme.Colors.textSecondary)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .background(Theme.Colors.glassFill)
-                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm,
-                                                            style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: Theme.Radius.sm,
-                                                     style: .continuous)
-                                        .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
-                                )
-                        }
-                    }
+                if let reason = fact.reason,
+                   !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(reason)
+                        .scaledFont(Theme.Typography.bodySmall)
+                        .foregroundStyle(Theme.Colors.textSecondary)
                 }
+
+                AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
+                    Button {
+                        Task { await vm.resolveFact(id: fact.id, action: "confirm") }
+                    } label: {
+                        Text("Yes, remember")
+                            .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
+                            .foregroundStyle(Theme.Colors.textPrimary)
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .frame(minHeight: 44)
+                            .background(
+                                RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                                    .fill(Theme.Colors.glassFill)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                                    .strokeBorder(Theme.Colors.glassBorder, lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        Task { await vm.resolveFact(id: fact.id, action: "reject") }
+                    } label: {
+                        Text("Not quite")
+                            .scaledFont(Theme.Typography.bodyMedium.weight(.medium))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .padding(.horizontal, Theme.Spacing.md)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, Theme.Spacing.xs)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -696,39 +706,35 @@ private extension TodayView {
 
     // ── Header ──────────────────────────────────────────────────────────────
 
+    /// One quiet meta line (`date · streak`), then the page title: the
+    /// endurance readiness word once Today has loaded and calibration is
+    /// done, otherwise the greeting (`TodayHeaderLogic.title`). The bell sits
+    /// on the meta line.
     var greetingSection: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text(vm.dateSubtitle)
-                    .scaledFont(size: 13, weight: .semibold)
+                Text(TodayHeaderLogic.metaLine(dateSubtitle: vm.dateSubtitle, streakText: vm.streakChipText))
+                    .scaledFont(Theme.Typography.bodySmall.weight(.medium))
                     .foregroundStyle(Theme.Colors.textSecondary)
+                    // Wraps at large text sizes rather than truncating; the
+                    // min height centres a one-line meta against the 44pt bell.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(minHeight: 44, alignment: .leading)
 
-                Text(vm.greeting)
-                    .scaledFont(size: 30, weight: .bold)
-                    .tracking(-0.4)
+                Text(headerTitle)
+                    .scaledFont(size: 36, weight: .bold)
+                    .tracking(-0.5)
                     .foregroundStyle(Theme.Colors.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("today.title")
 
-                AccessibilityAdaptiveStack(spacing: Theme.Spacing.sm, stackedSpacing: Theme.Spacing.xs) {
-                    // The chip's slot is ALWAYS reserved (hidden placeholder) so a
-                    // late streak load can't shift content below the header. The
-                    // real chip is overlaid only when the streak is loaded and > 0
-                    // (nil -> nothing is claimed for new users / failed first load).
-                    Chip(text: "0 days in a row", icon: "flame.fill", isAccent: true)
-                        .hidden()
-                        .accessibilityHidden(true)
-                        .overlay(alignment: .leading) {
-                            if let streakText = vm.streakChipText {
-                                Chip(text: streakText, icon: "flame.fill", isAccent: true)
-                                    .fixedSize()
-                            }
-                        }
-                    if let hint = vm.planHint {
-                        Text(hint)
-                            .scaledFont(size: 13)
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
+                if let hint = vm.planHint {
+                    Text(hint)
+                        .scaledFont(size: 13)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                        .padding(.top, Theme.Spacing.xxs)
                 }
-                .padding(.top, Theme.Spacing.xxs)
             }
 
             Spacer(minLength: Theme.Spacing.sm)
@@ -737,35 +743,47 @@ private extension TodayView {
         }
     }
 
+    /// The goal line tucks up under a hero CARD directly above it (weight,
+    /// muscle, or an endurance hero with content); otherwise it would collide
+    /// with the title or the recovery strip, so it keeps normal stack spacing.
+    var goalLineHugsHero: Bool {
+        vm.isWeightLossGoal || vm.isMuscleGoal || (vm.isEnduranceGoal && vm.showsEnduranceHero)
+    }
+
+    var headerTitle: String {
+        TodayHeaderLogic.title(
+            greeting: vm.greeting,
+            isEnduranceGoal: vm.isEnduranceGoal,
+            isLoaded: vm.loadState == .loaded,
+            calibratingText: vm.enduranceCalibratingText,
+            readinessWord: vm.enduranceReadinessWord
+        )
+    }
+
     // ── Notification bell ───────────────────────────────────────────────────
 
     private var bellButton: some View {
         Button { showNotifications = true } label: {
             ZStack(alignment: .topTrailing) {
-                Circle()
-                    .fill(Theme.Colors.glassFill)
-                    .overlay(Circle().strokeBorder(Theme.Colors.glassBorder, lineWidth: 1))
-                    .frame(width: 40, height: 40)
-
                 Image(systemName: "bell")
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(Theme.Colors.textPrimary)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 44, height: 44)
 
                 if notificationsVM.unreadCount > 0 {
-                    // Badge on a fixed 40pt bell: stays fixed-size like the bell.
+                    // Badge on a fixed 44pt bell: stays fixed-size like the bell.
                     Text(notificationsVM.unreadCount > 9 ? "9+" : "\(notificationsVM.unreadCount)")
                         .font(.system(size: 10.5, weight: .bold))
                         .foregroundStyle(Theme.Colors.onAccent)
                         .frame(minWidth: 18, minHeight: 18)
                         .background(Circle().fill(Theme.Colors.accent))
                         .overlay(Circle().strokeBorder(Theme.Colors.canvas, lineWidth: 2))
-                        .offset(x: 4, y: -4)
+                        .offset(x: -2, y: 2)
                 }
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.vital(scale: 0.94))
-        .padding(.top, 2)
         .accessibilityLabel(notificationsVM.unreadCount > 0
             ? "Notifications, \(notificationsVM.unreadCount) unread"
             : "Notifications")

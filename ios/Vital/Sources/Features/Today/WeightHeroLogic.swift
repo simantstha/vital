@@ -22,10 +22,41 @@ enum WeightHeroLogic {
     /// plan is empty — callers must hide the row entirely (never show an
     /// empty card shell) but keep "See full plan" reachable some other way.
     static func nextUpItem(from items: [PlanItem], nowMinutes: Int) -> PlanItem? {
+        upcomingCandidates(from: items, nowMinutes: nowMinutes)
+            .min { $0.timeMinutes < $1.timeMinutes }
+    }
+
+    /// Up to `limit` upcoming items, earliest first — the "Rest of today"
+    /// timeline. Shares `nextUpItem`'s filter exactly (not done/skipped, no
+    /// more than `nextUpGraceMinutes` in the past), so `first` always equals
+    /// `nextUpItem`. Items at the same minute keep their plan order.
+    static func upcomingItems(from items: [PlanItem], nowMinutes: Int, limit: Int) -> [PlanItem] {
+        guard limit > 0 else { return [] }
+        let sorted = upcomingCandidates(from: items, nowMinutes: nowMinutes)
+            .enumerated()
+            .sorted { lhs, rhs in
+                lhs.element.timeMinutes != rhs.element.timeMinutes
+                    ? lhs.element.timeMinutes < rhs.element.timeMinutes
+                    : lhs.offset < rhs.offset
+            }
+            .map(\.element)
+        return Array(sorted.prefix(limit))
+    }
+
+    private static func upcomingCandidates(from items: [PlanItem], nowMinutes: Int) -> [PlanItem] {
         items
             .filter { $0.status != .done && $0.status != .skipped }
             .filter { $0.timeMinutes >= nowMinutes - nextUpGraceMinutes }
-            .min { $0.timeMinutes < $1.timeMinutes }
+    }
+
+    /// Second line of a timeline row: the item's subtitle, with its time
+    /// prepended only when the subtitle doesn't already carry it ("Breakfast
+    /// · 7:00 AM" does; "Refuel within an hour" doesn't). An empty subtitle
+    /// leaves just the time.
+    static func timelineDetail(subtitle: String, timeLabel: String) -> String {
+        if subtitle.isEmpty { return timeLabel }
+        if subtitle.contains(timeLabel) { return subtitle }
+        return "\(timeLabel) · \(subtitle)"
     }
 
     // MARK: - Trend headline / weekly-change text (honesty rule, §4.1)

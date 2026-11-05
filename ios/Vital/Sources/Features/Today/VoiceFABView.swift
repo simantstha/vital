@@ -3,8 +3,11 @@ import UIKit
 
 // MARK: - VoiceFABView
 
-/// Lime mic FAB, bottom-right on Today (Phase 4 of the redesign — see
-/// `docs/redesign-v3-plan.md`). Tap to start listening: a pulse ring grows
+/// Mic FAB, bottom-right on Today (Phase 4 of the redesign — see
+/// `docs/redesign-v3-plan.md`). At rest it is a quiet neutral circle (card fill,
+/// hairline border, primary-text icon) so it never competes with content; the
+/// lime accent is reserved for "now" — while it is recording or transcribing.
+/// Tap to start listening: a pulse ring grows
 /// around the button, a full-screen lime edge-glow overlay appears, and the
 /// in-progress transcript is shown live as a caption. Tap again (or let one
 /// of `SpeechTranscriber`'s watchdogs auto-stop) to end the turn.
@@ -28,9 +31,10 @@ struct VoiceFABView: View {
     /// switches to the Coach tab.
     var onSent: () -> Void
 
-    /// Today is scrolling down: shrink to a small, dimmed circle so it stops
-    /// covering the trailing edge of cards (e.g. a verdict chip). Still fully
-    /// tappable. Never applied while a voice turn is live.
+    /// Today is scrolling down: dim the (already small) circle so it stops
+    /// competing with the cards beneath it. It no longer shrinks — at 46pt it
+    /// is close to the minimum comfortable touch target, so scaling it down
+    /// would make it hard to hit. Never applied while a voice turn is live.
     var isCompact = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -43,7 +47,9 @@ struct VoiceFABView: View {
     /// per press. Reset in `onEnded`.
     @State private var isFabPressed = false
 
-    private let fabSize: CGFloat = 60
+    /// Diameter, shared with `TodayView`'s bottom inset so the last card scrolls clear of it.
+    static let size: CGFloat = 46
+    private let fabSize = VoiceFABView.size
 
     init(coachVM: CoachViewModel, isCompact: Bool = false, onSent: @escaping () -> Void) {
         self.coachVM = coachVM
@@ -105,8 +111,9 @@ struct VoiceFABView: View {
     /// single held touch produces. Losing `Button` also loses its automatic
     /// accessibility button trait/action, so both are added back explicitly
     /// — VoiceOver's double-tap invokes `.accessibilityAction`, which calls
-    /// the same `handleMicPress()`. `fabSize` (60pt) is already well above
-    /// Apple's 44×44 minimum, so no separate hit-area frame is needed here.
+    /// the same `handleMicPress()`. `fabSize` (46pt) clears Apple's 44×44
+    /// minimum, so no separate hit-area frame is needed here — which is also
+    /// why `compactScale` is 1: the circle must never get smaller than this.
     private var fab: some View {
         ZStack {
             if voice.isRecording {
@@ -114,17 +121,18 @@ struct VoiceFABView: View {
             }
 
             Circle()
-                .fill(Theme.Colors.accent)
+                .fill(isLive ? Theme.Colors.accent : Theme.Colors.card)
+                .overlay(Circle().strokeBorder(Theme.Colors.glassBorder, lineWidth: isLive ? 0 : 1))
                 .frame(width: fabSize, height: fabSize)
-                .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
+                .shadow(color: .black.opacity(isLive ? 0.22 : 0.12), radius: isLive ? 14 : 8, x: 0, y: isLive ? 8 : 4)
 
             if voice.state == .transcribing {
                 ProgressView()
                     .tint(Theme.Colors.onAccent)
             } else {
                 Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.onAccent)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(isLive ? Theme.Colors.onAccent : Theme.Colors.textPrimary)
             }
         }
         .contentShape(Circle())
@@ -155,8 +163,14 @@ struct VoiceFABView: View {
         .padding(.bottom, Theme.Spacing.xxxl)
     }
 
-    private static let compactScale: CGFloat = 0.6
+    /// 1 = no shrink: the 46pt circle is already near the 44pt touch minimum,
+    /// so "compact" only fades it. Kept as a named constant (not deleted) so
+    /// the scroll behaviour stays one number to retune.
+    private static let compactScale: CGFloat = 1
     private static let compactOpacity: Double = 0.75
+
+    /// Recording or transcribing: the FAB is "now" and takes the accent.
+    private var isLive: Bool { voice.isRecording || voice.state == .transcribing }
 
     private var showsCompact: Bool { isCompact && !voice.isRecording && voice.state != .transcribing }
 

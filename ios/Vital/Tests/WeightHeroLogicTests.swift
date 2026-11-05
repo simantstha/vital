@@ -75,6 +75,58 @@ final class WeightHeroLogicTests: XCTestCase {
         XCTAssertEqual(WeightHeroLogic.nextUpItem(from: items, nowMinutes: 900)?.id, "c")
     }
 
+    // MARK: - Upcoming items ("Rest of today" timeline)
+
+    func testUpcomingItemsAreSortedByTimeAndCappedAtTheLimit() {
+        let items = [
+            item(id: "late", timeMinutes: 1300, status: .later),
+            item(id: "done", timeMinutes: 710, status: .done),
+            item(id: "skipped", timeMinutes: 720, status: .skipped),
+            item(id: "b", timeMinutes: 900, status: .later),
+            item(id: "a", timeMinutes: 800, status: .now),
+            item(id: "c", timeMinutes: 1000, status: .later),
+        ]
+        let upcoming = WeightHeroLogic.upcomingItems(from: items, nowMinutes: 700, limit: 3)
+        XCTAssertEqual(upcoming.map(\.id), ["a", "b", "c"])
+    }
+
+    func testUpcomingItemsShareNextUpsFilterAndItsFirstIsNextUp() {
+        let items = [
+            item(id: "old", timeMinutes: 9 * 60 + 29, status: .later),   // 31 min before 10:00 — out
+            item(id: "edge", timeMinutes: 9 * 60 + 30, status: .later),  // exactly the grace edge — in
+            item(id: "next", timeMinutes: 12 * 60, status: .later),
+        ]
+        let upcoming = WeightHeroLogic.upcomingItems(from: items, nowMinutes: 600, limit: 5)
+        XCTAssertEqual(upcoming.map(\.id), ["edge", "next"])
+        XCTAssertEqual(upcoming.first?.id, WeightHeroLogic.nextUpItem(from: items, nowMinutes: 600)?.id)
+    }
+
+    func testUpcomingItemsKeepPlanOrderForTheSameMinute() {
+        let items = [
+            item(id: "x", timeMinutes: 800, status: .later),
+            item(id: "y", timeMinutes: 800, status: .later),
+            item(id: "z", timeMinutes: 800, status: .later),
+        ]
+        XCTAssertEqual(WeightHeroLogic.upcomingItems(from: items, nowMinutes: 700, limit: 3).map(\.id), ["x", "y", "z"])
+    }
+
+    func testUpcomingItemsEmptyForNoCandidatesOrANonPositiveLimit() {
+        XCTAssertTrue(WeightHeroLogic.upcomingItems(from: [], nowMinutes: 700, limit: 3).isEmpty)
+        let items = [item(id: "a", timeMinutes: 800, status: .later)]
+        XCTAssertTrue(WeightHeroLogic.upcomingItems(from: items, nowMinutes: 700, limit: 0).isEmpty)
+        XCTAssertTrue(WeightHeroLogic.upcomingItems(from: items, nowMinutes: 700, limit: -1).isEmpty)
+        let allPast = [item(id: "p", timeMinutes: 420, status: .later)]
+        XCTAssertTrue(WeightHeroLogic.upcomingItems(from: allPast, nowMinutes: 15 * 60, limit: 3).isEmpty)
+    }
+
+    func testTimelineDetailAddsTheTimeOnlyWhenTheSubtitleLacksIt() {
+        XCTAssertEqual(WeightHeroLogic.timelineDetail(subtitle: "Breakfast · 7:00 AM", timeLabel: "7:00 AM"),
+                       "Breakfast · 7:00 AM")
+        XCTAssertEqual(WeightHeroLogic.timelineDetail(subtitle: "Refuel within an hour", timeLabel: "7:00 PM"),
+                       "7:00 PM · Refuel within an hour")
+        XCTAssertEqual(WeightHeroLogic.timelineDetail(subtitle: "", timeLabel: "10:30 PM"), "10:30 PM")
+    }
+
     // MARK: - Sparkline Y-domain (screenshot-review fix)
 
     func testSparklineDomainAddsPaddingForNormalRange() {

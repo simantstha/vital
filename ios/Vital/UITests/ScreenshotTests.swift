@@ -575,8 +575,11 @@ final class ScreenshotTests: XCTestCase {
                 let readinessWords = ["Ready to push", "Good to train", "Keep it easy", "Recover today"]
                 XCTAssertTrue(readinessWords.contains { waitForText(app, containing: $0, timeout: 3) },
                                "Today's endurance hero should show a readiness word (one of \(readinessWords)) [\(appearance)]")
-                XCTAssertTrue(waitForText(app, containing: "Intervals 6×800 m"),
-                               "Today's endurance hero should show today's session [\(appearance)]")
+                // The session is the first stop of the "Rest of today" timeline: a button
+                // whose label is "<title>, <detail>".
+                let sessionRow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Intervals 6×800 m")).firstMatch
+                XCTAssertTrue(sessionRow.waitForExistence(timeout: 15),
+                               "Today's timeline should show today's session [\(appearance)]")
                 // Sessions line now shows session count only (e.g., "2 sessions this week"),
                 // while distance appears in a separate progress line. Match the singular
                 // "session" so Monday's "1 session this week" (Monday-start week) passes too.
