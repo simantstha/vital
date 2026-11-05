@@ -237,7 +237,7 @@ private extension MetricDetailView {
         .accessibilityElement(children: .combine)
     }
 
-    static let meaningCardFill = Color(red: 0.067, green: 0.086, blue: 0.114)
+    static let meaningCardFill = Color(red: 0.082, green: 0.078, blue: 0.071)
 }
 
 // MARK: - Still learning (calibrating)
