@@ -431,7 +431,7 @@ private extension ProfileView {
                         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                             HStack {
                                 Image(systemName: cell.sfSymbol)
-                                    .scaledFont(size: 14)
+                                    .font(.system(size: 14))
                                     .foregroundStyle(Theme.Colors.accentContent)
                                 Spacer()
                             }
