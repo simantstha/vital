@@ -156,6 +156,7 @@ private struct PlanRowView: View {
         case .now:     return Theme.Colors.accentContent
         case .next:    return Theme.Colors.textSecondary
         case .later:   return Theme.Colors.textTertiary
+        case .earlier: return Theme.Colors.textTertiary
         case .skipped: return Theme.Colors.alert
         }
     }

@@ -614,6 +614,13 @@ private extension TodayView {
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
 
+                    if let reason = fact.reason,
+                       !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(reason)
+                            .scaledFont(Theme.Typography.bodySmall)
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+
                     HStack(spacing: Theme.Spacing.sm) {
                         Button {
                             Task { await vm.resolveFact(id: fact.id, action: "confirm") }

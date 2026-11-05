@@ -237,10 +237,6 @@ private extension LogsView {
                     .scaledFont(size: 13, weight: .semibold)
                     .tracking(1.3)
                     .foregroundStyle(Theme.Colors.textSecondary)
-                Spacer()
-                Text("\(day.items.count) \(day.items.count == 1 ? "entry" : "entries")")
-                    .scaledFont(size: 12)
-                    .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.horizontal, Theme.Spacing.xs)
 

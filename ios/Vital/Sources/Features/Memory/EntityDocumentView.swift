@@ -120,10 +120,6 @@ private extension EntityDocumentView {
                         .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: Theme.Spacing.sm)
-
-                    Chip(text: "About \(entityLabel)")
                 }
 
                 Text("\u{201C}\(fact.evidence)\u{201D}")
