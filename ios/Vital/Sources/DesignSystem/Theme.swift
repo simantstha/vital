@@ -4,20 +4,20 @@ enum Theme {
 
     // MARK: - Colors
     enum Colors {
-        /// Canvas background — dark: #0B0F14 / light: #F4F4F6 (v3)
+        /// Canvas background — dark: #131210 / light: #F5F3EF
         static let canvas = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.043, green: 0.059, blue: 0.078, alpha: 1)
-                : UIColor(red: 0.957, green: 0.957, blue: 0.965, alpha: 1)
+                ? UIColor(red: 0.075, green: 0.071, blue: 0.063, alpha: 1)
+                : UIColor(red: 0.961, green: 0.953, blue: 0.937, alpha: 1)
         })
 
-        /// Card surface — dark: ~#151A21 / light: #FDFDFD (v3). Pair with `cardShadow`
+        /// Card surface — dark: #1C1A17 / light: #FDFCFA. Pair with `cardShadow`
         /// in light mode; in dark mode add a hairline `glassBorder`-style edge instead
         /// since shadows are invisible against the dark canvas (see `VitalCard`).
         static let card = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.082, green: 0.102, blue: 0.129, alpha: 1)
-                : UIColor(red: 0.992, green: 0.992, blue: 0.992, alpha: 1)
+                ? UIColor(red: 0.110, green: 0.102, blue: 0.090, alpha: 1)
+                : UIColor(red: 0.992, green: 0.988, blue: 0.980, alpha: 1)
         })
 
         /// Card drop shadow — light: black 4% / dark: clear (dark cards use a subtle
@@ -28,86 +28,84 @@ enum Theme {
                 : UIColor(white: 0.0, alpha: 0.04)
         })
 
-        /// Lime accent fill — dark: #C7F23B / light: #B7E249 (v3). Always use with
-        /// dark text on top.
+        /// Ember accent fill — #FF6B2C in both modes. Always use with dark text on top.
         static let accent = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.780, green: 0.949, blue: 0.231, alpha: 1)
-                : UIColor(red: 0.718, green: 0.886, blue: 0.286, alpha: 1)
+                ? UIColor(red: 1.000, green: 0.420, blue: 0.173, alpha: 1)
+                : UIColor(red: 1.000, green: 0.420, blue: 0.173, alpha: 1)
         })
 
-        /// Pale lime fill for soft chips/bubbles/badges — light: #EDF6D6 / dark: lime @ 15%.
+        /// Pale ember fill for soft chips/bubbles/badges — light: #FDE6DA / dark: ember @ 15%.
         static let accentSoft = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.780, green: 0.949, blue: 0.231, alpha: 0.15)
-                : UIColor(red: 0.929, green: 0.965, blue: 0.839, alpha: 1)
+                ? UIColor(red: 1.000, green: 0.420, blue: 0.173, alpha: 0.15)
+                : UIColor(red: 0.992, green: 0.902, blue: 0.855, alpha: 1)
         })
 
-        /// Accent for TEXT / ICON / LINE use — dark: lime #C7F23B / light: olive #55650F
-        /// Use this instead of `accent` wherever lime appears as a foreground color, thin line,
-        /// or icon; lime on a light surface fails WCAG contrast.
+        /// Accent for TEXT / ICON / LINE use — dark: ember #FF6B2C / light: deep ember #B23F0B
+        /// Use this instead of `accent` wherever ember appears as a foreground color, thin line,
+        /// or icon; ember on a light surface fails WCAG contrast.
         static let accentContent = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.780, green: 0.949, blue: 0.231, alpha: 1)
-                : UIColor(red: 0.333, green: 0.396, blue: 0.059, alpha: 1)
+                ? UIColor(red: 1.000, green: 0.420, blue: 0.173, alpha: 1)
+                : UIColor(red: 0.698, green: 0.247, blue: 0.043, alpha: 1)
         })
 
-        /// Fixed foreground for content placed ON a lime accent fill — always near-black #0B0F14.
+        /// Fixed foreground for content placed ON an ember accent fill — always near-black #160A04.
         /// Do NOT use `canvas` here: canvas is light in light mode and would produce
-        /// a low-contrast white-on-lime combination.
-        static let onAccent = Color(red: 0.043, green: 0.059, blue: 0.078)
+        /// a low-contrast white-on-ember combination.
+        static let onAccent = Color(red: 0.086, green: 0.039, blue: 0.016)
 
-        /// Positive delta (e.g. HRV rising, resting HR falling) — light: #6DA33C / dark: #7BC96F.
+        /// Positive delta (e.g. HRV rising, resting HR falling) — light: #3F7D2A / dark: #7BC96F.
         static let positive = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
                 ? UIColor(red: 0.482, green: 0.788, blue: 0.435, alpha: 1)
-                : UIColor(red: 0.427, green: 0.639, blue: 0.235, alpha: 1)
+                : UIColor(red: 0.247, green: 0.490, blue: 0.165, alpha: 1)
         })
 
-        /// Alert / warning red — dark: #FF6B6B / light: #D9483B (v3)
+        /// Alert / warning red — dark: #FF5C6C / light: #C2263E
         static let alert = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 1.000, green: 0.420, blue: 0.420, alpha: 1)
-                : UIColor(red: 0.851, green: 0.282, blue: 0.231, alpha: 1)
+                ? UIColor(red: 1.000, green: 0.361, blue: 0.424, alpha: 1)
+                : UIColor(red: 0.761, green: 0.149, blue: 0.243, alpha: 1)
         })
 
-        /// Primary text — dark: #F5F2EC / light: #17181A (v3)
+        /// Primary text — dark: #F4EFE6 / light: #1A1815
         static let textPrimary = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.961, green: 0.949, blue: 0.925, alpha: 1)
-                : UIColor(red: 0.090, green: 0.094, blue: 0.102, alpha: 1)
+                ? UIColor(red: 0.957, green: 0.937, blue: 0.902, alpha: 1)
+                : UIColor(red: 0.102, green: 0.094, blue: 0.082, alpha: 1)
         })
 
-        /// Secondary / muted text — dark: #7A8694 / light: #5C5D61 (v3; light darkened
-        /// from #75767A to meet 4.5:1 on canvas). Contrast ≥4.5:1 on card and canvas.
+        /// Secondary / muted text — dark: #A39C90 / light: #5E5950. Contrast ≥4.5:1 on card and canvas.
         static let textSecondary = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.478, green: 0.525, blue: 0.580, alpha: 1)
-                : UIColor(red: 0.361, green: 0.365, blue: 0.380, alpha: 1)
+                ? UIColor(red: 0.639, green: 0.612, blue: 0.565, alpha: 1)
+                : UIColor(red: 0.369, green: 0.349, blue: 0.314, alpha: 1)
         })
 
-        /// Tertiary / faint text (placeholders, disabled) — light: #6E6F73 / dark: #788492.
+        /// Tertiary / faint text (placeholders, disabled) — light: #6B665C / dark: #968F84.
         /// Contrast ≥4.5:1 on both card and canvas in each mode (WCAG AA body text).
         static let textTertiary = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.471, green: 0.518, blue: 0.573, alpha: 1)
-                : UIColor(red: 0.431, green: 0.435, blue: 0.451, alpha: 1)
+                ? UIColor(red: 0.588, green: 0.561, blue: 0.518, alpha: 1)
+                : UIColor(red: 0.420, green: 0.400, blue: 0.361, alpha: 1)
         })
 
         /// Muted chart fill for below-threshold values (e.g. short-sleep bars) —
-        /// light: #E4E5E0 / dark: #2A3038. A solid neutral, not an opacity of
-        /// `accent`, so it reads as "off" rather than "dim lime".
+        /// light: #E4E1DA / dark: #33302B. A solid neutral, not an opacity of
+        /// `accent`, so it reads as "off" rather than "dim ember".
         static let chartMuted = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.165, green: 0.188, blue: 0.220, alpha: 1)
-                : UIColor(red: 0.894, green: 0.898, blue: 0.878, alpha: 1)
+                ? UIColor(red: 0.200, green: 0.188, blue: 0.169, alpha: 1)
+                : UIColor(red: 0.894, green: 0.882, blue: 0.855, alpha: 1)
         })
 
         /// Selected-segment "thumb" for a control sitting on a `glassFill`
         /// track (e.g. `PeriodSwitcher`) — light: solid white, dark: white
         /// ~17%. Deliberately its own token rather than reusing `card`: on a
         /// dark `glassFill` track over the near-black `canvas`, `card`
-        /// (~#151A21) sits so close to both that the selected segment was
+        /// (~#1C1A17) sits so close to both that the selected segment was
         /// nearly invisible; white at 17% reads as a clearly lighter surface
         /// against either.
         static let switcherThumb = Color(uiColor: UIColor { tc in
@@ -160,25 +158,25 @@ enum Theme {
         /// Caution — guidance the user should read but that isn't a failure
         /// (e.g. a diet target near the low-energy floor). Distinct from
         /// `alert`, which is reserved for red/failure states. Amber:
-        /// light: #B4741A / dark: #E8A94D.
+        /// light: #8A6500 / dark: #F2C94C.
         static let caution = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.910, green: 0.663, blue: 0.302, alpha: 1)
-                : UIColor(red: 0.706, green: 0.455, blue: 0.102, alpha: 1)
+                ? UIColor(red: 0.949, green: 0.788, blue: 0.298, alpha: 1)
+                : UIColor(red: 0.541, green: 0.396, blue: 0.000, alpha: 1)
         })
 
-        /// Soft fill for a caution banner — light: #FBF0DC / dark: #2A2216.
+        /// Soft fill for a caution banner — light: #FBF3D6 / dark: #2A2410.
         static let cautionSoft = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.165, green: 0.133, blue: 0.086, alpha: 1)
-                : UIColor(red: 0.984, green: 0.941, blue: 0.863, alpha: 1)
+                ? UIColor(red: 0.165, green: 0.141, blue: 0.063, alpha: 1)
+                : UIColor(red: 0.984, green: 0.953, blue: 0.839, alpha: 1)
         })
 
-        /// Hairline border for a caution banner — light: #E4C489 / dark: #5C4620.
+        /// Hairline border for a caution banner — light: #E0CC85 / dark: #5C4C17.
         static let cautionLine = Color(uiColor: UIColor { tc in
             tc.userInterfaceStyle == .dark
-                ? UIColor(red: 0.361, green: 0.275, blue: 0.125, alpha: 1)
-                : UIColor(red: 0.894, green: 0.769, blue: 0.537, alpha: 1)
+                ? UIColor(red: 0.361, green: 0.298, blue: 0.090, alpha: 1)
+                : UIColor(red: 0.878, green: 0.800, blue: 0.522, alpha: 1)
         })
 
         /// Memory tint (chat-activity-contract.md §4) — the purple used for
