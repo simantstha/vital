@@ -150,7 +150,7 @@ struct NotificationSettingsView: View {
 
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                        .scaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(Theme.Colors.textSecondary)
                 }
             }

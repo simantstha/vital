@@ -218,13 +218,13 @@ private struct PlanRowView: View {
     private var trailing: some View {
         if isDone {
             Image(systemName: "checkmark")
-                .font(.system(size: 15, weight: .bold))
+                .scaledFont(size: 15, weight: .bold)
                 .foregroundStyle(Theme.Colors.accentContent)
                 .contentTransition(.symbolEffect(.replace))
                 .symbolEffect(.bounce, value: isDone)
         } else if isSkipped {
             Image(systemName: "xmark")
-                .font(.system(size: 14, weight: .bold))
+                .scaledFont(size: 14, weight: .bold)
                 .foregroundStyle(Theme.Colors.alert.opacity(0.7))
         } else if let actionLabel = item.actionLabel, isNow {
             Button {

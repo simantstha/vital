@@ -160,7 +160,7 @@ private extension MealDetailView {
             } label: {
                 HStack(spacing: Theme.Spacing.md) {
                     Image(systemName: "book.pages")
-                        .font(.system(size: 17))
+                        .scaledFont(size: 17)
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text("How to make it")
                         .scaledFont(size: 15, weight: .medium)
@@ -170,7 +170,7 @@ private extension MealDetailView {
                         ProgressView().controlSize(.small).tint(Theme.Colors.textSecondary)
                     } else {
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(size: 13, weight: .semibold)
                             .foregroundStyle(vm.recipeExpanded ? Theme.Colors.accentContent : Theme.Colors.textSecondary)
                             .rotationEffect(.degrees(vm.recipeExpanded ? 180 : 0))
                     }
@@ -236,7 +236,7 @@ private extension MealDetailView {
                         ProgressView().controlSize(.small).tint(Theme.Colors.onAccent)
                     } else {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 15, weight: .bold))
+                            .scaledFont(size: 15, weight: .bold)
                     }
                     Text(vm.isLogging ? "Logging…" : "Log it")
                 }

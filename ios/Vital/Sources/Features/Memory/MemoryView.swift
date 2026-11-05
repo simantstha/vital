@@ -132,7 +132,7 @@ private extension MemoryView {
     var searchField: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .medium))
+                .scaledFont(size: 14, weight: .medium)
                 .foregroundStyle(Theme.Colors.textTertiary)
             TextField("Search memory", text: $vm.searchText)
                 .scaledFont(Theme.Typography.bodyMedium)
@@ -359,7 +359,7 @@ private extension MemoryView {
                 .lineLimit(1)
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.Colors.textTertiary)
         }
         .padding(.horizontal, Theme.Spacing.lg)

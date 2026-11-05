@@ -174,7 +174,7 @@ struct CoachView: View {
 
             Button(action: vm.startNewChat) {
                 Image(systemName: "square.and.pencil")
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
             }
             .accessibilityLabel("New chat")
@@ -197,7 +197,7 @@ struct CoachView: View {
     private var offlineBanner: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "exclamationmark.icloud")
-                .font(.system(size: 14, weight: .semibold))
+                .scaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(Theme.Colors.caution)
                 .accessibilityHidden(true)
             Text(CoachViewModel.offlineBannerText)
@@ -814,7 +814,7 @@ struct CoachView: View {
     private var micPermissionHint: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "mic.slash.fill")
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(Theme.Colors.textSecondary)
             Text("Allow microphone and speech recognition in Settings to talk to your coach.")
                 .scaledFont(Theme.Typography.labelSmall)
@@ -843,7 +843,7 @@ struct CoachView: View {
     private var stopSpeakingRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "speaker.wave.2.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.Colors.accentContent)
             Text("Speaking…")
                 .scaledFont(Theme.Typography.labelSmall)
@@ -852,7 +852,7 @@ struct CoachView: View {
             Button { vm.speaker.stop() } label: {
                 HStack(spacing: Theme.Spacing.xs) {
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 10, weight: .semibold))
+                        .scaledFont(size: 10, weight: .semibold)
                     Text("Stop")
                         .scaledFont(size: 12, weight: .semibold)
                 }
@@ -1171,7 +1171,7 @@ private struct SpecialistFooterView: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
             Image(systemName: footer.icon)
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(size: 10, weight: .semibold)
             Text(footer.text)
         }
         .scaledFont(Theme.Typography.labelSmall)
@@ -1351,7 +1351,7 @@ struct CoachWorkingCard: View {
     private func stepTrailing(_ row: ToolCallRow) -> some View {
         if row.isDone {
             Image(systemName: row.ok == false ? "exclamationmark.circle" : "checkmark")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(row.ok == false ? Theme.Colors.alert : Theme.Colors.positive)
         } else {
             ProgressView()
@@ -1381,7 +1381,7 @@ struct CoachReceiptPill: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.horizontal, Theme.Spacing.md)
@@ -1453,7 +1453,7 @@ struct CoachReceiptDetail: View {
             }
             Spacer(minLength: 0)
             Image(systemName: row.ok == false ? "exclamationmark.circle" : "checkmark")
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(row.ok == false ? Theme.Colors.alert : Theme.Colors.positive)
         }
     }
@@ -1533,7 +1533,7 @@ struct MemorySavedChip: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
             Image(systemName: "arrow.down.circle")
-                .font(.system(size: 12, weight: .semibold))
+                .scaledFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.Colors.memory)
             Text("\(verb): \(text)")
                 .scaledFont(Theme.Typography.labelMedium.weight(.semibold))

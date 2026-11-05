@@ -78,7 +78,7 @@ struct CoachDataCardView: View {
             HStack(spacing: Theme.Spacing.lg) {
                 compareSide(label: "This period", value: viz.currentMean)
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 16, weight: .medium))
+                    .scaledFont(size: 16, weight: .medium)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 compareSide(label: "Last period", value: viz.previousMean)
             }
