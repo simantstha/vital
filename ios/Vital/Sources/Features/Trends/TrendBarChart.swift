@@ -5,21 +5,70 @@ import SwiftUI
 /// test exhaustively, same convention as `WeightHeroLogic`/`TrendsSummary`.
 enum TrendBarChartLogic {
 
-    /// The chart's y-axis ceiling (in hours): 12% above the goal, or the
-    /// tallest night if that's taller — so a night that beat the goal
-    /// renders as a taller bar instead of being capped flat at the top
-    /// (Trends-phase-2 fix for the old `min(value / goalHours, 1.0)` cap).
-    static func chartMax(values: [Double?], goalHours: Double) -> Double {
-        let tallest = values.compactMap { $0 }.max() ?? 0
-        let safeGoal = goalHours > 0 ? goalHours : 1
-        return max(safeGoal * 1.12, tallest)
+    /// One night's place in the goal-relative layout.
+    struct Slot: Equatable {
+        /// Signed whole minutes vs the goal (negative = short of it), rounded
+        /// to the nearest minute. `nil` for a missing (or non-finite) night.
+        let minutesVsGoal: Int?
+        /// Height of the bar hanging BELOW the goal line, as a 0...1 fraction
+        /// of the plot height. Zero unless the night was short of the goal.
+        let shortFraction: Double
+        /// Height of the bar rising ABOVE the goal line, as a 0...1 fraction
+        /// of the plot height. Zero unless the night beat the goal.
+        let overFraction: Double
     }
 
-    /// `value`'s height as a 0...1 fraction of `chartMax`. `chartMax <= 0`
-    /// (degenerate) renders nothing rather than dividing by zero.
-    static func fraction(value: Double, chartMax: Double) -> Double {
-        guard chartMax > 0 else { return 0 }
-        return min(max(value / chartMax, 0), 1)
+    struct Layout: Equatable {
+        let slots: [Slot]
+        /// Where the goal line sits, as a 0...1 fraction of the plot height
+        /// measured from the TOP: 0 when every night is short (the line is
+        /// the ceiling the bars hang from), growing with the biggest night
+        /// that beat the goal.
+        let goalLineFraction: Double
+    }
+
+    /// Smallest total span (in minutes) the plot represents, so a week whose
+    /// nights are all within a few minutes of the goal doesn't blow a tiny
+    /// gap up to full height.
+    static let minimumSpanMinutes = 60.0
+
+    /// Goal-relative layout: each night is its signed rounded minutes vs the
+    /// goal, drawn as a bar hanging below (short) or rising above (over) a
+    /// goal line. The plot spans `max(maxShort + maxOver, 60)` minutes.
+    /// A non-positive (or non-finite) goal falls back to the view's 8h
+    /// default rather than dividing or crashing.
+    static func layout(values: [Double?], goalHours: Double) -> Layout {
+        let safeGoalHours = goalHours.isFinite && goalHours > 0 ? goalHours : 8
+        let goalMinutes = safeGoalHours * 60
+
+        let deltas: [Int?] = values.map { value in
+            guard let value, value.isFinite else { return nil }
+            let raw = (value * 60 - goalMinutes).rounded()
+            return Int(min(max(raw, -100_000), 100_000))
+        }
+
+        let maxShort = Double(deltas.compactMap { $0 }.map { max(0, -$0) }.max() ?? 0)
+        let maxOver = Double(deltas.compactMap { $0 }.map { max(0, $0) }.max() ?? 0)
+        let span = max(maxShort + maxOver, minimumSpanMinutes)
+
+        let slots = deltas.map { delta -> Slot in
+            guard let delta else { return Slot(minutesVsGoal: nil, shortFraction: 0, overFraction: 0) }
+            return Slot(
+                minutesVsGoal: delta,
+                shortFraction: Double(max(0, -delta)) / span,
+                overFraction: Double(max(0, delta)) / span
+            )
+        }
+        return Layout(slots: slots, goalLineFraction: maxOver / span)
+    }
+
+    /// "\u{2212}45m", "\u{2212}1h20", "+12m", "0m" (true minus sign, U+2212).
+    static func deltaLabel(minutes: Int) -> String {
+        guard minutes != 0 else { return "0m" }
+        let sign = minutes < 0 ? "\u{2212}" : "+"
+        let magnitude = abs(minutes)
+        guard magnitude >= 60 else { return "\(sign)\(magnitude)m" }
+        return "\(sign)\(magnitude / 60)h\(String(format: "%02d", magnitude % 60))"
     }
 
     /// "8h06" — hours + zero-padded minutes, no space, matching the mock's
@@ -50,17 +99,15 @@ enum TrendBarChartLogic {
     }
 }
 
-/// Hand-drawn 7-column bar chart for the Sleep summary card (v3/v5 mocks'
-/// `Bars` component). Slim (~20pt) bars, rounded top corners only, scaled to
-/// `TrendBarChartLogic.chartMax` (goal-relative, not capped at the goal) so
-/// an above-goal night reads as visibly taller rather than flat. Nights
-/// under `shortThresholdHours` render in the muted "short night" token
-/// instead of the accent lime. A missing day renders as a full-height
-/// dashed hairline outline with no fill.
-///
-/// The short-night cutoff comes from `TrendsSummary.shortSleepThreshold(for:)`
-/// — the same helper behind the footnote copy — so the gray bars always agree
-/// with the sentence under the chart.
+/// Hand-drawn 7-column, goal-relative bar chart for the Sleep summary card.
+/// A solid goal line crosses the plot; a night short of the goal hangs below
+/// it, a night that beat the goal rises above it, and every bar carries its
+/// signed distance from the goal at its far end ("−45m", "+12m"). Scale and
+/// rounding live in `TrendBarChartLogic.layout`. Only today's (last) bar is
+/// `accent` — past nights are neutral — so the eye lands on one bar. A
+/// missing night renders as a full-height dashed outline with no label.
+/// Tapping a bar swaps its delta label for its total ("7h10"); tapping again
+/// restores the delta.
 ///
 /// Values are in **hours**. Both this and `TrendLineChart` take
 /// `values: [Double?]` (exactly 7, oldest → newest) + `dayLabels: [String]`.
@@ -81,36 +128,67 @@ struct TrendBarChart: View {
     @State private var barsGrown = false
     @State private var goalLineVisible = false
     @State private var valueLabelPopped = false
-    /// The bar the value label currently renders above — `nil` means
-    /// "today's (last) bar, the default"; tapping any other bar with data
-    /// moves the label there instead, tapping it again returns to today's.
+    /// The bar whose label currently shows its total hours instead of its
+    /// delta. `nil` means every bar shows its delta.
     @State private var selectedIndex: Int?
 
-    private let chartHeight: CGFloat = 96
-    private let barWidth: CGFloat = 20
+    private let plotHeight: CGFloat = 96
+    private let barWidth: CGFloat = 30
+    private let barRadius: CGFloat = 6
+    private let minBarHeight: CGFloat = 4
+    private let goalLineWidth: CGFloat = 1.2
+    /// Height of the label row reserved beyond the plot's top / bottom edge
+    /// so a delta label at the far end of the longest bar never clips (the
+    /// chart is capped at `.xxxLarge`, where 11pt text is ~17pt tall).
+    private let labelRoom: CGFloat = 20
+    private let labelGap: CGFloat = 3
+
     private var shortThresholdHours: Double {
         TrendsSummary.shortSleepThreshold(for: goalHours)
     }
-    private var chartMax: Double {
-        TrendBarChartLogic.chartMax(values: values, goalHours: goalHours)
-    }
     private var todayIndex: Int { values.count - 1 }
-    private var activeIndex: Int { selectedIndex ?? todayIndex }
     /// Bars render at full height immediately unless this render is meant
     /// to play the entrance (Reduce Motion always skips the grow-in).
     private var startsGrown: Bool { !animatesIn || reduceMotion }
 
     var body: some View {
+        let layout = TrendBarChartLogic.layout(values: values, goalHours: goalHours)
+        // Room above the plot only when a label sits above the goal line
+        // (a night at/over the goal), below only when a bar hangs from it.
+        let topRoom: CGFloat = layout.slots.contains { ($0.minutesVsGoal ?? -1) >= 0 } ? labelRoom : 0
+        let bottomRoom: CGFloat = layout.slots.contains { ($0.minutesVsGoal ?? 0) < 0 } ? labelRoom : 0
+        let goalY = topRoom + plotHeight * CGFloat(layout.goalLineFraction)
+        let totalHeight = topRoom + plotHeight + bottomRoom
+
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottomTrailing) {
-                HStack(alignment: .bottom, spacing: 8) {
+            // Fixed row so the caption never moves with the bars.
+            Text("\(TrendsSummary.hoursLabel(goalHours))h goal")
+                .scaledFont(size: 11, weight: .medium)
+                .foregroundStyle(Theme.Colors.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ZStack(alignment: .topLeading) {
+                HStack(alignment: .top, spacing: 8) {
                     ForEach(Array(values.enumerated()), id: \.offset) { index, value in
-                        barColumn(index: index, value: value)
+                        barColumn(
+                            index: index,
+                            value: value,
+                            slot: index < layout.slots.count ? layout.slots[index] : nil,
+                            goalY: goalY,
+                            topRoom: topRoom,
+                            totalHeight: totalHeight
+                        )
                     }
                 }
-                goalLine
+                Rectangle()
+                    .fill(Theme.Colors.textPrimary)
+                    .frame(height: goalLineWidth)
+                    .offset(y: goalY - goalLineWidth / 2)
+                    .opacity(goalLineVisible || startsGrown ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
-            .frame(height: chartHeight, alignment: .bottom)
+            .frame(height: totalHeight, alignment: .top)
 
             HStack(spacing: 8) {
                 ForEach(Array(dayLabels.enumerated()), id: \.offset) { index, label in
@@ -124,68 +202,68 @@ struct TrendBarChart: View {
         .sensoryFeedback(Theme.Haptics.selection, trigger: selectedIndex)
         .onAppear(perform: startEntranceIfNeeded)
         // Day / value / goal labels are positioned against fixed bar
-        // geometry (the value label is offset a fixed 14pt above its bar), so
-        // they stop growing at the largest standard size.
+        // geometry (labels sit a fixed gap past each bar's end), so they
+        // stop growing at the largest standard size.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     // MARK: - One bar (no day label — that's its own row below, so every
-    // column shares one baseline regardless of value-label overflow)
+    // column shares one baseline)
 
-    private func barColumn(index: Int, value: Double?) -> some View {
+    private func barColumn(
+        index: Int,
+        value: Double?,
+        slot: TrendBarChartLogic.Slot?,
+        goalY: CGFloat,
+        topRoom: CGFloat,
+        totalHeight: CGFloat
+    ) -> some View {
         let fullDayName = index < fullDayLabels.count && !fullDayLabels[index].isEmpty
             ? fullDayLabels[index]
             : (index < dayLabels.count ? dayLabels[index] : "Day \(index + 1)")
+        let isToday = index == todayIndex
 
-        return ZStack(alignment: .bottom) {
-            if let value {
-                let fraction = TrendBarChartLogic.fraction(value: value, chartMax: chartMax)
-                let grownHeight = chartHeight * CGFloat(fraction)
-                let barShape = UnevenRoundedRectangle(
-                    topLeadingRadius: 7,
-                    bottomLeadingRadius: 3,
-                    bottomTrailingRadius: 3,
-                    topTrailingRadius: 7,
-                    style: .continuous
-                )
-                barShape
-                    .fill(value < shortThresholdHours ? Theme.Colors.chartMuted : Theme.Colors.accent)
-                    .overlay {
-                        // Today's bar gets the accent-content ring the mock
-                        // outlines it with. `.stroke` (not `.strokeBorder`,
-                        // which needs `InsettableShape`) works for any
-                        // `Shape`, including `UnevenRoundedRectangle`.
-                        if index == todayIndex {
-                            barShape.stroke(Theme.Colors.accentContent, lineWidth: 2)
-                        }
-                    }
-                    .frame(height: barsGrown || startsGrown ? grownHeight : 0)
+        return ZStack(alignment: .top) {
+            if let value, let slot, let minutes = slot.minutesVsGoal {
+                let isOver = minutes >= 0
+                let fraction = isOver ? slot.overFraction : slot.shortFraction
+                // A real (non-zero) gap never draws thinner than 4pt, so a
+                // -2m night isn't a clipped sliver; 0m stays barless.
+                let grownHeight = fraction > 0 ? max(plotHeight * CGFloat(fraction), minBarHeight) : 0
+                let height = barsGrown || startsGrown ? grownHeight : 0
+                // Bars grow outward from the goal line: a short bar's top
+                // stays pinned to it, an over bar's bottom does.
+                RoundedRectangle(cornerRadius: min(barRadius, height / 2), style: .continuous)
+                    .fill(isToday ? Theme.Colors.accent : Theme.Colors.textTertiary.opacity(0.45))
+                    .frame(width: barWidth, height: height)
+                    .offset(y: isOver ? goalY - height : goalY)
                     .animation(reduceMotion ? nil : Theme.Motion.settle.delay(entranceDelay(index: index)), value: barsGrown)
 
-                if index == activeIndex, valueLabelPopped || startsGrown {
-                    Text(TrendBarChartLogic.compactHoursLabel(value))
-                        .scaledFont(size: 11, weight: index == todayIndex ? .heavy : .semibold)
-                        .foregroundStyle(Theme.Colors.textPrimary)
+                if valueLabelPopped || startsGrown {
+                    let labelHeight = labelRoom - labelGap
+                    Text(selectedIndex == index
+                         ? TrendBarChartLogic.compactHoursLabel(value)
+                         : TrendBarChartLogic.deltaLabel(minutes: minutes))
+                        .scaledFont(size: 11, weight: isToday ? .heavy : .semibold)
+                        .foregroundStyle(isToday ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
                         .fixedSize()
-                        .offset(y: -(grownHeight + 14))
+                        .frame(height: labelHeight)
+                        .offset(y: isOver
+                                ? goalY - grownHeight - labelGap - labelHeight
+                                : goalY + grownHeight + labelGap)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
             } else {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 7,
-                    bottomLeadingRadius: 3,
-                    bottomTrailingRadius: 3,
-                    topTrailingRadius: 7,
-                    style: .continuous
-                )
-                .stroke(
-                    Theme.Colors.textTertiary.opacity(0.25),
-                    style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-                )
-                .frame(height: chartHeight)
+                RoundedRectangle(cornerRadius: barRadius, style: .continuous)
+                    .stroke(
+                        Theme.Colors.textTertiary.opacity(0.25),
+                        style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                    )
+                    .frame(width: barWidth, height: plotHeight)
+                    .offset(y: topRoom)
             }
         }
-        .frame(width: barWidth)
+        .frame(height: totalHeight, alignment: .top)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -207,26 +285,8 @@ struct TrendBarChart: View {
         Double(index) * 0.03
     }
 
-    // MARK: - Goal line
-
-    @ViewBuilder
-    private var goalLine: some View {
-        let fraction = TrendBarChartLogic.fraction(value: goalHours, chartMax: chartMax)
-        VStack(alignment: .leading, spacing: 3) {
-            Text("\(TrendsSummary.hoursLabel(goalHours))h goal")
-                .scaledFont(size: 10, weight: .bold)
-                .foregroundStyle(Theme.Colors.textSecondary)
-            DashedLine()
-                .stroke(Theme.Colors.textSecondary.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
-                .frame(height: 1.5)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .opacity(goalLineVisible || startsGrown ? 1 : 0)
-        .offset(y: -(chartHeight * CGFloat(fraction)))
-    }
-
     // MARK: - Entrance motion (V5 storyboard: 180ms bars grow 30ms apart,
-    // 420ms settle, 520ms goal line fades in, 640ms today's label pops)
+    // 420ms settle, 520ms goal line fades in, 640ms labels pop)
 
     private func startEntranceIfNeeded() {
         guard animatesIn, !reduceMotion else {
@@ -244,17 +304,6 @@ struct TrendBarChart: View {
         withAnimation(Theme.Motion.snap.delay(0.64)) {
             valueLabelPopped = true
         }
-    }
-}
-
-/// A single horizontal dashed hairline, drawn as a `Shape` so `StrokeStyle`'s
-/// `dash` pattern actually renders (a plain filled `Rectangle` can't dash).
-private struct DashedLine: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        return path
     }
 }
 

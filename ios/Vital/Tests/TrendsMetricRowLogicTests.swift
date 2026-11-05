@@ -67,4 +67,52 @@ final class TrendsMetricRowLogicTests: XCTestCase {
         XCTAssertEqual(result.text, "↓ 7 below normal")
         XCTAssertTrue(result.isGood)
     }
+
+    // MARK: - normalBand
+
+    private func baseline(mean30: Double?, sd30: Double?) -> TrendsBaselineDTO {
+        TrendsBaselineDTO(mean7: nil, mean30: mean30, mean60: nil, sd30: sd30, p25: nil, p50: nil, p75: nil)
+    }
+
+    func testNormalBandIsMeanPlusMinusSDForNormalAboveAndBelow() {
+        let b = baseline(mean30: 55, sd30: 6)
+        for verdict in [Verdict.normal, .above(z: 1.4), .below(z: -1.4)] {
+            let band = TrendsMetricRowLogic.normalBand(verdict: verdict, baseline: b)
+            XCTAssertEqual(band?.lower ?? .nan, 49, accuracy: 1e-9, "\(verdict)")
+            XCTAssertEqual(band?.upper ?? .nan, 61, accuracy: 1e-9, "\(verdict)")
+        }
+    }
+
+    func testNormalBandIsNilForCalibratingAndNoData() {
+        let b = baseline(mean30: 55, sd30: 6)
+        XCTAssertNil(TrendsMetricRowLogic.normalBand(verdict: .calibrating(daysRemaining: 5), baseline: b))
+        XCTAssertNil(TrendsMetricRowLogic.normalBand(verdict: .noData, baseline: b))
+    }
+
+    func testNormalBandIsNilWithoutABaselineOrWithMissingStats() {
+        XCTAssertNil(TrendsMetricRowLogic.normalBand(verdict: .normal, baseline: nil))
+        XCTAssertNil(TrendsMetricRowLogic.normalBand(verdict: .normal, baseline: baseline(mean30: nil, sd30: 6)))
+        XCTAssertNil(TrendsMetricRowLogic.normalBand(verdict: .normal, baseline: baseline(mean30: 55, sd30: nil)))
+    }
+
+    func testNormalBandIsNilForNonFiniteStats() {
+        for (mean, sd) in [(Double.nan, 6.0), (.infinity, 6.0), (55.0, .nan), (55.0, .infinity), (-.infinity, 6.0)] {
+            XCTAssertNil(
+                TrendsMetricRowLogic.normalBand(verdict: .normal, baseline: baseline(mean30: mean, sd30: sd)),
+                "mean \(mean) sd \(sd)"
+            )
+        }
+    }
+
+    func testNormalBandIsNilForZeroOrNegativeSpread() {
+        XCTAssertNil(TrendsMetricRowLogic.normalBand(verdict: .normal, baseline: baseline(mean30: 55, sd30: 0)))
+        XCTAssertNil(TrendsMetricRowLogic.normalBand(verdict: .normal, baseline: baseline(mean30: 55, sd30: -2)))
+    }
+
+    func testNormalBandIgnoresOtherBaselineFields() {
+        let b = TrendsBaselineDTO(mean7: 99, mean30: 10, mean60: 99, sd30: 2, p25: 1, p50: 2, p75: 3)
+        let band = TrendsMetricRowLogic.normalBand(verdict: .normal, baseline: b)
+        XCTAssertEqual(band?.lower ?? .nan, 8, accuracy: 1e-9)
+        XCTAssertEqual(band?.upper ?? .nan, 12, accuracy: 1e-9)
+    }
 }

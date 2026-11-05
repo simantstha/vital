@@ -2,10 +2,10 @@ import SwiftUI
 
 /// One row inside a Trends metric-group card (W1/W2 calm-layout revamp,
 /// replacing the old 2-column `MetricTileView` grid tile): name (+ an
-/// optional secondary line), a small sparkline with no shaded "normal" band
-/// box, the value + unit, and a chevron. Pure rendering — no navigation, no
-/// haptics, no tap handling; `TrendsView` wraps this in a `Button` exactly
-/// like it wrapped `MetricTileView`, so this view stays trivially
+/// optional secondary line), a small sparkline (with the shaded "your
+/// normal" band behind it when the metric has one), the value + unit, and a
+/// chevron. Pure rendering — no navigation, no haptics, no tap handling;
+/// `TrendsView` wraps this in a `Button` exactly like it wrapped `MetricTileView`, so this view stays trivially
 /// previewable and testable in isolation.
 ///
 /// Renders every state `TrendsIndexSections.build` can produce for a metric,
@@ -43,7 +43,7 @@ struct TrendsMetricRowView: View {
             // at accessibility text sizes (the detail screen has the chart).
             if !dynamicTypeSize.isAccessibilitySize {
                 sparklineView
-                    .frame(width: 64, height: 28)
+                    .frame(width: 94, height: 28)
             }
 
             valueView
@@ -140,7 +140,7 @@ struct TrendsMetricRowView: View {
         }
     }
 
-    // MARK: - Sparkline (no shaded band — that stays on "What moved" only)
+    // MARK: - Sparkline (shaded "your normal" band when the metric has one)
 
     @ViewBuilder
     private var sparklineView: some View {
@@ -149,12 +149,21 @@ struct TrendsMetricRowView: View {
             Color.clear
         case .chart(_, let sparklineValues, let verdict):
             if let spec {
+                // A band only when the metric has an established verdict and
+                // usable stats; those rows draw a line over it (the band is
+                // what a bar chart can't show). No band -> the spec's own
+                // style, exactly as before.
+                let band = TrendsMetricRowLogic.normalBand(verdict: verdict, baseline: tile.baseline)
                 Sparkline(
                     values: sparklineValues,
-                    style: spec.sparkline,
+                    style: band != nil ? .line : spec.sparkline,
                     tint: sparklineTint(spec: spec, verdict: verdict),
                     height: 28,
+                    bandLower: band?.lower,
+                    bandUpper: band?.upper,
+                    bandColor: Theme.Colors.textSecondary.opacity(0.22),
                     showsLatestDot: true,
+                    latestDotColor: Theme.Colors.accent,
                     animatesOnAppear: animatesIn
                 )
                 // Decorative — the value + secondary line already say
