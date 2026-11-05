@@ -1,45 +1,42 @@
 import SwiftUI
 
-/// The Trends grid index's sleep-only card (calm-layout revamp, W1/W2
-/// designs) — one `GlassCard`: "Sleep this week", the sleep average plus
-/// nights-at-goal count, the existing goal-aware `TrendBarChart` 7-night
-/// week, and a longest/shortest-night footnote. HRV and resting HR moved out
+/// The Trends grid index's sleep-only block (calm-layout revamp, W1/W2
+/// designs, then the element refresh that dropped the card surface): a
+/// "Sleep this week" section header, the sleep average plus nights-at-goal
+/// count, and the goal-relative `TrendBarChart` 7-night week. The
+/// longest/shortest footnote is gone (the bars' own labels say it; the
+/// `TrendsSummary` helper stays). HRV and resting HR moved out
 /// of this card entirely (Trends calm-layout revamp) — the metric-group list
 /// below already shows both, and repeating them here read as redundant.
 /// Consumes `TrendsSummary`'s existing pure helpers; this view owns only
 /// layout.
 struct WeeklyHeadlineStrip: View {
     @ObservedObject var vm: TrendsViewModel
-    /// `footnoteView` builds a `Text` from `AttributedString` runs, which need
-    /// a concrete scaled `Font` rather than `.scaledFont(...)`.
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var sleepGoalHours: Double { Double(vm.sleepGoalMinutes) / 60.0 }
     private var nightsAtGoalText: String? { TrendsSummary.nightsAtGoalText(vm.sleepWindow.values, goalHours: sleepGoalHours) }
 
     var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                // Trends-phase-2: sentence case, matches `TrendsWeightCard`'s
-                // "Weight" header treatment — replaces the old
-                // uppercase-tracked "THIS WEEK" label.
-                Text("Sleep this week")
-                    .scaledFont(size: 17, weight: .semibold)
-                    .foregroundStyle(Theme.Colors.textPrimary)
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            // Same style as every other Trends section header
+            // (`TrendsView.sectionHeaderView`): 14pt semibold, secondary.
+            Text("Sleep this week")
+                .scaledFont(size: 14, weight: .semibold)
+                .foregroundStyle(Theme.Colors.textSecondary)
 
-                if let nightsAtGoalText {
-                    twoUpRow(nightsAtGoalText)
-                } else {
-                    // No synced nights (e.g. Apple Health not connected yet):
-                    // say so instead of "0 of 7 nights at goal" / "7h 00m".
-                    Text("No sleep data yet. Connect Apple Health to see your week.")
-                        .scaledFont(size: 13)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("trends.sleepEmpty")
-                }
+            if let nightsAtGoalText {
+                twoUpRow(nightsAtGoalText)
+            } else {
+                // No synced nights (e.g. Apple Health not connected yet):
+                // say so instead of "0 of 7 nights at goal" / "7h 00m".
+                Text("No sleep data yet. Connect Apple Health to see your week.")
+                    .scaledFont(size: 13)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("trends.sleepEmpty")
+            }
 
-                if nightsAtGoalText != nil {
+            if nightsAtGoalText != nil {
                 TrendBarChart(
                     values: vm.sleepWindow.values,
                     dayLabels: vm.sleepWindow.dayLabels,
@@ -54,9 +51,6 @@ struct WeeklyHeadlineStrip: View {
                     // entrance exactly once per session instead.
                     animatesIn: true
                 )
-
-                footnoteView
-                }
             }
         }
         // Stable UI-test hook: this is the topmost recovery-related content
@@ -110,30 +104,5 @@ struct WeeklyHeadlineStrip: View {
                 .foregroundStyle(Theme.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: - Two-tone footnote (extracted from the deleted `TrendSummaryCard`)
-
-    /// Trends-phase-2: `Text` `+` concatenation is deprecated — the two-tone
-    /// footnote is built as one `AttributedString` instead, with the bold
-    /// span's color/weight set as attributes on just that range. Calm-layout
-    /// revamp: this now reads `longestShortestFootnote` (longest/shortest
-    /// night) instead of `sleepFootnote`'s short-nights count — `sleepFootnote`
-    /// itself is left in place (still exercised by `TrendsSummaryTests`) since
-    /// deleting it isn't part of this change.
-    private var footnoteView: Text {
-        let footnote = TrendsSummary.longestShortestFootnote(vm.sleepWindow.values, fullDayLabels: vm.sleepWindow.fullDayLabels)
-        var attributed = AttributedString(footnote.prefix)
-        attributed.foregroundColor = Theme.Colors.textSecondary
-        if let bold = footnote.bold {
-            var boldSpan = AttributedString(bold)
-            boldSpan.foregroundColor = Theme.Colors.textPrimary
-            boldSpan.font = ScaledFontToken(size: 13, weight: .semibold).font(scaledFor: dynamicTypeSize)
-            attributed.append(boldSpan)
-            var suffix = AttributedString(footnote.suffix)
-            suffix.foregroundColor = Theme.Colors.textSecondary
-            attributed.append(suffix)
-        }
-        return Text(attributed).font(ScaledFontToken(size: 13).font(scaledFor: dynamicTypeSize))
     }
 }

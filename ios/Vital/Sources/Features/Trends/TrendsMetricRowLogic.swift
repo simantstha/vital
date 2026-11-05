@@ -50,4 +50,24 @@ enum TrendsMetricRowLogic {
         let text = "\(TrendsDeltaFormat.arrow(delta)) \(TrendsDeltaFormat.magnitudeText(delta, spec: spec, system: unitSystem, includeUnit: false)) \(rising ? "above" : "below") normal"
         return (text, isGood)
     }
+
+    /// The "your normal" band a row's sparkline shades: `mean30 ± sd30`, in
+    /// the same display units as the sparkline values (the view model scales
+    /// the baseline once, alongside the points). Only an established metric
+    /// that has a verdict (`.normal` / `.above` / `.below`) gets one — never
+    /// while calibrating or without data — and only from finite stats with a
+    /// positive spread, so a flat or broken baseline can't draw a band of
+    /// zero height or a NaN rectangle.
+    static func normalBand(verdict: Verdict, baseline: TrendsBaselineDTO?) -> (lower: Double, upper: Double)? {
+        switch verdict {
+        case .normal, .above, .below: break
+        case .noData, .calibrating: return nil
+        }
+        guard let mean = baseline?.mean30, let sd = baseline?.sd30,
+              mean.isFinite, sd.isFinite, sd > 0 else { return nil }
+        let lower = mean - sd
+        let upper = mean + sd
+        guard lower.isFinite, upper.isFinite else { return nil }
+        return (lower, upper)
+    }
 }

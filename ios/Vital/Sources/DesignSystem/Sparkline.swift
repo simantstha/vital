@@ -21,8 +21,14 @@ struct Sparkline: View {
     /// the band entirely — every existing call site is unaffected.
     var bandLower: Double? = nil
     var bandUpper: Double? = nil
+    /// Fill for the band. `nil` (the default) keeps the original
+    /// `tint.opacity(0.12)`, so existing call sites render exactly as before.
+    var bandColor: Color? = nil
     /// Draws a small filled dot on the latest non-nil value when true.
     var showsLatestDot: Bool = false
+    /// Colour of the latest-point dot. `nil` (the default) uses `tint`.
+    /// Applies to both the static (Canvas) and animated (overlay) dot.
+    var latestDotColor: Color? = nil
     /// Trends-phase-2 index motion: when true, the line (and band) wipe in
     /// left→right over 0.6s easeOut on first appearance, then the latest
     /// dot pops (scale 0.6→1 + fade) 0.15s after the line completes — see
@@ -75,13 +81,6 @@ struct Sparkline: View {
                 case .line: drawLine(context: context, size: size)
                 case .bar:  drawBar(context: context, size: size)
                 }
-                // The animated reveal draws its own dot as a separately
-                // scaled/faded SwiftUI overlay below (Canvas draw calls
-                // can't be individually animated) — only draw it here for
-                // the non-animating (default) path.
-                if showsLatestDot, !animatesOnAppear {
-                    drawLatestDot(context: context, size: size)
-                }
             }
             .mask(alignment: .leading) {
                 // Native SwiftUI `.frame`/`.scaleEffect` changes interpolate
@@ -92,7 +91,12 @@ struct Sparkline: View {
                 Rectangle().scaleEffect(x: revealFraction, y: 1, anchor: .leading)
             }
 
-            if animatesOnAppear, showsLatestDot, nonNilCount >= 3 {
+            // The latest dot is always a SwiftUI overlay (never a Canvas draw):
+            // the Canvas clips to its bounds, which squared off a dot sitting
+            // on the right edge, and an overlay can also be scaled/faded for
+            // the animated reveal. Non-animating callers start with
+            // `dotRevealed == true`, so it just renders.
+            if showsLatestDot, nonNilCount >= 3 {
                 GeometryReader { proxy in
                     latestDotOverlay(size: proxy.size)
                 }
@@ -120,7 +124,7 @@ struct Sparkline: View {
     private func latestDotOverlay(size: CGSize) -> some View {
         if let point = latestDotPosition(size: size) {
             Circle()
-                .fill(tint)
+                .fill(latestDotColor ?? tint)
                 .frame(width: 5.5, height: 5.5)
                 .position(point)
                 .scaleEffect(dotRevealed ? 1 : 0.6)
@@ -136,7 +140,7 @@ struct Sparkline: View {
         let bottom = yPosition(bandLower, size: size)
         guard bottom > top else { return }
         let rect = CGRect(x: 0, y: top, width: size.width, height: bottom - top)
-        context.fill(Path(rect), with: .color(tint.opacity(0.12)))
+        context.fill(Path(rect), with: .color(bandColor ?? tint.opacity(0.12)))
     }
 
     // MARK: - Latest-point dot
@@ -147,13 +151,6 @@ struct Sparkline: View {
         let x = (CGFloat(lastIndex) + 0.5) / CGFloat(max(count, 1)) * size.width
         let y = yPosition(value, size: size)
         return CGPoint(x: x, y: y)
-    }
-
-    private func drawLatestDot(context: GraphicsContext, size: CGSize) {
-        guard let point = latestDotPosition(size: size) else { return }
-        let radius: CGFloat = 2.75
-        let dot = Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
-        context.fill(dot, with: .color(tint))
     }
 
     // MARK: - Line style

@@ -233,11 +233,13 @@ private extension TrendsView {
 
     var headerSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            HStack(alignment: .firstTextBaseline) {
+            // Side by side normally; the switcher drops under the title at
+            // accessibility text sizes, where the two can't share a line.
+            AccessibilityAdaptiveStack(alignment: .firstTextBaseline, stackedSpacing: Theme.Spacing.sm) {
                 Text("Trends")
                     .screenTitleStyle()
                     .foregroundStyle(Theme.Colors.textPrimary)
-                Spacer()
+                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                 PeriodSwitcher(period: $vm.period) { periodTapTick.toggle() }
             }
             subtitleText
@@ -277,11 +279,10 @@ private extension TrendsView {
         }
     }
 
-    /// "✓ A steady month. Nothing moved outside your normal." (W1 design) —
-    /// established, nothing moved this period. `Text` `+` concatenation is
-    /// deprecated, so the two-tone sentence is one `AttributedString`
-    /// instead (same idiom as `WeeklyHeadlineStrip.footnoteView`), with only
-    /// the checkmark icon as a separate sibling view.
+    /// "A steady month. Nothing moved outside your normal." — established,
+    /// nothing moved this period. `Text` `+` concatenation is deprecated, so
+    /// the two-tone sentence is one `AttributedString` instead. No leading
+    /// icon (element refresh): the sentence says it.
     func steadyHeadline(period: TrendsPeriod) -> some View {
         var text = AttributedString(TrendsHeadline.steadyHeadlineText(period: period))
         text.foregroundColor = Theme.Colors.textPrimary
@@ -291,12 +292,7 @@ private extension TrendsView {
         subline.font = ScaledFontToken(size: 15).font(scaledFor: dynamicTypeSize)
         text.append(subline)
 
-        return HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
-            Image(systemName: "checkmark.circle.fill")
-                .scaledFont(size: 14, weight: .semibold)
-                .foregroundStyle(Theme.Colors.positive)
-            Text(text)
-        }
+        return Text(text)
     }
 
     /// The "Learning your normal" card (W2 design) — replaces both the old
@@ -357,6 +353,8 @@ private struct PeriodSwitcher: View {
                 let isOn = option == period
                 Text(option.label)
                     .scaledFont(size: 12, weight: .semibold)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundStyle(isOn ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
@@ -396,34 +394,34 @@ private extension TrendsView {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 Text("What moved")
-                    .scaledFont(size: 20, weight: .bold)
-                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .scaledFont(size: 14, weight: .semibold)
+                    .foregroundStyle(Theme.Colors.textSecondary)
                 Spacer()
                 Text("vs your normal")
                     .scaledFont(size: 13)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
 
-            VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
-                VStack(spacing: 0) {
-                    ForEach(Array(vm.whatMovedRows.enumerated()), id: \.element.key) { index, row in
-                        entrance(index: index) {
-                            Button {
-                                tileTapTick.toggle()
-                                path.append(row.key)
-                            } label: {
-                                WhatMovedRowView(row: row, unitSystem: unitPref.current, animatesIn: !vm.hasAnimatedIn)
-                            }
-                            .buttonStyle(.plain)
+            // Plain rows on the canvas, divided by hairlines (element
+            // refresh: no card surface).
+            VStack(spacing: 0) {
+                ForEach(Array(vm.whatMovedRows.enumerated()), id: \.element.key) { index, row in
+                    entrance(index: index) {
+                        Button {
+                            tileTapTick.toggle()
+                            path.append(row.key)
+                        } label: {
+                            WhatMovedRowView(row: row, unitSystem: unitPref.current, animatesIn: !vm.hasAnimatedIn)
                         }
-                        if index < vm.whatMovedRows.count - 1 {
-                            Divider().overlay(Theme.Colors.glassBorder)
-                        }
+                        .buttonStyle(.plain)
                     }
-                    Divider().overlay(Theme.Colors.glassBorder)
-                    WhatMovedExplainer(metricKeys: vm.whatMovedRows.map(\.key))
-                        .padding(.top, Theme.Spacing.sm)
+                    if index < vm.whatMovedRows.count - 1 {
+                        hairline
+                    }
                 }
+                hairline
+                WhatMovedExplainer(metricKeys: vm.whatMovedRows.map(\.key))
+                    .padding(.top, Theme.Spacing.sm)
             }
         }
     }
@@ -507,9 +505,12 @@ private extension TrendsView {
             .motionTransition(.fade)
         } else {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                ForEach(vm.sections, id: \.group.rawValue) { section in
+                ForEach(Array(vm.sections.enumerated()), id: \.element.group.rawValue) { position, section in
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                        sectionHeaderView(section.group)
+                        // The legend for the shaded band on the rows below,
+                        // said once — on the first section, and only when one
+                        // of its rows actually draws a band.
+                        sectionHeaderView(section.group, showsBandHint: position == 0 && Self.hasNormalBand(section.tiles))
                         sectionCard(section.tiles)
                     }
                 }
@@ -536,13 +537,26 @@ private extension TrendsView {
         }
     }
 
-    /// Sentence case, 20pt bold, no letter tracking — Trends phase-1 drops
-    /// the old uppercase-tracked treatment. The WHOOP source `Chip` stays.
-    func sectionHeaderView(_ group: MetricGroup) -> some View {
+    /// True when at least one tile's row will shade a "your normal" band.
+    static func hasNormalBand(_ tiles: [TrendsTile]) -> Bool {
+        tiles.contains { tile in
+            guard case .chart(_, _, let verdict) = tile.content else { return false }
+            return TrendsMetricRowLogic.normalBand(verdict: verdict, baseline: tile.baseline) != nil
+        }
+    }
+
+    /// A 1px hairline between plain rows.
+    var hairline: some View {
+        Divider().overlay(Theme.Colors.glassBorder)
+    }
+
+    /// Sentence case, 14pt semibold secondary — a quiet label, not a title
+    /// (element refresh). The WHOOP source `Chip` stays.
+    func sectionHeaderView(_ group: MetricGroup, showsBandHint: Bool = false) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
             Text(sectionTitle(group))
-                .scaledFont(size: 20, weight: .bold)
-                .foregroundStyle(Theme.Colors.textPrimary)
+                .scaledFont(size: 14, weight: .semibold)
+                .foregroundStyle(Theme.Colors.textSecondary)
             // WHOOP metrics get their own source badge — hrv_sdnn/whoop_hrv_rmssd
             // are different measurements on different scales from different
             // devices, and conflating them has already burned this codebase once.
@@ -550,21 +564,24 @@ private extension TrendsView {
                 Chip(text: "WHOOP")
             }
             Spacer()
+            if showsBandHint {
+                Text("Shaded band is your normal")
+                    .scaledFont(size: 12)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+            }
         }
     }
 
-    /// One `VitalCard` per metric group (W1/W2 calm-layout revamp,
-    /// replacing the old 2-column `MetricTileView` grid): every tile in the
-    /// group renders as a `TrendsMetricRowView` row, divided the same way
-    /// the "What moved" card divides its rows.
+    /// One plain list per metric group (W1/W2 calm-layout revamp, then the
+    /// element refresh that dropped the card surface): every tile in the
+    /// group renders as a `TrendsMetricRowView` row, divided by hairlines the
+    /// same way "What moved" divides its rows.
     func sectionCard(_ tiles: [TrendsTile]) -> some View {
-        VitalCard(padding: Theme.Spacing.md, cornerRadius: Theme.Radius.lg) {
-            VStack(spacing: 0) {
-                ForEach(Array(tiles.enumerated()), id: \.element.key) { index, tile in
-                    entrance(index: index) { rowButton(tile) }
-                    if index < tiles.count - 1 {
-                        Divider().overlay(Theme.Colors.glassBorder)
-                    }
+        VStack(spacing: 0) {
+            ForEach(Array(tiles.enumerated()), id: \.element.key) { index, tile in
+                entrance(index: index) { rowButton(tile) }
+                if index < tiles.count - 1 {
+                    hairline
                 }
             }
         }
