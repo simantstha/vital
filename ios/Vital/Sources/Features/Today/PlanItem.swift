@@ -12,7 +12,7 @@ import Foundation
 struct PlanItem: Identifiable, Equatable {
 
     enum Status: String, Equatable {
-        case done, now, next, later, skipped
+        case done, now, next, later, earlier, skipped
 
         /// Uppercase status word + color key shown next to the title, mirrors
         /// the mock's `PLAN_STATUS` map.
@@ -22,6 +22,7 @@ struct PlanItem: Identifiable, Equatable {
             case .now:     return "Now"
             case .next:    return "Next"
             case .later:   return "Later"
+            case .earlier: return "Earlier"
             case .skipped: return "Skipped"
             }
         }

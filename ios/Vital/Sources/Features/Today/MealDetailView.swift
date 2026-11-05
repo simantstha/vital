@@ -258,7 +258,7 @@ private extension MealDetailView {
         if lower.contains("breakfast") || lower.contains("oat") || lower.contains("egg") { return "sunrise.fill" }
         if lower.contains("lunch") || lower.contains("chicken") || lower.contains("bowl") { return "fork.knife" }
         if lower.contains("snack") || lower.contains("yogurt") || lower.contains("fruit") { return "leaf.fill" }
-        if lower.contains("dinner") || lower.contains("salmon") || lower.contains("pasta") { return "moon.fill" }
+        if lower.contains("dinner") || lower.contains("salmon") || lower.contains("pasta") { return "fork.knife" }
         if lower.contains("run") || lower.contains("recovery") || lower.contains("post") { return "figure.run" }
         return "fork.knife"
     }

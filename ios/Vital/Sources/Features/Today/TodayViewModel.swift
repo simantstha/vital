@@ -1280,7 +1280,7 @@ final class TodayViewModel: ObservableObject {
             calendarItems: calendarItems,
             hiddenCalendarItemIDs: hiddenCalendarItemIDs
         )
-        planItems = computeStatuses(merged, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
+        planItems = Self.computeStatuses(merged, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
         refreshCalendarSyncState()
     }
 
@@ -1377,12 +1377,12 @@ final class TodayViewModel: ObservableObject {
     /// `.done`/`.skipped` (those are left untouched — server-tracked, or
     /// user-set in the fallback path). Items within ±45 min of now become
     /// `.now`; the earliest future item beyond that window becomes `.next`;
-    /// everything else — including past items we have no signal actually
-    /// happened — stays `.later` rather than being guessed as done. now/
+    /// everything else after that stays `.later`; pending items more than 45 min
+    /// in the past become `.earlier` (no signal that they happened) rather than being guessed as done. now/
     /// next/later is deliberately never sent to the server (see
     /// `docs/redesign-v3-plan.md` Phase 2): it's a clock-derived display
     /// concern recomputed on every load, not stored state.
-    private func computeStatuses(_ items: [PlanItem], nowMinutes: Int) -> [PlanItem] {
+    static func computeStatuses(_ items: [PlanItem], nowMinutes: Int) -> [PlanItem] {
         var items = items.sorted { $0.timeMinutes < $1.timeMinutes }
         var assignedNext = false
         for i in items.indices {
@@ -1398,7 +1398,10 @@ final class TodayViewModel: ObservableObject {
                     items[i].status = .later
                 }
             } else {
-                items[i].status = .later
+                // Past the ±45 min window and still pending: neither upcoming
+                // nor known-missed (we have no signal either way), so use
+                // neutral wording rather than "Later".
+                items[i].status = .earlier
             }
         }
         return items
@@ -1451,7 +1454,7 @@ final class TodayViewModel: ObservableObject {
         switch status {
         case .done:    return "done"
         case .skipped: return "skipped"
-        case .now, .next, .later: return "pending"
+        case .now, .next, .later, .earlier: return "pending"
         }
     }
 
@@ -1524,7 +1527,7 @@ final class TodayViewModel: ObservableObject {
     /// correctly. On failure the optimistic row is pulled back out.
     func addItem(_ item: PlanItem) {
         planItems.append(item)
-        planItems = computeStatuses(planItems, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
+        planItems = Self.computeStatuses(planItems, nowMinutes: Self.minutesSinceMidnight(AppClock.now))
         let tempId = item.id
 
         Task {
@@ -1671,7 +1674,7 @@ final class TodayViewModel: ObservableObject {
         } else if lower.contains("snack") || lower.contains("yogurt") || lower.contains("fruit") {
             return "leaf.fill"
         } else if lower.contains("dinner") || lower.contains("salmon") || lower.contains("pasta") {
-            return "moon.fill"
+            return "fork.knife"
         } else if lower.contains("run") || lower.contains("recovery") || lower.contains("post") {
             return "figure.run"
         }

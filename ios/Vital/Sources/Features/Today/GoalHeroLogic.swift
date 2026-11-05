@@ -21,7 +21,10 @@ enum MuscleHeroLogic {
     /// hero keeps showing what was trained rather than flipping to the rest-
     /// day copy the moment it's logged.
     static func todaySession(from items: [PlanItem]) -> PlanItem? {
-        items.first { $0.kind == .move && $0.status != .skipped }
+        let sessions = items.filter { $0.kind == .move && $0.status != .skipped }
+        // Prefer a session that is still ahead (or done); a missed one only
+        // when nothing else is left, so an overdue run isn't shown as upcoming.
+        return sessions.first { $0.status != .earlier } ?? sessions.first
     }
 
     /// §4.1 exact copy for "no session planned today" — protein still has a
@@ -254,7 +257,10 @@ enum EnduranceHeroLogic {
     /// Same rule as `MuscleHeroLogic.todaySession` — the plan's move-kind
     /// row for today, or `nil` for a rest day.
     static func todaySession(from items: [PlanItem]) -> PlanItem? {
-        items.first { $0.kind == .move && $0.status != .skipped }
+        let sessions = items.filter { $0.kind == .move && $0.status != .skipped }
+        // Prefer a session that is still ahead (or done); a missed one only
+        // when nothing else is left, so an overdue run isn't shown as upcoming.
+        return sessions.first { $0.status != .earlier } ?? sessions.first
     }
 
     static let restDayText = "No session planned today."
