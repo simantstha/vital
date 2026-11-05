@@ -42,7 +42,7 @@ struct DietBudgetCardView: View {
                     HStack(spacing: 2) {
                         Text("Log food")
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
+                            .scaledFont(size: 10, weight: .semibold)
                     }
                     .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.accentContent)

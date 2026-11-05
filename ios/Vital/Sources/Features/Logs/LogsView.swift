@@ -296,7 +296,7 @@ private extension LogsView {
                 } label: {
                     HStack(spacing: Theme.Spacing.xs) {
                         Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(size: 13, weight: .semibold)
                         Text("Add to today's log")
                             .scaledFont(size: 14, weight: .semibold)
                     }
@@ -321,7 +321,7 @@ private extension LogsView {
                 } label: {
                     HStack(spacing: Theme.Spacing.xs) {
                         Image(systemName: "dumbbell")
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(size: 13, weight: .semibold)
                         Text("Log a lift")
                             .scaledFont(size: 14, weight: .semibold)
                     }
@@ -404,7 +404,7 @@ private struct LogEntryRow: View {
 
             if item.analysisId != nil || showsChevron {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
         }

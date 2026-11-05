@@ -77,7 +77,7 @@ struct FirstRunChecklistView: View {
             // focusable element (same split as `WeightHeroView`'s chip).
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: done ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 18))
+                    .scaledFont(size: 18)
                     .foregroundStyle(done ? Theme.Colors.accentContent : Theme.Colors.textTertiary)
 
                 Text(title)

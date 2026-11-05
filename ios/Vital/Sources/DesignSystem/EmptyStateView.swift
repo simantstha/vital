@@ -13,7 +13,7 @@ struct EmptyStateView: View {
             Spacer()
             VStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: icon)
-                    .font(.system(size: 28))
+                    .scaledFont(size: 28)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text(message)
                     .scaledFont(Theme.Typography.bodySmall)

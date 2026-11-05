@@ -40,7 +40,7 @@ struct ErrorStateContainer<Content: View>: View {
 
             VStack(spacing: Theme.Spacing.lg) {
                 Image(systemName: icon ?? UserFacingError.glyph(forMessage: message))
-                    .font(.system(size: 44, weight: .regular))
+                    .scaledFont(size: 44, weight: .regular)
                     .foregroundStyle(Theme.Colors.textSecondary)
 
                 content()

@@ -224,7 +224,7 @@ struct DevicesView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             .padding(.horizontal, Theme.Spacing.lg)
@@ -279,7 +279,7 @@ struct DevicesView: View {
 
                 if connected {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 18))
+                        .scaledFont(size: 18)
                         .foregroundStyle(Theme.Colors.accent)
                 }
             }
@@ -364,7 +364,7 @@ struct DevicesView: View {
         case .connected:
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 18))
+                    .scaledFont(size: 18)
                     .foregroundStyle(Theme.Colors.accent)
 
                 Button("Disconnect", role: .destructive) {

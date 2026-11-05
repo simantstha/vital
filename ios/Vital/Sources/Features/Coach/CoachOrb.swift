@@ -67,7 +67,7 @@ struct CoachOrb: View {
             Button(action: onEnd) {
                 HStack(spacing: Theme.Spacing.xs) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(size: 11, weight: .semibold)
                     Text("End")
                         .scaledFont(size: 13, weight: .semibold)
                 }

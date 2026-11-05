@@ -63,7 +63,7 @@ struct PlanItemActionsSheet: View {
                         Button(action: action.handler) {
                             HStack(spacing: Theme.Spacing.md + 2) {
                                 Image(systemName: action.icon)
-                                    .font(.system(size: 17, weight: .medium))
+                                    .scaledFont(size: 17, weight: .medium)
                                     .foregroundStyle(action.danger ? Theme.Colors.alert : Theme.Colors.textSecondary)
                                 Text(action.label)
                                     .scaledFont(size: 15, weight: .semibold)

@@ -146,7 +146,7 @@ struct LogReceiptCard: View {
                         Spacer(minLength: Theme.Spacing.xs)
                         if onScaleItem != nil {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
+                                .scaledFont(size: 10, weight: .semibold)
                                 .foregroundStyle(Theme.Colors.textTertiary)
                         }
                     }
@@ -360,7 +360,7 @@ private struct MealItemStepperSheet: View {
     private func stepperButton(_ systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 32))
+                .scaledFont(size: 32)
                 .foregroundStyle(Theme.Colors.accentContent)
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())

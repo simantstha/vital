@@ -95,7 +95,7 @@ struct AddPlanItemSheet: View {
                 } label: {
                     VStack(spacing: Theme.Spacing.xs) {
                         Image(systemName: candidate.sfSymbol)
-                            .font(.system(size: 17, weight: .medium))
+                            .scaledFont(size: 17, weight: .medium)
                         Text(candidate.label)
                             .scaledFont(size: 12, weight: .semibold)
                     }
@@ -119,7 +119,7 @@ struct AddPlanItemSheet: View {
         HStack(spacing: Theme.Spacing.sm) {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "clock")
-                    .font(.system(size: 15, weight: .medium))
+                    .scaledFont(size: 15, weight: .medium)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
                     .labelsHidden()

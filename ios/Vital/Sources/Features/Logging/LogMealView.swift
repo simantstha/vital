@@ -133,7 +133,7 @@ private extension LogMealView {
                 dismiss()
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 26))
+                    .scaledFont(size: 26)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }
@@ -152,7 +152,7 @@ private extension LogMealView {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: method.icon)
-                            .font(.system(size: 11, weight: .semibold))
+                            .scaledFont(size: 11, weight: .semibold)
                         Text(method.rawValue)
                             .scaledFont(Theme.Typography.labelMedium)
                     }
@@ -378,7 +378,7 @@ private extension LogMealView {
                 GlassCard {
                     VStack(spacing: Theme.Spacing.md) {
                         Image(systemName: "photo.fill.on.rectangle.fill")
-                            .font(.system(size: 38))
+                            .scaledFont(size: 38)
                             .foregroundStyle(Theme.Colors.accentContent)
                         Text("Choose a photo")
                             .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
@@ -444,7 +444,7 @@ private extension LogMealView {
             GlassCard {
                 VStack(spacing: Theme.Spacing.lg) {
                     Image(systemName: "camera.fill")
-                        .font(.system(size: 40))
+                        .scaledFont(size: 40)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     Text("Camera required")
                         .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
@@ -468,7 +468,7 @@ private extension LogMealView {
         GlassCard {
             VStack(spacing: Theme.Spacing.lg) {
                 Image(systemName: "questionmark.barcode")
-                    .font(.system(size: 38))
+                    .scaledFont(size: 38)
                     .foregroundStyle(Theme.Colors.textSecondary)
                 Text("Couldn't find that product")
                     .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
@@ -568,7 +568,7 @@ private extension LogMealView {
             GlassCard {
                 VStack(spacing: Theme.Spacing.lg) {
                     Image(systemName: "mic.slash.fill")
-                        .font(.system(size: 38))
+                        .scaledFont(size: 38)
                         .foregroundStyle(Theme.Colors.textSecondary)
                     Text("Microphone access needed")
                         .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
@@ -599,7 +599,7 @@ private extension LogMealView {
             GlassCard {
                 VStack(spacing: Theme.Spacing.lg) {
                     Image(systemName: "mic.fill")
-                        .font(.system(size: 38))
+                        .scaledFont(size: 38)
                         .foregroundStyle(Theme.Colors.accentContent)
                     Text("Enable voice input")
                         .scaledFont(Theme.Typography.bodyMedium.weight(.semibold))
@@ -640,7 +640,7 @@ private extension LogMealView {
                         vm.clearResult()
                     } label: {
                         Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 14))
+                            .scaledFont(size: 14)
                             .foregroundStyle(Theme.Colors.textSecondary)
                     }
                 }
@@ -786,7 +786,7 @@ private extension LogMealView {
                     vm.decrementPortion()
                 } label: {
                     Image(systemName: "minus.circle.fill")
-                        .font(.system(size: 22))
+                        .scaledFont(size: 22)
                         .foregroundStyle(
                             vm.portionMultiplier <= 0.5
                                 ? Theme.Colors.textTertiary
@@ -805,7 +805,7 @@ private extension LogMealView {
                     vm.incrementPortion()
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 22))
+                        .scaledFont(size: 22)
                         .foregroundStyle(Theme.Colors.accentContent)
                 }
                 .buttonStyle(.plain)
@@ -890,7 +890,7 @@ private extension LogMealView {
             Spacer()
             Button { vm.errorMessage = nil } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
+                    .scaledFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textSecondary)
             }
         }

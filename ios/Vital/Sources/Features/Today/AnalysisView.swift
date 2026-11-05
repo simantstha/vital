@@ -381,7 +381,7 @@ private struct DeviceSourceChip: View {
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: device == .apple ? "applewatch" : "waveform.path.ecg")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(size: 11, weight: .semibold)
             Text(label ?? AnalysisLogic.deviceDisplayName(device))
                 .scaledFont(size: 12, weight: .semibold)
                 .lineLimit(1)
@@ -421,7 +421,7 @@ private struct DeviceSwitchControl: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: option == .apple ? "applewatch" : "waveform.path.ecg")
-                    .font(.system(size: 13, weight: .semibold))
+                    .scaledFont(size: 13, weight: .semibold)
                 Text(AnalysisLogic.deviceDisplayName(option))
                     .scaledFont(size: 14, weight: isOn ? .bold : .semibold)
                     .lineLimit(1)
@@ -1315,10 +1315,10 @@ struct SleepAnalysisContent: View {
                     }
                     if let timing = context?.timing {
                         HStack(spacing: Theme.Spacing.sm) {
-                            Image(systemName: "moon.fill").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                            Image(systemName: "moon.fill").scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                             Text(AnalysisLogic.clockTime(timing.bedTime)).scaledFont(size: 13).foregroundStyle(Theme.Colors.textSecondary)
-                            Image(systemName: "arrow.right").font(.system(size: 10)).foregroundStyle(Theme.Colors.textTertiary)
-                            Image(systemName: "alarm.fill").font(.system(size: 12)).foregroundStyle(Theme.Colors.textSecondary)
+                            Image(systemName: "arrow.right").scaledFont(size: 10).foregroundStyle(Theme.Colors.textTertiary)
+                            Image(systemName: "alarm.fill").scaledFont(size: 12).foregroundStyle(Theme.Colors.textSecondary)
                             Text(AnalysisLogic.clockTime(timing.wakeTime)).scaledFont(size: 13).foregroundStyle(Theme.Colors.textSecondary)
                         }
                     }

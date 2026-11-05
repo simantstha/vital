@@ -124,7 +124,7 @@ struct PhotoLogFlowView: View {
         } label: {
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 14, weight: .semibold))
+                    .scaledFont(size: 14, weight: .semibold)
                 Text("Library")
                     .scaledFont(size: 14, weight: .semibold)
             }

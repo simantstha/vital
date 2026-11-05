@@ -153,7 +153,7 @@ private extension DietSheetView {
                             .scaledFont(size: 14, weight: .bold)
                             .contentTransition(.numericText(value: Double(vm.target)))
                         Image(systemName: "pencil")
-                            .font(.system(size: 11, weight: .semibold))
+                            .scaledFont(size: 11, weight: .semibold)
                     }
                     .foregroundStyle(Theme.Colors.accentContent)
                 }
@@ -180,7 +180,7 @@ private extension DietSheetView {
                 } label: {
                     VStack(spacing: Theme.Spacing.xs) {
                         Image(systemName: slot.sfSymbol)
-                            .font(.system(size: 16, weight: .medium))
+                            .scaledFont(size: 16, weight: .medium)
                         Text(slot.label)
                             .scaledFont(size: 11, weight: .semibold)
                         Text(vm.subtotalLabel(for: slot))
@@ -344,7 +344,7 @@ private extension DietSheetView {
         Button(action: action) {
             VStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: icon)
-                    .font(.system(size: 17, weight: .medium))
+                    .scaledFont(size: 17, weight: .medium)
                 Text(label)
                     .scaledFont(size: 12, weight: .semibold)
             }
@@ -385,7 +385,7 @@ private extension DietSheetView {
                         HStack {
                             HStack(spacing: 5) {
                                 Image(systemName: group.sfSymbol)
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .scaledFont(size: 12, weight: .semibold)
                                 Text(group.label)
                                     .scaledFont(size: 13, weight: .semibold)
                             }

@@ -32,7 +32,7 @@ struct WhatIsThisButton: View {
                 .padding(.vertical, 4)
             } else {
                 Image(systemName: "info.circle")
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(size: 13, weight: .medium)
                     .frame(minWidth: 24, minHeight: 24)
             }
         }
