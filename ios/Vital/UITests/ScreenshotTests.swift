@@ -579,7 +579,7 @@ final class ScreenshotTests: XCTestCase {
                 // whose label is "<title>, <detail>".
                 let sessionRow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Intervals 6×800 m")).firstMatch
                 XCTAssertTrue(sessionRow.waitForExistence(timeout: 15),
-                               "Today's timeline should show today's session [\(appearance)]")
+                               "Today should show today's session (timeline or hero) [\(appearance)]")
                 // Sessions line now shows session count only (e.g., "2 sessions this week"),
                 // while distance appears in a separate progress line. Match the singular
                 // "session" so Monday's "1 session this week" (Monday-start week) passes too.

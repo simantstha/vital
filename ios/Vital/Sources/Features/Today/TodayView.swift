@@ -182,7 +182,9 @@ struct TodayView: View {
                                             if let prompt = vm.enduranceReconciliationCoachPrompt {
                                                 router.coachContext = prompt
                                             }
-                                        }
+                                        },
+                                        sessionOutsideTimeline: vm.enduranceSessionOutsideTimeline,
+                                        onTapSession: { actionsItem = $0 }
                                     )
                                     .staggeredAppear(index: 1)
                                 }
