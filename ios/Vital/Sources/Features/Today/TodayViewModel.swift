@@ -322,6 +322,12 @@ final class TodayViewModel: ObservableObject {
         )
     }
 
+    /// Today's session when the "Rest of today" timeline has dropped it (done
+    /// or past its window) — see `EnduranceHeroLogic.sessionOutsideTimeline`.
+    var enduranceSessionOutsideTimeline: PlanItem? {
+        EnduranceHeroLogic.sessionOutsideTimeline(session: todayMoveSession, upcoming: upcomingItems)
+    }
+
     /// Whether the endurance hero block has anything to show (see
     /// `EnduranceHeroLogic.hasHeroContent`).
     var showsEnduranceHero: Bool {
@@ -331,7 +337,8 @@ final class TodayViewModel: ObservableObject {
             hasSession: todayMoveSession != nil,
             reconciliationText: enduranceReconciliationText,
             hasWeekRow: trainingSessionDots != nil || enduranceWeeklyOverviewText != nil
-                || enduranceDistanceProgress != nil
+                || enduranceDistanceProgress != nil,
+            sessionOutsideTimeline: enduranceSessionOutsideTimeline
         )
     }
 

@@ -43,6 +43,12 @@ struct EnduranceHeroView: View {
     var reconciliationText: String? = nil
     var onTapReconciliation: () -> Void = {}
 
+    /// Today's session when the "Rest of today" timeline no longer lists it
+    /// (done, or past its time window) — `EnduranceHeroLogic.sessionOutsideTimeline`.
+    /// `nil` hides the row.
+    var sessionOutsideTimeline: PlanItem? = nil
+    var onTapSession: (PlanItem) -> Void = { _ in }
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var showsWeekRow: Bool {
@@ -52,7 +58,8 @@ struct EnduranceHeroView: View {
     private var hasContent: Bool {
         EnduranceHeroLogic.hasHeroContent(
             calibratingText: calibratingText, raceText: raceText, hasSession: session != nil,
-            reconciliationText: reconciliationText, hasWeekRow: showsWeekRow
+            reconciliationText: reconciliationText, hasWeekRow: showsWeekRow,
+            sessionOutsideTimeline: sessionOutsideTimeline
         )
     }
 
@@ -111,6 +118,10 @@ struct EnduranceHeroView: View {
                     .accessibilityIdentifier("today.enduranceHero.reconcile")
                 }
 
+                if let sessionOutsideTimeline {
+                    sessionRow(sessionOutsideTimeline)
+                }
+
                 if showsWeekRow {
                     weekRow
                         .transition(.opacity)
@@ -119,6 +130,41 @@ struct EnduranceHeroView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
         }
+    }
+
+    /// Today's session, shown here only when the timeline has dropped it.
+    @ViewBuilder
+    private func sessionRow(_ item: PlanItem) -> some View {
+        let trailing = item.status == .done ? "Done" : item.timeLabel
+        Button {
+            onTapSession(item)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                Image(systemName: "figure.run")
+                    .scaledFont(size: 15, weight: .semibold)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                Text(item.title)
+                    .scaledFont(size: 15, weight: .semibold)
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Text(trailing)
+                    .scaledFont(size: 13)
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                    .monospacedDigit()
+                Image(systemName: "chevron.right")
+                    .scaledFont(size: 12, weight: .semibold)
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(item.title), \(trailing)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("today.enduranceHero.session")
     }
 
     /// Dot row (if plan data exists) or combined overview line.
@@ -156,9 +202,19 @@ extension EnduranceHeroLogic {
     /// first so an empty block leaves no gap in the stack.
     static func hasHeroContent(
         calibratingText: String?, raceText: String?, hasSession: Bool,
-        reconciliationText: String?, hasWeekRow: Bool
+        reconciliationText: String?, hasWeekRow: Bool,
+        sessionOutsideTimeline: PlanItem? = nil
     ) -> Bool {
         raceText != nil || calibratingText != nil || !hasSession
-            || reconciliationText != nil || hasWeekRow
+            || reconciliationText != nil || hasWeekRow || sessionOutsideTimeline != nil
+    }
+
+    /// Today's session when it is no longer in the "Rest of today" timeline
+    /// (`upcoming`), or `nil` when there is no session or the timeline already
+    /// shows it. Done and past-window sessions are dropped from `upcoming`, so
+    /// this is how they stay visible on the hero.
+    static func sessionOutsideTimeline(session: PlanItem?, upcoming: [PlanItem]) -> PlanItem? {
+        guard let session, !upcoming.contains(where: { $0.id == session.id }) else { return nil }
+        return session
     }
 }
