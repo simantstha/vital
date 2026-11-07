@@ -151,24 +151,8 @@ struct CoachView: View {
     /// bubble it produced (see `SpecialistFooterView`).
     private var navigationBar: some View {
         HStack(spacing: Theme.Spacing.md) {
-            // Avatar
-            Circle()
-                .fill(Theme.Colors.accent.opacity(0.15))
-                .frame(width: 36, height: 36)
-                .overlay(
-                    Image(systemName: "message.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.accentContent)
-                )
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Coach")
-                    .scaledFont(Theme.Typography.titleMedium)
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                Text("Vital AI")
-                    .scaledFont(Theme.Typography.labelSmall)
-                    .foregroundStyle(Theme.Colors.textSecondary)
-            }
+            Text("Coach")
+                .screenTitleStyle()
 
             Spacer()
 
@@ -176,6 +160,8 @@ struct CoachView: View {
                 Image(systemName: "square.and.pencil")
                     .scaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(Theme.Colors.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("New chat")
             .opacity(vm.isOnboarding ? 0.0 : 1.0)
@@ -496,9 +482,9 @@ struct CoachView: View {
                     }) {
                         Image(systemName: vm.isStreaming ? "stop.fill" : "arrow.up")
                             .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(Theme.Colors.onAccent)
+                            .foregroundStyle((canSend || vm.isStreaming) ? Theme.Colors.onAccent : Theme.Colors.textTertiary)
                             .frame(width: 32, height: 32)
-                            .background(Circle().fill(Theme.Colors.accent))
+                            .background(Circle().fill((canSend || vm.isStreaming) ? Theme.Colors.accent : Theme.Colors.glassFill))
                     }
                     // `canSend` already requires `!vm.isBusy`, so a bare
                     // `!canSend` would disable the button for the entire reply —
@@ -513,13 +499,10 @@ struct CoachView: View {
                     // enabled — reintroducing exactly the dead tap target this
                     // pairing exists to prevent.
                     .disabled(!canSend && !vm.isStreaming)
-                    // Same 0.5/1.0 muted-vs-lit convention `micButton` uses for
-                    // its own disabled state just above — dims the whole button
-                    // (icon and fill together) rather than only the circle, so an
-                    // empty composer visibly reads as non-interactive instead of
-                    // looking tappable. Layout position/size never changes, only
-                    // opacity, so nothing shifts when it enables.
-                    .opacity((canSend || vm.isStreaming) ? 1.0 : 0.5)
+                    // Disabled reads as a quiet glass circle with a tertiary
+                    // icon (set on the label above) rather than a dimmed accent
+                    // button. Layout never changes, only colours, so nothing
+                    // shifts when it enables.
                     .animation(Theme.Motion.quick, value: vm.isStreaming)
                     .animation(Theme.Motion.quick, value: canSend)
                 }
@@ -566,7 +549,7 @@ struct CoachView: View {
                         vm.input = prompt
                         vm.send()
                     } label: {
-                        Chip(text: prompt, isAccent: true)
+                        Chip(text: prompt, isAccent: false)
                     }
                     .buttonStyle(.plain)
                     // These tap straight into `vm.send()`, so they follow the
@@ -696,19 +679,19 @@ struct CoachView: View {
     /// unaffected other than shifting a few points right.
     private var micButton: some View {
         ZStack {
-            Circle()
-                .fill(voice.isRecording
-                      ? Theme.Colors.alert
-                      : Theme.Colors.accent.opacity(0.15))
-                .frame(width: 32, height: 32)
+            if voice.isRecording {
+                Circle()
+                    .fill(Theme.Colors.alert)
+                    .frame(width: 32, height: 32)
+            }
             if isTranscribing {
                 ProgressView()
                     .controlSize(.mini)
-                    .tint(Theme.Colors.accentContent)
+                    .tint(Theme.Colors.textSecondary)
             } else {
                 Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(voice.isRecording ? Theme.Colors.onAccent : Theme.Colors.accentContent)
+                    .foregroundStyle(voice.isRecording ? Theme.Colors.onAccent : Theme.Colors.textPrimary)
             }
         }
         .scaleEffect(voice.isRecording ? 1.08 : 1.0)
@@ -1102,8 +1085,8 @@ private struct MessageBubbleView: View {
                     bubbleContent
                         .scaledFont(Theme.Typography.bodyMedium)
                         .foregroundStyle(Theme.Colors.textPrimary)
-                        .padding(.horizontal, Theme.Spacing.lg)
-                        .padding(.vertical, Theme.Spacing.md)
+                        .padding(.horizontal, message.role == .user ? Theme.Spacing.lg : 0)
+                        .padding(.vertical, message.role == .user ? Theme.Spacing.md : Theme.Spacing.xs)
                         .bubbleSurface(isUser: message.role == .user)
                         .contextMenu {
                             Button {
@@ -1119,7 +1102,9 @@ private struct MessageBubbleView: View {
                     }
                 }
 
-                if message.role == .assistant { Spacer(minLength: 48) }
+                // Assistant text runs the full available width (no trailing
+                // spacer): it sits on the canvas, not in a bubble.
+                if message.role == .assistant { Spacer(minLength: 0) }
             }
         }
     }
@@ -1139,21 +1124,24 @@ private struct MessageBubbleView: View {
 
 /// D4: one coach voice — every assistant bubble reads as Vital, regardless of
 /// whether a specialist contributed (that's the footer's job now, not the
-/// bubble surface). A white v3 card for the user, pale-lime for the coach.
+/// bubble surface). The user gets a card bubble with a hairline border and a
+/// tighter bottom-trailing corner; the coach has no surface at all, its text
+/// sits directly on the canvas.
 private extension View {
     @ViewBuilder
     func bubbleSurface(isUser: Bool) -> some View {
         if isUser {
-            background(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                    .fill(Theme.Colors.card)
+            let shape = UnevenRoundedRectangle(
+                topLeadingRadius: 20,
+                bottomLeadingRadius: 20,
+                bottomTrailingRadius: 6,
+                topTrailingRadius: 20,
+                style: .continuous
             )
-            .shadow(color: Theme.Colors.cardShadow, radius: 1, x: 0, y: 1)
+            background(shape.fill(Theme.Colors.card))
+                .overlay(shape.strokeBorder(Theme.Colors.glassBorder, lineWidth: 0.5))
         } else {
-            background(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                    .fill(Theme.Colors.accentSoft)
-            )
+            self
         }
     }
 }
@@ -1628,12 +1616,12 @@ private struct CoachEmptyStateAnchor: View {
     var body: some View {
         VStack(spacing: Theme.Spacing.lg) {
             Circle()
-                .fill(Theme.Colors.accentSoft)
+                .fill(Theme.Colors.glassFill)
                 .frame(width: 88, height: 88)
                 .overlay(
                     Image(systemName: "mic.fill")
                         .font(.system(size: 32, weight: .medium))
-                        .foregroundStyle(Theme.Colors.accentContent)
+                        .foregroundStyle(Theme.Colors.textSecondary)
                 )
 
             Text("Tap the mic and just talk — I'll keep the conversation going.")
