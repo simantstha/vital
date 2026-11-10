@@ -13,7 +13,7 @@
   <img src="docs/screenshots/sleep-analysis.png" width="24%" alt="Sleep analysis comparing sleep stages from Apple Watch and WHOOP" />
 </p>
 
-> **Status:** complete and no longer in active development. Built solo between May and November 2026 as a personal training tool, then shipped to TestFlight for a small group of testers. All screenshots show fixture data, not a real person.
+> **Status:** complete and no longer in active development. Built solo between May and November 2026 as a personal training tool, then shipped to TestFlight for a small group of testers. The hosted backend and database were retired in November 2026, so the app no longer runs against a live server; the code, tests and fixture-driven UI tests all still build. All screenshots show fixture data, not a real person.
 
 ## What it does
 
